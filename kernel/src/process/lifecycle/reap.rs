@@ -290,42 +290,26 @@ fn reap_entry(entry: ReaperEntry) {
         .map(|pcb| {
             let last = pcb.thread_count.load(Ordering::Relaxed) == 0 && pcb.state() == ProcessState::Zombie;
             if !last {
-                // Secondary thread terminated: free its resources immediately.
-                let main_ptr = pcb.main_thread_rawptr.load(Ordering::Acquire);
-                for slot in &pcb.thread_slots {
-                    let ptr = slot.load(Ordering::Acquire);
-                    if !ptr.is_null() && ptr != main_ptr {
-                        // SAFETY: ptr points to a valid ProcessThread.
-                        let thread_tid = unsafe { (*ptr).tid };
-                        if thread_tid == tid
-                            && slot
-                                .compare_exchange(
-                                    ptr,
-                                    core::ptr::null_mut(),
-                                    Ordering::AcqRel,
-                                    Ordering::Acquire,
-                                )
-                                .is_ok()
-                        {
-                            // Ensure no CPU is still running on this thread's kernel stack during switch-out.
-                            let tcb_raw = unsafe { (*ptr).tcb_ptr() as usize };
-                            for _ in 0..4096 {
-                                let still_on_cpu = crate::scheduler::core::switch::CURRENT_THREAD_PER_CPU
-                                    .iter()
-                                    .any(|c| c.load(Ordering::Acquire) == tcb_raw);
-                                if !still_on_cpu {
-                                    break;
-                                }
-                                core::hint::spin_loop();
-                            }
-                            // SAFETY: thread allocated by Box::into_raw, state Dead, and off all CPUs.
-                            unsafe {
-                                let thread_box = alloc::boxed::Box::from_raw(ptr);
-                                drop(thread_box);
-                                crate::process::core::pid::TID_ALLOCATOR.free(tid.0);
-                            }
+                // Any terminated thread (including an exited main thread while siblings remain):
+                // free its ProcessThread, kernel stack, and TID immediately.
+                let ptr = pcb.take_thread_by_tid(tid);
+                if !ptr.is_null() {
+                    // Ensure no CPU is still running on this thread's kernel stack during switch-out.
+                    let tcb_raw = unsafe { (*ptr).tcb_ptr() as usize };
+                    for _ in 0..4096 {
+                        let still_on_cpu = crate::scheduler::core::switch::CURRENT_THREAD_PER_CPU
+                            .iter()
+                            .any(|c| c.load(Ordering::Acquire) == tcb_raw);
+                        if !still_on_cpu {
                             break;
                         }
+                        core::hint::spin_loop();
+                    }
+                    // SAFETY: thread allocated by Box::into_raw, state Dead, and off all CPUs.
+                    unsafe {
+                        let thread_box = alloc::boxed::Box::from_raw(ptr);
+                        drop(thread_box);
+                        crate::process::core::pid::TID_ALLOCATOR.free(tid.0);
                     }
                 }
             }

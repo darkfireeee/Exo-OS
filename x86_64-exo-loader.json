@@ -1,5 +1,5 @@
 {
-  "llvm-target": "x86_64-unknown-none",
+  "llvm-target": "x86_64-unknown-none-elf",
   "data-layout": "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128",
   "arch": "x86_64",
   "target-endian": "little",
@@ -11,14 +11,21 @@
   "linker": "rust-lld",
   "panic-strategy": "abort",
   "disable-redzone": true,
-  "relocation-model": "static",
-  "code-model": "large",
-  "position-independent-executables": false,
+  "relocation-model": "pic",
+  "code-model": "small",
+  "position-independent-executables": true,
   "features": "-sha,-aes",
   "pre-link-args": {
     "ld.lld": [
-      "--no-pie",
-      "--image-base=0x0000020000000000"
+      "-pie",
+      "--export-dynamic",
+      "-Bsymbolic",
+      "-z",
+      "now",
+      "-z",
+      "relro",
+      "-z",
+      "separate-loadable-segments"
     ]
   }
 }

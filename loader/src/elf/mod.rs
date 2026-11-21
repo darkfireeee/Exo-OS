@@ -1,5 +1,8 @@
+pub mod dyn_info;
 pub mod dynamic;
+pub mod dso_map;
 pub mod parser;
+pub mod reloc_apply;
 pub mod relocations;
 pub mod segments;
 pub mod tls;

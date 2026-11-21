@@ -90,6 +90,7 @@ pub unsafe extern "C" fn scheduler_tick(cpu_id: u32, current: *mut ThreadControl
     }
 
     let elapsed = ELAPSED_NS[cpu_idx].fetch_add(TICK_NS, Ordering::Relaxed) + TICK_NS;
+    crate::scheduler::core::switch::account_running_vruntime(cpu_idx, tcb);
 
     let higher_rt_waiting = highest_rt_prio.is_some_and(|p| p < tcb.priority.0);
     let preempt_now = if tcb.is_idle() || tcb.policy == SchedPolicy::Idle {

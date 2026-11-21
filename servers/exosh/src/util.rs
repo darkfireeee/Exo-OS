@@ -28,7 +28,7 @@ pub const SHELL_WRITE_CHUNK: usize = 64 * 1024;
 
 pub const FS_BENCH_CHUNK: usize = 64 * 1024;
 
-pub const DIRENT64_HEADER_SIZE: usize = 24;
+pub const DIRENT64_HEADER_SIZE: usize = 19;
 
 pub const DT_DIR: u8 = 4;
 

@@ -321,21 +321,24 @@ unsafe fn clone_pt(
 
     for l1_idx in 0..512 {
         let src_entry = src_pt[l1_idx];
-        if src_entry.is_present() {
+        if src_entry.is_present() || src_entry.is_prot_none() {
             if !src_entry.is_user() {
                 continue;
             }
             let is_pinned = src_entry.is_pinned();
             if !is_pinned {
-                if let Some(frame) = src_entry.frame() {
+                if let Some(frame) = src_entry.frame_or_prot_none() {
                     if let Err(err) = track_cow_frame(frame) {
                         for j in 0..l1_idx {
                             let dst_e = dst_pt[j];
-                            if !dst_e.is_present() || !dst_e.is_user() || dst_e.is_pinned() {
+                            if (!dst_e.is_present() && !dst_e.is_prot_none())
+                                || !dst_e.is_user()
+                                || dst_e.is_pinned()
+                            {
                                 dst_pt[j] = PageTableEntry::from_raw(0);
                                 continue;
                             }
-                            if let Some(f) = dst_e.frame() {
+                            if let Some(f) = dst_e.frame_or_prot_none() {
                                 let rem = COW_TRACKER.dec(f);
                                 if rem == 1 && cleared_writable[j] {
                                     let _ = COW_TRACKER.dec(f);
@@ -449,7 +452,7 @@ unsafe fn free_pt_tree(pt_phys: PhysAddr) {
     let pt = phys_to_table_ref(pt_phys);
     for l1_idx in 0..512 {
         let entry = pt[l1_idx];
-        if !entry.is_present() {
+        if !entry.is_present() && !entry.is_prot_none() {
             continue;
         }
         if !entry.is_user() {
@@ -464,7 +467,7 @@ fn release_leaf_frame(entry: PageTableEntry) {
     if entry.is_pinned() {
         return;
     }
-    let Some(frame) = entry.frame() else {
+    let Some(frame) = entry.frame_or_prot_none() else {
         return;
     };
     let remaining = COW_TRACKER.dec(frame);

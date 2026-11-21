@@ -227,7 +227,7 @@ impl IrqGuard {
     #[must_use]
     pub fn new() -> Self {
         let rflags: u64;
-        #[cfg(target_arch = "x86_64")]
+        #[cfg(all(target_arch = "x86_64", not(test)))]
         // SAFETY: pushfq/popq read RFLAGS; cli clears IRQs; correct order (save before clearing).
         unsafe {
             core::arch::asm!(
@@ -238,7 +238,7 @@ impl IrqGuard {
                 options(nomem)
             );
         }
-        #[cfg(not(target_arch = "x86_64"))]
+        #[cfg(any(not(target_arch = "x86_64"), test))]
         {
             rflags = 0;
         }
@@ -278,7 +278,7 @@ impl IrqGuard {
     #[inline(always)]
     pub unsafe fn restore_irq_flags(rflags: u64) {
         if rflags & (1 << 9) != 0 {
-            #[cfg(target_arch = "x86_64")]
+            #[cfg(all(target_arch = "x86_64", not(test)))]
             unsafe {
                 core::arch::asm!("sti", options(nomem, nostack));
             }
@@ -291,7 +291,7 @@ impl Drop for IrqGuard {
     fn drop(&mut self) {
         preempt_enable_raw();
         if self.rflags & (1 << 9) != 0 {
-            #[cfg(target_arch = "x86_64")]
+            #[cfg(all(target_arch = "x86_64", not(test)))]
             // SAFETY: sti restores IF bit; rflags comes from pushfq/popq in new(); atomic restore.
             unsafe {
                 core::arch::asm!("sti", options(nomem, nostack));

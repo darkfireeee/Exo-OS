@@ -1060,6 +1060,23 @@ core::arch::global_asm!(
     "ud2",
 );
 
+// Trampoline d'entrée SysV x86-64 pour les serveurs Ring 1 `#![no_std]` (`x86_64-exo-userspace.json`).
+// Le noyau entre à `e_entry` avec `RSP % 16 == 0` (ABI SysV), alors que `pub extern "C" fn _start`
+// suppose `RSP % 16 == 8` (comme après un `call`). Ce stub aligne la pile puis appelle `_start`
+// tout en préservant `rdi` (`boot_info_virt` pour `init_server`).
+#[cfg(all(target_arch = "x86_64", target_os = "none"))]
+core::arch::global_asm!(
+    ".section .ltext._exo_ring1_entry,\"ax\",@progbits",
+    ".global _exo_ring1_entry",
+    ".type _exo_ring1_entry, @function",
+    "_exo_ring1_entry:",
+    "xor rbp, rbp",
+    "and rsp, -16",
+    "movabs rax, offset _start",
+    "call rax",
+    "ud2",
+);
+
 extern "C" {
     fn __exo_sigreturn_trampoline();
 }

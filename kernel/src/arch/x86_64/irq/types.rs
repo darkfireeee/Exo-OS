@@ -73,7 +73,10 @@ impl IrqSourceKind {
 
     #[inline]
     pub const fn is_cumulative(self) -> bool {
-        matches!(self, Self::IoApicLevel)
+        // Edge-triggered IOAPIC and message-signaled IRQs stay unmasked and
+        // increment `pending_acks` per delivery, so stale waves must still
+        // release their pending ACK slot.
+        matches!(self, Self::IoApicEdge | Self::Msi | Self::MsiX)
     }
 }
 

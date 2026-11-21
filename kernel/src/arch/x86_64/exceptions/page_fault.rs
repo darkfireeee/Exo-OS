@@ -392,22 +392,51 @@ pub unsafe extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
                     out(&hex(frame.rsp));
                     out(b" err=");
                     out(&hex(error_code));
-                    // DIAG-25: in-memory bytes at RIP (RIP page is present —
-                    // instruction was fetched before the data fault). Compare to
-                    // static binary → detects corruption of init .text.
+                    // DIAG-25: in-memory bytes at RIP — read via PageTableWalker + physmap so
+                    // unmapped RIP/RSP/RDX never cause a nested kernel #PF inside the SEGV dump.
+                    let walk_cr3 = read_cr3() & 0x000F_FFFF_FFFF_F000;
+                    let walker = crate::memory::virt::page_table::PageTableWalker::new(
+                        crate::memory::core::PhysAddr::new(walk_cr3),
+                    );
+                    let read_user_u8_safe = |addr: u64| -> Option<u8> {
+                        if !(0x1000..0x0000_8000_0000_0000).contains(&addr) {
+                            return None;
+                        }
+                        let pte = walker.read_pte_raw(VirtAddr::new(addr));
+                        if (pte & 1) == 0 || (pte & 4) == 0 || (pte & 0x80) != 0 {
+                            return None;
+                        }
+                        let phys = (pte & 0x000F_FFFF_FFFF_F000) | (addr & 0xFFF);
+                        let kvirt = crate::memory::phys_to_virt(
+                            crate::memory::core::PhysAddr::new(phys),
+                        );
+                        // SAFETY: verified PRESENT+USER 4K PTE mapped in active CR3.
+                        Some(unsafe { core::ptr::read_volatile(kvirt.as_u64() as *const u8) })
+                    };
+                    let read_user_u64_safe = |addr: u64| -> Option<u64> {
+                        let mut bytes = [0u8; 8];
+                        for bi in 0..8u64 {
+                            bytes[bi as usize] = read_user_u8_safe(addr.checked_add(bi)?)?;
+                        }
+                        Some(u64::from_le_bytes(bytes))
+                    };
+
                     out(b" ripb=");
                     let mut rb = 0u64;
-                    // SAFETY: GUARDED read — only if RIP is a plausible user
-                    // address. Otherwise reading (e.g. RIP=0x130) re-faults in KERNEL
-                    // and triggers an ExoPhoenix resurrection (loss of dump #25).
-                    if (0x1000..0x0000_8000_0000_0000).contains(&frame.rip) {
-                        for bi in 0..8u64 {
-                            let byte =
-                                unsafe { core::ptr::read_volatile((frame.rip + bi) as *const u8) };
+                    let mut rip_ok = true;
+                    for bi in 0..8u64 {
+                        if let Some(byte) = read_user_u8_safe(frame.rip.saturating_add(bi)) {
                             rb |= (byte as u64) << (bi * 8);
+                        } else {
+                            rip_ok = false;
+                            break;
                         }
                     }
-                    out(&hex(rb));
+                    if rip_ok {
+                        out(&hex(rb));
+                    } else {
+                        out(b"unmapped");
+                    }
                     // DIAG-25: full GP context — reveals if init registers
                     // are corrupted (zero / stale / shifted) at post-fork resume.
                     out(b" rax=");
@@ -456,24 +485,21 @@ pub unsafe extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
                     // THE decisive datum (return address of the call/jmp to NULL,
                     // directly addr2line-able) → printed RIGHT NOW, before the 16
                     // stack words, so it survives any truncation.
-                    if frame.rip == 0 && (0x1000..0x0000_8000_0000_0000).contains(&frame.rsp) {
-                        // SAFETY: plausible user RSP; volatile read.
-                        let ret0 = unsafe {
-                            core::ptr::read_volatile(frame.rsp as *const u64)
-                        };
-                        out(b" ret0=");
-                        out(&hex(ret0));
-                        if (0x1000_0000_0000..0x1001_0000_0000).contains(&ret0) {
-                            out(b" cs16=");
-                            let base = ret0.saturating_sub(16);
-                            for bi in 0..16u64 {
-                                // SAFETY: ret0 within user binary range (mapped,
-                                // executed right before the call).
-                                let byte = unsafe {
-                                    core::ptr::read_volatile((base + bi) as *const u8)
-                                };
-                                let lut = b"0123456789abcdef";
-                                out(&[lut[(byte >> 4) as usize], lut[(byte & 0xf) as usize]]);
+                    if frame.rip == 0 {
+                        if let Some(ret0) = read_user_u64_safe(frame.rsp) {
+                            out(b" ret0=");
+                            out(&hex(ret0));
+                            if (0x1000_0000_0000..0x1001_0000_0000).contains(&ret0) {
+                                out(b" cs16=");
+                                let base = ret0.saturating_sub(16);
+                                for bi in 0..16u64 {
+                                    if let Some(byte) = read_user_u8_safe(base.saturating_add(bi)) {
+                                        let lut = b"0123456789abcdef";
+                                        out(&[lut[(byte >> 4) as usize], lut[(byte & 0xf) as usize]]);
+                                    } else {
+                                        out(b"??");
+                                    }
+                                }
                             }
                         }
                     }
@@ -484,25 +510,24 @@ pub unsafe extern "C" fn do_page_fault(frame: *mut ExceptionFrame) {
                     if (0x1000_0000_0000..0x1001_0000_0000).contains(&frame.rdx) {
                         out(b" rdx8=");
                         for bi in 0..8u64 {
-                            // SAFETY: rdx within user binary range (mapped).
-                            let byte = unsafe {
-                                core::ptr::read_volatile((frame.rdx + bi) as *const u8)
-                            };
-                            let lut = b"0123456789abcdef";
-                            out(&[lut[(byte >> 4) as usize], lut[(byte & 0xf) as usize]]);
+                            if let Some(byte) = read_user_u8_safe(frame.rdx.saturating_add(bi)) {
+                                let lut = b"0123456789abcdef";
+                                out(&[lut[(byte >> 4) as usize], lut[(byte & 0xf) as usize]]);
+                            } else {
+                                out(b"??");
+                            }
                         }
                     }
                     // DIAG-25: 8 words from user stack at RSP — reveals the return
                     // chain (where the jump to corrupted RIP originates).
                     out(b" stk=");
-                    if (0x1000..0x0000_8000_0000_0000).contains(&frame.rsp) {
-                        for wi in 0..16u64 {
-                            // SAFETY: plausible user RSP; KPTI off; volatile read.
-                            let w = unsafe {
-                                core::ptr::read_volatile((frame.rsp + wi * 8) as *const u64)
-                            };
+                    for wi in 0..16u64 {
+                        if let Some(w) = read_user_u64_safe(frame.rsp.saturating_add(wi * 8)) {
                             out(&hex(w));
                             out(b" ");
+                        } else {
+                            out(b"<unmapped>");
+                            break;
                         }
                     }
                     // (DIAG-NULLCALL bisect run 6 — ret0/cs16 moved to the HEAD of the

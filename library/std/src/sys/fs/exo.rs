@@ -117,8 +117,7 @@ impl FileType {
     }
 
     pub fn is_file(&self) -> bool {
-        let kind = self.mode & 0o170000;
-        kind == 0o100000 || (kind == 0 && !self.is_dir())
+        (self.mode & 0o170000) == 0o100000
     }
 
     pub fn is_symlink(&self) -> bool {
@@ -218,7 +217,7 @@ impl File {
     }
 
     pub fn datasync(&self) -> io::Result<()> {
-        self.fsync()
+        syscall::exofs_fdatasync(self.as_raw_fd()).map_err(map_exo_err)
     }
 
     pub fn truncate(&self, size: u64) -> io::Result<()> {
@@ -265,7 +264,11 @@ impl File {
 
     #[inline]
     pub fn flush(&self) -> io::Result<()> {
-        Ok(())
+        match syscall::exofs_fsync(self.as_raw_fd()) {
+            Ok(()) => Ok(()),
+            Err(e) if e == syscall::SysError::EINVAL || e == syscall::SysError::EROFS => Ok(()),
+            Err(e) => Err(map_exo_err(e)),
+        }
     }
 
     pub fn seek(&self, pos: SeekFrom) -> io::Result<u64> {

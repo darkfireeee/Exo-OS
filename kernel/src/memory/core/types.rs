@@ -608,6 +608,8 @@ impl PageFlags {
     pub const DMA_NO_WC: PageFlags = PageFlags(1 << 53);
     /// Software bit 54: 4 KiB leaf mapped via PAT write-combining entry.
     pub const WRITE_COMBINING: PageFlags = PageFlags(1 << 54);
+    /// Software bit 55: `PROT_NONE` mapped page (PRESENT=0, physical frame retained).
+    pub const PROT_NONE: PageFlags = PageFlags(1 << 55);
 
     // ── Common combinations ────────────────────────────────────────────────
 

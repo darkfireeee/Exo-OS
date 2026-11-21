@@ -26,14 +26,19 @@ pub mod libc {
     pub unsafe fn close(fd: i32) -> i32 {
         match super::syscall::close(fd) {
             Ok(()) => 0,
-            Err(_) => -1,
+            Err(e) => {
+                crate::sys::io::set_errno(e.errno());
+                -1
+            }
         }
     }
 }
 
 #[inline]
 pub fn map_exo_err(err: syscall::SysError) -> io::Error {
-    io::Error::from_raw_os_error(err.errno())
+    let code = err.errno();
+    crate::sys::io::set_errno(code);
+    io::Error::from_raw_os_error(code)
 }
 
 #[inline]
@@ -96,6 +101,9 @@ unsafe extern "C" fn __exo_crt_start(initial_sp: *const usize) -> ! {
         fn main(argc: isize, argv: *const *const u8) -> i32;
     }
 
+    unsafe {
+        runtime::self_relocate_static_pie(initial_sp);
+    }
     let (argc, argv, envp) = unsafe { runtime::exo_rt_init_from_stack(initial_sp) };
     unsafe {
         crate::sys::env::init_from_envp(envp);

@@ -16,3 +16,6 @@ members = [
     "wayland-sys",
     "wayland-tests",
 ]
+
+[patch.crates-io]
+libc = { path = "../vendors/libc" }

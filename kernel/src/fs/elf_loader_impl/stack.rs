@@ -17,7 +17,7 @@ use super::registry::{
 };
 
 #[derive(Clone, Copy, Debug, Default)]
-pub struct StackAuxvConfig {
+pub struct StackAuxvConfig<'a> {
     pub phdr_vaddr: u64,
     pub phnum: u64,
     pub entry_vaddr: u64,
@@ -25,10 +25,20 @@ pub struct StackAuxvConfig {
     pub vdso_ehdr_vaddr: u64,
     pub signal_tcb_vaddr: u64,
     pub seed_hint: u64,
+    pub execfn: &'a str,
 }
 
 #[inline]
 pub fn generate_random_16(seed_hint: u64) -> [u8; 16] {
+    let mut out = [0u8; 16];
+    if crate::security::crypto::rng_fill(&mut out).is_ok() {
+        return out;
+    }
+    crate::security::crypto::rng_init();
+    if crate::security::crypto::rng_fill(&mut out).is_ok() {
+        return out;
+    }
+
     #[cfg(target_arch = "x86_64")]
     {
         let tsc = crate::arch::x86_64::cpu::tsc::read_tsc();
@@ -38,14 +48,12 @@ pub fn generate_random_16(seed_hint: u64) -> [u8; 16] {
         z = z.wrapping_add(0x9E37_79B9_7F4A_7C15);
         z = (z ^ (z >> 30)).wrapping_mul(0x94D0_49BB_1331_11EB);
         let r1 = z ^ (z >> 31);
-        let mut out = [0u8; 16];
         out[0..8].copy_from_slice(&r0.to_le_bytes());
         out[8..16].copy_from_slice(&r1.to_le_bytes());
         out
     }
     #[cfg(not(target_arch = "x86_64"))]
     {
-        let mut out = [0u8; 16];
         out[0..8].copy_from_slice(&seed_hint.to_le_bytes());
         out[8..16].copy_from_slice(&(!seed_hint).to_le_bytes());
         out
@@ -247,6 +255,16 @@ pub fn push_stack_bytes(
     Ok(*sp)
 }
 
+#[inline]
+pub(crate) const fn sysv_stack_needs_padding(
+    argv_len: usize,
+    envp_len: usize,
+    auxv_len: usize,
+) -> bool {
+    let pointer_slots = argv_len + envp_len + (auxv_len * 2) + 3;
+    (pointer_slots & 1) != 0
+}
+
 pub fn push_stack_u64(
     stack_frames: &[Frame; USER_STACK_BOOTSTRAP_PAGES],
     stack_base: u64,
@@ -280,7 +298,7 @@ pub fn build_initial_process_stack_with_auxv(
     stack_top: u64,
     argv: &[&str],
     envp: &[&str],
-    auxv_cfg: &StackAuxvConfig,
+    auxv_cfg: &StackAuxvConfig<'_>,
 ) -> Result<u64, ElfLoadError> {
     let mut sp = stack_top;
     let mut argv_ptrs: Vec<u64> = Vec::new();
@@ -309,6 +327,14 @@ pub fn build_initial_process_stack_with_auxv(
         )?);
     }
 
+    // Push AT_PLATFORM ("x86_64\0") and AT_EXECFN (executable path) strings.
+    let platform_ptr = push_stack_bytes(stack_frames, stack_base, &mut sp, b"x86_64")?;
+    let execfn_ptr = if !auxv_cfg.execfn.is_empty() {
+        push_stack_bytes(stack_frames, stack_base, &mut sp, auxv_cfg.execfn.as_bytes())?
+    } else {
+        0
+    };
+
     // Push 16-byte AT_RANDOM cookie and 64-byte initial CapToken (AT_CAP_TOKEN = 52)
     let random_16 = generate_random_16(auxv_cfg.seed_hint ^ sp);
     sp = (sp.checked_sub(16).ok_or(ElfLoadError::InvalidElf)?) & !15u64;
@@ -331,16 +357,18 @@ pub fn build_initial_process_stack_with_auxv(
         uid: 0,
         gid: 0,
         random_ptr,
+        platform_ptr,
+        execfn_ptr,
+        secure: 0,
+        hwcap2: 0,
     };
     let auxv_entries = build_auxv(&auxv_params).map_err(|_| ElfLoadError::OutOfMemory)?;
 
     sp &= !15u64;
 
     // Each AuxEntry occupies 2 u64 slots (type, val), hence an even number of u64s.
-    // The padding slot preserves RSP % 16 == 8 at entry of `extern "C" fn _start`
-    // without displacing argc out of [RSP] (and ASM `_start` stubs align via `and rsp, -16`).
-    let pointer_slots = argv_ptrs.len() + envp_ptrs.len() + (auxv_entries.len() * 2) + 3;
-    if pointer_slots & 1 == 0 {
+    // Pad by one u64 when total slot count is odd so that RSP % 16 == 0 at SysV _start entry.
+    if sysv_stack_needs_padding(argv_ptrs.len(), envp_ptrs.len(), auxv_entries.len()) {
         push_stack_u64(stack_frames, stack_base, &mut sp, 0)?;
     }
 

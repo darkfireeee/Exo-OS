@@ -24,8 +24,10 @@ const LINUX_REBOOT_MAGIC1: u64 = 0xfee1_dead;
 const LINUX_REBOOT_MAGIC2: u64 = 672_274_793;
 const LINUX_REBOOT_CMD_RESTART: u64 = 0x0123_4567;
 const LINUX_REBOOT_CMD_POWER_OFF: u64 = 0x4321_fedc;
+const EXO_REBOOT_CMD_COMPLIANCE_EXIT: u64 = 0x4558_4f54; // "EXOT"
 const QEMU_DEBUG_EXIT_PORT: u16 = 0x00f4;
-const QEMU_DEBUG_EXIT_SUCCESS: u32 = 0x10;
+const QEMU_DEBUG_EXIT_SUCCESS: u32 = 0x10; // QEMU exit code (0x10 << 1) | 1 = 33
+const QEMU_DEBUG_EXIT_FAILURE: u32 = 0x11; // QEMU exit code (0x11 << 1) | 1 = 35
 const PS2_CONTROLLER_PORT: u16 = 0x0064;
 const PS2_RESET_COMMAND: u8 = 0xfe;
 
@@ -36,19 +38,24 @@ fn halt_after_reboot_request() -> ! {
 
 #[inline(never)]
 #[cfg(target_arch = "x86_64")]
-fn platform_poweroff() -> ! {
+fn platform_debug_exit(code: u32) -> ! {
     // SAFETY: SYS_REBOOT runs in ring 0. Port 0xf4 is the configured
     // QEMU isa-debug-exit device in the project boot commands.
     unsafe {
-        crate::arch::x86_64::outl(QEMU_DEBUG_EXIT_PORT, QEMU_DEBUG_EXIT_SUCCESS);
+        crate::arch::x86_64::outl(QEMU_DEBUG_EXIT_PORT, code);
     }
     halt_after_reboot_request()
 }
 
 #[inline(never)]
 #[cfg(not(target_arch = "x86_64"))]
-fn platform_poweroff() -> ! {
+fn platform_debug_exit(_code: u32) -> ! {
     halt_after_reboot_request()
+}
+
+#[inline(never)]
+fn platform_poweroff() -> ! {
+    platform_debug_exit(QEMU_DEBUG_EXIT_SUCCESS)
 }
 
 #[inline(never)]
@@ -69,15 +76,41 @@ fn platform_restart() -> ! {
 }
 
 /// `reboot(magic1, magic2, cmd, arg)` compatible Linux/musl.
-pub fn sys_reboot(magic1: u64, magic2: u64, cmd: u64, _arg: u64, _a5: u64, _a6: u64) -> i64 {
+pub fn sys_reboot(magic1: u64, magic2: u64, cmd: u64, arg: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_REBOOT);
     if magic1 != LINUX_REBOOT_MAGIC1 || magic2 != LINUX_REBOOT_MAGIC2 {
         return EINVAL;
     }
 
+    let caller = current_pid_u32();
+    if cmd == EXO_REBOOT_CMD_COMPLIANCE_EXIT {
+        let is_root = caller <= 1
+            || crate::process::core::registry::PROCESS_REGISTRY
+                .find_by_pid(crate::process::core::pid::Pid(caller))
+                .map(|pcb| pcb.creds.lock().euid == 0)
+                .unwrap_or(false);
+        if !is_root {
+            crate::security::shield_feed::push_event(
+                caller,
+                crate::security::shield_feed::event_type::SYSCALL,
+                crate::security::shield_feed::severity::CRITICAL,
+                crate::syscall::numbers::SYS_REBOOT as u32,
+                magic1,
+                cmd,
+            );
+            return EPERM;
+        }
+        let exit_val = match arg as u32 {
+            QEMU_DEBUG_EXIT_SUCCESS => QEMU_DEBUG_EXIT_SUCCESS,
+            QEMU_DEBUG_EXIT_FAILURE => QEMU_DEBUG_EXIT_FAILURE,
+            _ => return EINVAL,
+        };
+        let _ = crate::syscall::fs_bridge::fs_sync(caller);
+        platform_debug_exit(exit_val);
+    }
+
     // Only PID 0 (kernel boot context) or PID 1 (init) may reboot the system.
     // Any other process knowing the magic constants could otherwise DoS the system.
-    let caller = current_pid_u32();
     if caller > 1 {
         crate::security::shield_feed::push_event(
             caller,

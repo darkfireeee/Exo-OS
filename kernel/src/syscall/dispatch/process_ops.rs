@@ -26,9 +26,39 @@ use super::stats::{exec_trace, syscall_trace};
 /// 3. Constructs `ForkContext` from complete syscall frame.
 /// 4. Calls `do_fork()` — creates child PCB/TCB, CoW, TLB flush, enqueues RunQueue.
 /// 5. Returns `child_pid` to parent (child starts via `fork_child_trampoline`).
+#[derive(Copy, Clone, Default)]
+struct CloneExtras {
+    child_rsp_override: Option<u64>,
+    tls_override: Option<u64>,
+    ptid_ptr: u64,
+    ctid_ptr: u64,
+    clear_child_tid: u64,
+}
+
+#[inline]
+fn resolve_caller_thread_ptr(
+    pcb: &crate::process::core::pcb::ProcessControlBlock,
+    tcb: &crate::scheduler::core::task::ThreadControlBlock,
+) -> *mut crate::process::core::tcb::ProcessThread {
+    let tid = crate::process::core::pid::Tid(tcb.tid as u32);
+    let mut ptr = pcb.find_thread_by_tid(tid);
+    if ptr.is_null() {
+        ptr = pcb.find_alive_thread();
+    }
+    ptr
+}
+
 pub fn handle_fork_like_inplace(
     frame: &SyscallFrame,
     fork_flags: crate::process::lifecycle::fork::ForkFlags,
+) -> i64 {
+    handle_fork_like_with_clone(frame, fork_flags, CloneExtras::default())
+}
+
+fn handle_fork_like_with_clone(
+    frame: &SyscallFrame,
+    fork_flags: crate::process::lifecycle::fork::ForkFlags,
+    extras: CloneExtras,
 ) -> i64 {
     use crate::process::core::pid::Pid;
     use crate::process::core::registry::PROCESS_REGISTRY;
@@ -57,7 +87,7 @@ pub fn handle_fork_like_inplace(
         None => return EAGAIN,
     };
 
-    let thread_ptr = pcb.main_thread_ptr();
+    let thread_ptr = resolve_caller_thread_ptr(pcb, tcb);
     if thread_ptr.is_null() {
         return EAGAIN;
     }
@@ -71,7 +101,7 @@ pub fn handle_fork_like_inplace(
         flags: fork_flags,
         target_cpu: tcb.current_cpu().0,
         child_rip: frame.rcx,     // Return RIP saved by hw SYSCALL
-        child_rsp: frame.rsp,     // Userspace RSP saved at ASM stub
+        child_rsp: extras.child_rsp_override.unwrap_or(frame.rsp),
         parent_rflags: frame.r11, // RFLAGS saved by hw SYSCALL — CORRECTION P2-02
         user_rbx: frame.rbx,
         user_rbp: frame.rbp,
@@ -85,6 +115,10 @@ pub fn handle_fork_like_inplace(
         user_r10: frame.r10,
         user_r8: frame.r8,
         user_r9: frame.r9,
+        tls_override: extras.tls_override,
+        ptid_ptr: extras.ptid_ptr,
+        ctid_ptr: extras.ctid_ptr,
+        clear_child_tid: extras.clear_child_tid,
     };
 
     match do_fork(&ctx) {
@@ -113,6 +147,176 @@ pub fn handle_fork_like_inplace(
             }
         }
     }
+}
+
+/// Processes `SYS_CLONE (56)` using standard Linux x86_64 5-argument ABI:
+/// `(flags = rdi, child_stack = rsi, ptid = rdx, ctid = r10, tls = r8)`.
+pub fn handle_clone_inplace(frame: &SyscallFrame) -> i64 {
+    use crate::process::core::pid::Pid;
+    use crate::process::core::registry::PROCESS_REGISTRY;
+    use crate::process::lifecycle::fork::{ForkChildRegs, ForkFlags};
+    use crate::process::thread::creation::{
+        create_cloned_thread, CloneThreadParams, ThreadCreateError,
+    };
+    use crate::scheduler::core::task::ThreadControlBlock;
+    use crate::syscall::errno::{EAGAIN, EFAULT, EINVAL, ENOMEM};
+    use crate::syscall::validation::UserPtr;
+
+    const CLONE_VM: u64 = 0x0000_0100;
+    const CLONE_FS: u64 = 0x0000_0200;
+    const CLONE_FILES: u64 = 0x0000_0400;
+    const CLONE_SIGHAND: u64 = 0x0000_0800;
+    const CLONE_VFORK: u64 = 0x0000_4000;
+    const CLONE_THREAD: u64 = 0x0001_0000;
+    const CLONE_SYSVSEM: u64 = 0x0004_0000;
+    const CLONE_SETTLS: u64 = 0x0008_0000;
+    const CLONE_PARENT_SETTID: u64 = 0x0010_0000;
+    const CLONE_CHILD_CLEARTID: u64 = 0x0020_0000;
+    const CLONE_DETACHED: u64 = 0x0040_0000;
+    const CLONE_CHILD_SETTID: u64 = 0x0100_0000;
+    const CLONE_NEWPID: u64 = 0x2000_0000;
+    const THREAD_CORE: u64 = CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | CLONE_THREAD;
+    const SUPPORTED_THREAD_FLAGS: u64 = THREAD_CORE
+        | CLONE_SYSVSEM
+        | CLONE_SETTLS
+        | CLONE_PARENT_SETTID
+        | CLONE_CHILD_CLEARTID
+        | CLONE_DETACHED
+        | CLONE_CHILD_SETTID;
+
+    let flags = frame.rdi;
+    let child_stack = frame.rsi;
+    let ptid = frame.rdx;
+    let ctid = frame.r10;
+    let tls = frame.r8;
+
+    let set_ptid = if (flags & CLONE_PARENT_SETTID) != 0 { ptid } else { 0 };
+    let set_ctid = if (flags & CLONE_CHILD_SETTID) != 0 { ctid } else { 0 };
+    let clear_ctid = if (flags & CLONE_CHILD_CLEARTID) != 0 { ctid } else { 0 };
+
+    if set_ptid != 0 && UserPtr::<u32>::from_raw(set_ptid).validate().is_err() {
+        return EFAULT;
+    }
+    if (set_ctid != 0 || clear_ctid != 0) && UserPtr::<u32>::from_raw(ctid).validate().is_err() {
+        return EFAULT;
+    }
+
+    if (flags & CLONE_THREAD) != 0 {
+        if (flags & THREAD_CORE) != THREAD_CORE || (flags & !SUPPORTED_THREAD_FLAGS) != 0 {
+            return EINVAL;
+        }
+        if child_stack == 0 || child_stack >= crate::syscall::USER_ADDR_MAX {
+            return EINVAL;
+        }
+        let tls_base = if (flags & CLONE_SETTLS) != 0 {
+            if tls != 0 && !crate::memory::core::address::is_user_canonical(tls) {
+                return EINVAL;
+            }
+            tls
+        } else {
+            0
+        };
+
+        let tcb_ptr: u64;
+        unsafe {
+            core::arch::asm!("mov {}, gs:[0x20]", out(reg) tcb_ptr, options(nostack, nomem));
+        }
+        if tcb_ptr == 0 {
+            return EAGAIN;
+        }
+        let tcb = unsafe { &*(tcb_ptr as *const ThreadControlBlock) };
+        let Some(pcb) = PROCESS_REGISTRY.find_by_pid(Pid(tcb.pid.0)) else {
+            return EAGAIN;
+        };
+        let parent_ptr = resolve_caller_thread_ptr(pcb, tcb);
+        if parent_ptr.is_null() {
+            return EAGAIN;
+        }
+        let parent = unsafe { &*parent_ptr };
+        let effective_tls = if (flags & CLONE_SETTLS) != 0 {
+            tls_base
+        } else {
+            parent.sched_tcb.fs_base
+        };
+
+        let params = CloneThreadParams {
+            pcb,
+            parent,
+            child_rip: frame.rcx,
+            child_rsp: child_stack,
+            parent_rflags: frame.r11,
+            regs: ForkChildRegs {
+                rbx: frame.rbx,
+                rbp: frame.rbp,
+                r12: frame.r12,
+                r13: frame.r13,
+                r14: frame.r14,
+                r15: frame.r15,
+                rdi: frame.rdi,
+                rsi: frame.rsi,
+                rdx: frame.rdx,
+                r10: frame.r10,
+                r8: frame.r8,
+                r9: frame.r9,
+            },
+            tls_base: effective_tls,
+            detached: (flags & CLONE_DETACHED) != 0,
+            target_cpu: tcb.current_cpu().0,
+            ptid_ptr: set_ptid,
+            ctid_ptr: set_ctid,
+            clear_child_tid: clear_ctid,
+        };
+
+        return match create_cloned_thread(&params) {
+            Ok(handle) => handle.tid.0 as i64,
+            Err(ThreadCreateError::OutOfMemory) => ENOMEM,
+            Err(ThreadCreateError::TidExhausted | ThreadCreateError::TooManyThreads) => EAGAIN,
+            Err(ThreadCreateError::ProcessExiting) => EAGAIN,
+            Err(_) => EINVAL,
+        };
+    }
+
+    // Process-level clone (fork / vfork / CLONE_VM / CLONE_FILES).
+    let mut fork_flags = ForkFlags::default();
+    if (flags & CLONE_VM) != 0 {
+        if child_stack == 0 && (flags & CLONE_VFORK) == 0 {
+            return EINVAL;
+        }
+        fork_flags = fork_flags.set(ForkFlags::CLONE_VM);
+    }
+    if (flags & CLONE_FILES) != 0 {
+        fork_flags = fork_flags.set(ForkFlags::CLONE_FILES);
+    }
+    if (flags & CLONE_SIGHAND) != 0 {
+        fork_flags = fork_flags.set(ForkFlags::CLONE_SIGHAND);
+    }
+    if (flags & CLONE_VFORK) != 0 {
+        fork_flags = fork_flags.set(ForkFlags::VFORK);
+    }
+    if (flags & CLONE_NEWPID) != 0 {
+        fork_flags = fork_flags.set(ForkFlags::CLONE_NEWPID);
+    }
+
+    let extras = CloneExtras {
+        child_rsp_override: if child_stack != 0 {
+            Some(child_stack)
+        } else {
+            None
+        },
+        tls_override: if (flags & CLONE_SETTLS) != 0 {
+            if tls != 0 && !crate::memory::core::address::is_user_canonical(tls) {
+                return EINVAL;
+            }
+            Some(tls)
+        } else {
+            None
+        },
+        ptid_ptr: set_ptid,
+        ctid_ptr: set_ctid,
+        clear_child_tid: clear_ctid,
+    };
+
+    handle_fork_like_with_clone(frame, fork_flags, extras)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -249,7 +453,7 @@ pub fn handle_execve_inplace(frame: &mut SyscallFrame) {
         }
     };
 
-    let thread_ptr = pcb.main_thread_ptr();
+    let thread_ptr = resolve_caller_thread_ptr(pcb, tcb);
     if thread_ptr.is_null() {
         exec_trace(b"execve: no thread\n");
         frame.rax = EAGAIN as u64;
@@ -298,6 +502,11 @@ pub fn handle_execve_inplace(frame: &mut SyscallFrame) {
             frame.r14 = 0;
             frame.r15 = 0;
             frame.rdi = thread.addresses.entry_arg0;
+            frame.rsi = 0;
+            frame.rdx = 0;
+            frame.r8 = 0;
+            frame.r9 = 0;
+            frame.r10 = 0;
             frame.rcx = new_rip; // RIP → new ELF entry point
             frame.rsp = new_rsp; // RSP → new userspace stack
             frame.r11 = 0x0202; // RFLAGS: IF=1, reserved bit=1

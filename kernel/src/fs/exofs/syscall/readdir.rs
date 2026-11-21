@@ -35,7 +35,7 @@ use alloc::vec::Vec;
 ///
 /// `#[repr(C)]` garantit le layout binaire stable attendu par glibc/musl.
 /// Le nom est variable : il suit immédiatement cette structure en mémoire.
-#[repr(C)]
+#[repr(C, packed)]
 #[derive(Copy, Clone)]
 pub struct LinuxDirent64 {
     /// Numéro d'inode (ObjectId tronqué sur 64 bits pour compat POSIX).
@@ -50,6 +50,7 @@ pub struct LinuxDirent64 {
 }
 
 pub const HEADER_SIZE: usize = core::mem::size_of::<LinuxDirent64>();
+const _: () = assert!(HEADER_SIZE == 19);
 
 // Types d_type (compatibles linux)
 pub const DT_UNKNOWN: u8 = 0;

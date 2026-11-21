@@ -22,6 +22,34 @@ pub const MAX_SIGNAL_NUMBER: u8 = 63;
 pub const RT_SIGNAL_MIN: u8 = 32;
 pub const RT_SIGNAL_MAX: u8 = MAX_SIGNAL_NUMBER;
 const RT_SIGNAL_MASK_SHIFT: u8 = RT_SIGNAL_MIN - 1;
+pub const NON_BLOCKABLE: u64 =
+    (1u64 << (Signal::SIGKILL as u8 - 1)) | (1u64 << (Signal::SIGSTOP as u8 - 1));
+
+#[inline]
+fn signal_is_unmasked(thread: &crate::process::core::tcb::ProcessThread, sig_n: u8) -> bool {
+    if sig_n == 0 || sig_n > MAX_SIGNAL_NUMBER {
+        return false;
+    }
+    let bit = 1u64 << (sig_n - 1);
+    let mask = thread.sched_tcb.signal_mask.load(Ordering::Acquire) & !NON_BLOCKABLE;
+    (mask & bit) == 0
+}
+
+/// Recomputes `signal_pending` from queued standard + RT signals against `mask`.
+pub fn sync_pending_after_unblock(
+    thread: &crate::process::core::tcb::ProcessThread,
+    signal_mask: u64,
+) {
+    let eff_mask = signal_mask & !NON_BLOCKABLE;
+    let remaining_std = thread.sig_queue.pending.load(Ordering::Acquire) & !eff_mask;
+    let remaining_rt = (thread.rt_sig_queue.pending_mask.load(Ordering::Acquire) as u32)
+        & !rt_mask_from_signal_mask(eff_mask);
+    if remaining_std != 0 || remaining_rt != 0 {
+        thread.raise_signal_pending();
+    } else {
+        clear_signal_pending(thread);
+    }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Errors
@@ -136,11 +164,13 @@ pub fn send_signal_number_to_pid(pid: Pid, sig_n: u8) -> Result<(), SendError> {
         thread.rt_sig_queue.enqueue(sig_n, info);
     }
 
-    // Notify scheduler: signal_pending = true (PROC-04 via raise_signal_pending).
-    thread.raise_signal_pending();
-    // FIX-SIGWAKE: wake up target if sleeping, otherwise signal is
-    // never seen (sleeping thread does not go through syscall return).
-    wake_thread_for_signal(&thread.sched_tcb);
+    // Notify scheduler only if the signal is not currently masked on the target thread.
+    if signal_is_unmasked(thread, sig_n) {
+        thread.raise_signal_pending();
+        // FIX-SIGWAKE: wake up target if sleeping, otherwise signal is
+        // never seen (sleeping thread does not go through syscall return).
+        wake_thread_for_signal(&thread.sched_tcb);
+    }
     Ok(())
 }
 
@@ -159,9 +189,11 @@ pub fn send_signal_to_tcb(
     } else {
         thread.rt_sig_queue.enqueue(sig, info);
     }
-    thread.raise_signal_pending();
-    // FIX-SIGWAKE: wake up sleeping target (cf. send_signal_number_to_pid).
-    wake_thread_for_signal(&thread.sched_tcb);
+    if signal_is_unmasked(thread, sig) {
+        thread.raise_signal_pending();
+        // FIX-SIGWAKE: wake up sleeping target (cf. send_signal_number_to_pid).
+        wake_thread_for_signal(&thread.sched_tcb);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -229,8 +261,6 @@ pub fn handle_pending_signals(
         }
     };
 
-    const NON_BLOCKABLE: u64 =
-        (1u64 << (Signal::SIGKILL as u8 - 1)) | (1u64 << (Signal::SIGSTOP as u8 - 1));
     const USER_SPACE_TOP: u64 = 0x0000_7FFF_FFFF_F000;
     let sig_tcb_vaddr = pcb.signal_tcb_vaddr.load(Ordering::Acquire);
     let sig_tcb_opt = if (0x1000..USER_SPACE_TOP).contains(&sig_tcb_vaddr) {
@@ -240,13 +270,14 @@ pub fn handle_pending_signals(
         None
     };
 
-    let mut mask = thread.sched_tcb.signal_mask.load(Ordering::Acquire);
-    if let Some(stcb) = sig_tcb_opt {
-        let user_blocked = stcb.get_mask() & !NON_BLOCKABLE;
-        mask = (mask | user_blocked) & !NON_BLOCKABLE;
-        let q_pending = thread.sig_queue.pending.load(Ordering::Acquire);
-        if q_pending != 0 {
-            stcb.pending.fetch_or(q_pending, Ordering::AcqRel);
+    let pcb_threads = pcb.thread_count.load(Ordering::Acquire);
+    let mask = thread.sched_tcb.signal_mask.load(Ordering::Acquire) & !NON_BLOCKABLE;
+    if pcb_threads <= 1 {
+        if let Some(stcb) = sig_tcb_opt {
+            let q_pending = thread.sig_queue.pending.load(Ordering::Acquire);
+            if q_pending != 0 {
+                stcb.pending.fetch_or(q_pending, Ordering::AcqRel);
+            }
         }
     }
 
@@ -266,8 +297,10 @@ pub fn handle_pending_signals(
             }
         };
 
-        if let Some(stcb) = sig_tcb_opt {
-            stcb.consume(sig_n);
+        if pcb_threads <= 1 {
+            if let Some(stcb) = sig_tcb_opt {
+                stcb.consume(sig_n);
+            }
         }
 
         let mut action = {
@@ -275,7 +308,7 @@ pub fn handle_pending_signals(
             handlers.get(sig_n)
         };
         if let Some(stcb) = sig_tcb_opt {
-            if let Some(entry) = stcb.get_action(sig_n) {
+            if let Some(entry) = stcb.atomic_get_action(sig_n) {
                 if entry.is_ign() && sig_n != Signal::SIGKILL as u8 && sig_n != Signal::SIGSTOP as u8 {
                     action = SigAction::IGN;
                 } else if entry.is_user() && sig_n != Signal::SIGKILL as u8 && sig_n != Signal::SIGSTOP as u8 {
@@ -298,17 +331,7 @@ pub fn handle_pending_signals(
             let mut handlers = pcb.sig_handlers.lock();
             handlers.set(sig_n, def);
             if let Some(stcb) = sig_tcb_opt {
-                if let Some(idx) = sig_n.checked_sub(1).map(|i| i as usize) {
-                    if idx < super::tcb::NSIG {
-                        // SAFETY: writing handler slot of current thread on syscall return.
-                        unsafe {
-                            let slot_ptr = &stcb.handlers[idx]
-                                as *const super::tcb::SigactionEntry
-                                as *mut super::tcb::SigactionEntry;
-                            slot_ptr.write_volatile(super::tcb::SigactionEntry::default_dfl());
-                        }
-                    }
-                }
+                let _ = stcb.atomic_set_action(sig_n, super::tcb::SigactionEntry::default_dfl());
             }
         }
 
@@ -319,13 +342,8 @@ pub fn handle_pending_signals(
         }
     }
 
-    // Clear flag if nothing pending remains.
-    let remaining_std = thread.sig_queue.pending.load(Ordering::Acquire) & !mask;
-    let remaining_rt = (thread.rt_sig_queue.pending_mask.load(Ordering::Acquire) as u32)
-        & !rt_mask_from_signal_mask(mask);
-    if remaining_std == 0 && remaining_rt == 0 {
-        clear_signal_pending(thread);
-    }
+    // Clear flag if nothing deliverable remains.
+    sync_pending_after_unblock(thread, mask);
 }
 
 #[inline]
@@ -404,6 +422,29 @@ fn deliver_one(
             let is_core = matches!(action.kind, SigActionKind::Core);
             let exit_status: u32 =
                 0x8000_0000 | ((sig_n as u32) & 0x7F) | if is_core { 0x80 } else { 0 };
+            let self_ptr = thread as *const crate::process::core::tcb::ProcessThread as *mut _;
+            let prev_flags = pcb.flags.fetch_or(
+                crate::process::core::pcb::process_flags::GROUP_EXITING,
+                Ordering::AcqRel,
+            );
+            if (prev_flags & crate::process::core::pcb::process_flags::GROUP_EXITING) == 0 {
+                pcb.set_exiting();
+                pcb.exit_code.store(exit_status, Ordering::Release);
+                if pcb.thread_count.load(Ordering::Acquire) > 1 {
+                    let sigkill = Signal::SIGKILL.number();
+                    pcb.for_each_thread_ptr(|tptr| {
+                        if tptr == self_ptr {
+                            return;
+                        }
+                        let sib = unsafe { &mut *tptr };
+                        sib.join_result.store(exit_status as u64, Ordering::Release);
+                        sib.join_done.store(true, Ordering::Release);
+                        crate::scheduler::timer::sleep::cancel_sleep_timer_for_tcb(&sib.sched_tcb);
+                        send_signal_to_tcb(sib, sigkill, SigInfo::kernel(sigkill));
+                    });
+                    crate::process::thread::join::wake_joiners();
+                }
+            }
             do_exit(thread, pcb, exit_status);
         }
     }

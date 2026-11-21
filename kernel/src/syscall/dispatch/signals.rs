@@ -37,29 +37,30 @@ pub fn sanitize_user_rflags(rflags: u64) -> u64 {
 }
 
 pub fn handle_sigreturn_inplace(frame: &mut SyscallFrame) {
-    use crate::process::signal::handler::{verify_and_extract_uc, SIGNAL_FRAME_UC_OFFSET};
+    use crate::process::signal::handler::{
+        extract_and_sanitize_sigframe, restore_fpu_regs_from_bytes, SIGNAL_FRAME_UC_OFFSET,
+    };
     use crate::scheduler::core::task::ThreadControlBlock;
+    use core::sync::atomic::Ordering;
 
     // Handler's `ret` popped `pretcode` → userspace RSP = sig_rsp + 8.
     let sig_rsp = frame.rsp.wrapping_sub(8);
     let uc_ptr = sig_rsp + SIGNAL_FRAME_UC_OFFSET;
 
-    let regs = match verify_and_extract_uc(uc_ptr) {
-        Some(r) => r,
+    let (regs, fpregs) = match extract_and_sanitize_sigframe(uc_ptr) {
+        Some(v) => v,
         None => {
-            // Invalid magic or corrupted address: trigger SIGSEGV.
-            // We set RIP = 0 (unmapped) → Ring3 #PF → SIGSEGV to process.
-            // We never crash in Ring0 (ARCH-SYSRET V-35 respected).
+            // Invalid magic or corrupted address: trigger SIGSEGV via RIP=0 in Ring3.
             frame.rcx = 0;
             frame.rax = (-crate::syscall::errno::EFAULT) as u64;
             return;
         }
     };
 
-    // Restore registers into arch frame (read by SYSRETQ).
-    // Return RIP = rcx for SYSRETQ.
+    restore_fpu_regs_from_bytes(&fpregs);
+
+    // Restore general registers into arch frame (read by SYSRETQ).
     frame.rcx = regs.rip;
-    // Userspace RFLAGS = r11 for SYSRETQ with strict anti-elevation masking (T9-006 / T6-001).
     frame.r11 = sanitize_user_rflags(regs.rflags);
     frame.rax = regs.rax;
     frame.rdi = regs.rdi;
@@ -74,7 +75,6 @@ pub fn handle_sigreturn_inplace(frame: &mut SyscallFrame) {
     frame.r15 = regs.r15;
     frame.rbx = regs.rbx;
     frame.rbp = regs.rbp;
-    // Userspace RSP updated in gs:[0x08] AND in frame.rsp.
     // SAFETY: Active kernel GS, gs:[0x08] = user_rsp slot of PerCpuData.
     unsafe {
         core::arch::asm!(
@@ -85,19 +85,15 @@ pub fn handle_sigreturn_inplace(frame: &mut SyscallFrame) {
     }
     frame.rsp = regs.rsp;
 
-    // Restore signal mask in TCB.
-    // SAFETY: gs:[0x20] = current TCB pointer (PerCpuData layout).
+    // Restore signal mask, TLS, and handler flag on per-thread state.
     let tcb_ptr: u64;
     unsafe {
         core::arch::asm!("mov {}, gs:[0x20]", out(reg) tcb_ptr, options(nostack, nomem));
     }
     if tcb_ptr != 0 {
-        // Mask unmaskable SIGKILL/SIGSTOP and invalid signal bits.
         let safe_mask = crate::process::signal::mask::SigMask::from(regs.signal_mask).0;
-        // SAFETY: tcb_ptr is non-null and valid (maintained by scheduler).
         let tcb = unsafe { &mut *(tcb_ptr as *mut ThreadControlBlock) };
-        tcb.signal_mask
-            .store(safe_mask, core::sync::atomic::Ordering::Release);
+        tcb.signal_mask.store(safe_mask, Ordering::Release);
         if crate::memory::core::address::is_user_canonical(regs.fs_base) {
             tcb.fs_base = regs.fs_base;
             #[cfg(target_os = "none")]
@@ -116,6 +112,32 @@ pub fn handle_sigreturn_inplace(frame: &mut SyscallFrame) {
                     crate::arch::x86_64::cpu::msr::MSR_KERNEL_GS_BASE,
                     regs.gs_base,
                 );
+            }
+        }
+
+        if let Some(pcb) = crate::process::core::registry::PROCESS_REGISTRY
+            .find_by_pid(crate::process::core::pid::Pid(tcb.pid.0))
+        {
+            let tid = crate::process::core::pid::Tid(tcb.tid as u32);
+            let mut thread_ptr = pcb.find_thread_by_tid(tid);
+            if thread_ptr.is_null() {
+                thread_ptr = pcb.find_alive_thread();
+            }
+            if !thread_ptr.is_null() {
+                let thread = unsafe { &mut *thread_ptr };
+                if crate::memory::core::address::is_user_canonical(regs.fs_base) {
+                    thread.tls_gs_base.store(regs.fs_base, Ordering::Release);
+                }
+                thread.in_handler.store(0, Ordering::Release);
+                crate::process::signal::delivery::sync_pending_after_unblock(thread, safe_mask);
+            }
+            if pcb.thread_count.load(Ordering::Acquire) <= 1 {
+                let vaddr = pcb.signal_tcb_vaddr.load(Ordering::Acquire);
+                if (0x1000..0x0000_7FFF_FFFF_F000).contains(&vaddr) {
+                    let stcb = unsafe { &*(vaddr as *const crate::process::signal::tcb::SignalTcb) };
+                    stcb.set_mask(safe_mask);
+                    stcb.in_handler.store(0, Ordering::Release);
+                }
             }
         }
     }

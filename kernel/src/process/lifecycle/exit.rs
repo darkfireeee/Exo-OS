@@ -74,11 +74,13 @@ fn mark_exit(
     let remaining_threads = pcb.dec_threads();
     if remaining_threads == 0 {
         pcb.set_exiting();
-        pcb.exit_code.store(exit_status, Ordering::Release);
+        if (pcb.flags.load(Ordering::Acquire) & process_flags::GROUP_EXITING) == 0 {
+            pcb.exit_code.store(exit_status, Ordering::Release);
+        }
         pcb.flags
             .fetch_or(process_flags::VFORK_DONE, Ordering::Release);
 
-        {
+        if alloc::sync::Arc::strong_count(&pcb.files) == 1 {
             let mut files = pcb.files.lock();
             files.close_all_noalloc();
         }

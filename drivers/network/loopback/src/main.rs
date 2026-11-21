@@ -12,9 +12,15 @@ mod state;
 
 const SERVER_ENDPOINT_ID: u64 = 15;
 const NETWORK_ENDPOINT_ID: u64 = 7;
+const NET_CTRL_DRIVER_INIT: u32 = 0x4F00;
 const NET_CTRL_RX_RELEASE: u32 = 0x4F01;
+const NET_CTRL_MAC_QUERY: u32 = 0x4F02;
+const NET_CTRL_MAC_REPLY: u32 = 0x4F03;
+const NET_CTRL_RX_READY: u32 = 0x4F04;
 const NET_CTRL_TX_SUBMIT: u32 = 0x4F05;
 const NET_CTRL_TX_COMPLETE: u32 = 0x4F06;
+
+const LOOPBACK_MAC: [u8; 6] = [0x02, 0x00, 0x00, 0x00, 0x00, 0x01];
 
 #[repr(C)]
 struct LoopbackRequest {
@@ -35,6 +41,17 @@ impl LoopbackRequest {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
+struct DriverInitMsg {
+    opcode: u32,
+    pool_count: u32,
+    rx_base_iova: u64,
+    tx_base_iova: u64,
+    hdr_size: u32,
+    _pad: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
 struct RxReleaseMsg {
     opcode: u32,
     count: u32,
@@ -42,6 +59,21 @@ struct RxReleaseMsg {
 }
 
 const _: () = assert!(core::mem::size_of::<RxReleaseMsg>() == 48);
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct RxPacketRef {
+    pool_idx: u16,
+    len: u16,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct RxReadyMsg {
+    opcode: u32,
+    count: u32,
+    entries: [RxPacketRef; 20],
+}
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -59,9 +91,33 @@ struct TxCompleteMsg {
     pool_idx: [u16; 20],
 }
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct MacReplyMsg {
+    opcode: u32,
+    mac: [u8; 6],
+    _pad: [u8; 2],
+}
+
+static mut RX_POOL_COUNT: u32 = 256;
+static mut NEXT_RX_IDX: u16 = 0;
+
 impl state::LoopbackState {
     fn process_request(&mut self, request: &LoopbackRequest) {
-        if request.msg_type == NET_CTRL_RX_RELEASE {
+        if request.msg_type == NET_CTRL_DRIVER_INIT {
+            let msg = unsafe {
+                core::ptr::read_unaligned(request.payload.as_ptr() as *const DriverInitMsg)
+            };
+            if msg.opcode == NET_CTRL_DRIVER_INIT && msg.pool_count > 0 {
+                unsafe {
+                    RX_POOL_COUNT = msg.pool_count;
+                    NEXT_RX_IDX = 0;
+                }
+            }
+            send_mac_reply();
+        } else if request.msg_type == NET_CTRL_MAC_QUERY {
+            send_mac_reply();
+        } else if request.msg_type == NET_CTRL_RX_RELEASE {
             let msg = unsafe {
                 core::ptr::read_unaligned(request.payload.as_ptr() as *const RxReleaseMsg)
             };
@@ -71,6 +127,17 @@ impl state::LoopbackState {
                 core::ptr::read_unaligned(request.payload.as_ptr() as *const TxSubmitMsg)
             };
             if msg.opcode == NET_CTRL_TX_SUBMIT {
+                // Loopback echo accounting & RX ready notification before TX completion.
+                self.note_echo();
+                let rx_idx = unsafe {
+                    let cur = NEXT_RX_IDX;
+                    let max = RX_POOL_COUNT.max(1) as u16;
+                    NEXT_RX_IDX = cur.wrapping_add(1) % max;
+                    cur
+                };
+                if msg.len > 0 {
+                    send_single_rx_ready(rx_idx, msg.len);
+                }
                 send_single_tx_complete(msg.pool_idx);
             }
         } else {
@@ -117,6 +184,37 @@ fn register_endpoint_name(name: &[u8]) {
             SERVER_ENDPOINT_ID,
         );
     }
+}
+
+fn send_mac_reply() {
+    let reply = MacReplyMsg {
+        opcode: NET_CTRL_MAC_REPLY,
+        mac: LOOPBACK_MAC,
+        _pad: [0; 2],
+    };
+    let payload = unsafe {
+        core::slice::from_raw_parts(
+            &reply as *const MacReplyMsg as *const u8,
+            core::mem::size_of::<MacReplyMsg>(),
+        )
+    };
+    send_ctrl(NETWORK_ENDPOINT_ID, NET_CTRL_MAC_REPLY, payload);
+}
+
+fn send_single_rx_ready(pool_idx: u16, len: u16) {
+    let mut ready = RxReadyMsg {
+        opcode: NET_CTRL_RX_READY,
+        count: 1,
+        entries: [RxPacketRef { pool_idx: 0, len: 0 }; 20],
+    };
+    ready.entries[0] = RxPacketRef { pool_idx, len };
+    let payload = unsafe {
+        core::slice::from_raw_parts(
+            &ready as *const RxReadyMsg as *const u8,
+            core::mem::size_of::<RxReadyMsg>(),
+        )
+    };
+    send_ctrl(NETWORK_ENDPOINT_ID, NET_CTRL_RX_READY, payload);
 }
 
 fn send_single_tx_complete(pool_idx: u16) {

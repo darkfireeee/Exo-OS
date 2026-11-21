@@ -224,7 +224,7 @@ impl Drop for OwnedFd {
             // the latest POSIX wording: http://austingroupbugs.net/view.php?id=529
             #[cfg(not(target_os = "hermit"))]
             {
-                #[cfg(unix)]
+                #[cfg(all(unix, not(target_os = "exo")))]
                 crate::sys::fs::debug_assert_fd_is_open(self.fd.as_inner());
 
                 let _ = libc::close(self.fd.as_inner());

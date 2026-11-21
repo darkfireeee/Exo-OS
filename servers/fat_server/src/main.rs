@@ -72,7 +72,7 @@ fn register_endpoint() -> bool {
 fn handle_request(req: &FsIpcRequest) -> FsIpcReply {
     match req.msg_type {
         0 => FsIpcReply::ok(0), // Ping / Heartbeat
-        1 => FsIpcReply::ok(1), // Stat / Query
+        1 => FsIpcReply::error(syscall::ENODEV), // No FAT32 volume mounted
         _ => FsIpcReply::error(syscall::ENOSYS),
     }
 }

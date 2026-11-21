@@ -19,3 +19,6 @@ exo-syscall-abi = { path = "../../servers/syscall_abi" }
 exo-syscall = { path = "../exo-syscall" }
 exo-alloc = { path = "../exo-alloc" }
 exo-phoenix-ssr = { path = "../exo-phoenix-ssr" }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("exo"))'] }

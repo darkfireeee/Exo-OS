@@ -287,12 +287,140 @@ impl SignalTcb {
     #[inline]
     pub fn has_altstack(&self) -> bool {
         self.altstack_size.load(Ordering::Acquire) > 0
-            && (self.altstack_flags.load(Ordering::Acquire) & 4) == 0 // SS_DISABLE=4
+            && (self.altstack_flags.load(Ordering::Acquire)
+                & crate::process::signal::handler::SS_DISABLE as u32)
+                == 0
+    }
+
+    /// Reads the handler entry for `sig` (1-indexed) using 128-bit atomic loads (`cmpxchg16b`).
+    pub fn atomic_get_action(&self, sig: u8) -> Option<SigactionEntry> {
+        let idx = sig.checked_sub(1)? as usize;
+        if idx >= NSIG {
+            return None;
+        }
+        let ptr = &self.handlers[idx] as *const SigactionEntry as *mut u64;
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            let (lo0, hi0) = read_u128_cmpxchg16b(ptr);
+            let (lo1, hi1) = read_u128_cmpxchg16b(ptr.add(2));
+            Some(SigactionEntry {
+                handler_vaddr: lo0,
+                flags: hi0 as u32,
+                _pad: (hi0 >> 32) as u32,
+                mask: lo1,
+                restorer: hi1,
+            })
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        Some(unsafe { core::ptr::read_volatile(&self.handlers[idx]) })
+    }
+
+    /// Writes the handler entry for `sig` (1-indexed) using 128-bit atomic stores (`cmpxchg16b`).
+    pub fn atomic_set_action(&self, sig: u8, entry: SigactionEntry) -> bool {
+        if sig == 9 || sig == 19 {
+            return false;
+        }
+        let Some(idx) = sig.checked_sub(1).map(|i| i as usize) else {
+            return false;
+        };
+        if idx >= NSIG {
+            return false;
+        }
+        let dst = &self.handlers[idx] as *const SigactionEntry as *mut u64;
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            let hi0 = (entry.flags as u64) | ((entry._pad as u64) << 32);
+            write_u128_cmpxchg16b(dst.add(2), entry.mask, entry.restorer);
+            write_u128_cmpxchg16b(dst, entry.handler_vaddr, hi0);
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        unsafe {
+            let slot = dst as *mut SigactionEntry;
+            slot.write_volatile(entry);
+        }
+        true
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[inline]
+unsafe fn read_u128_cmpxchg16b(ptr: *mut u64) -> (u64, u64) {
+    let mut lo = 0u64;
+    let mut hi = 0u64;
+    // Pin every operand to explicit non-rbx registers so LLVM can never alias
+    // `ptr`, outputs, or flags across manual rbx save/restore.
+    core::arch::asm!(
+        "mov r8, rbx",
+        "xor ebx, ebx",
+        "xor ecx, ecx",
+        "lock cmpxchg16b [rdi]",
+        "mov rbx, r8",
+        in("rdi") ptr,
+        inout("rax") lo,
+        inout("rdx") hi,
+        out("rcx") _,
+        out("r8") _,
+        options(nostack)
+    );
+    (lo, hi)
+}
+
+#[cfg(target_arch = "x86_64")]
+#[inline]
+unsafe fn write_u128_cmpxchg16b(ptr: *mut u64, new_lo: u64, new_hi: u64) {
+    let mut prev_lo = ptr.read_volatile();
+    let mut prev_hi = ptr.add(1).read_volatile();
+    loop {
+        let ok: u64;
+        core::arch::asm!(
+            "mov r8, rbx",
+            "mov rbx, rsi",
+            "lock cmpxchg16b [rdi]",
+            "sete r9b",
+            "mov rbx, r8",
+            "movzx r9d, r9b",
+            in("rdi") ptr,
+            in("rsi") new_lo,
+            in("rcx") new_hi,
+            inout("rax") prev_lo,
+            inout("rdx") prev_hi,
+            out("r8") _,
+            lateout("r9") ok,
+            options(nostack)
+        );
+        if ok != 0 {
+            break;
+        }
     }
 }
 
 impl Default for SignalTcb {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn atomic_action_cmpxchg16b_roundtrip() {
+        let tcb = SignalTcb::new();
+        let entry = SigactionEntry {
+            handler_vaddr: 0x1234_5678_9abc_def0,
+            flags: 0x0800_0004,
+            _pad: 0,
+            mask: 0x00ff_00ff_55aa_1122,
+            restorer: 0x0000_7fff_0000_4321,
+        };
+        assert!(tcb.atomic_set_action(10, entry));
+        let got = tcb.atomic_get_action(10).expect("slot 10");
+        assert_eq!(got.handler_vaddr, entry.handler_vaddr);
+        assert_eq!(got.flags, entry.flags);
+        assert_eq!(got.mask, entry.mask);
+        assert_eq!(got.restorer, entry.restorer);
+        assert!(!tcb.atomic_set_action(9, entry));
+        assert!(!tcb.atomic_set_action(19, entry));
     }
 }

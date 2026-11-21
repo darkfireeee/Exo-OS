@@ -24,6 +24,14 @@ pub const NET_OP_SETSOCKOPT: u32 = 0x4E0C;
 pub const NET_OP_GETSOCKOPT: u32 = 0x4E0D;
 pub const NET_OP_CLOSE: u32 = 0x4E0E;
 pub const NET_OP_GETPEERNAME: u32 = 0x4E0F;
+pub const NET_OP_HANDSHAKE: u32 = 0x4E10;
+pub const NET_OP_POLL: u32 = 0x4E11;
+
+/// Flag set in `NetMsg.arg4` (SENDTO/SENDMSG) or `NetMsg.arg3` (RECVFROM/RECVMSG)
+/// to transfer payload via `network_server`'s 16 KiB `NET_DATA_WINDOW` instead of
+/// the 128-byte inline IPC envelope.
+pub const NET_FLAG_USE_DATA_WINDOW: u32 = 0x8000_0000;
+pub const NET_DATA_WINDOW_SIZE: usize = 16384;
 
 pub const NET_CTRL_DRIVER_INIT: u32 = 0x4F00;
 pub const NET_CTRL_RX_RELEASE: u32 = 0x4F01;

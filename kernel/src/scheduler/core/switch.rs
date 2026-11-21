@@ -50,6 +50,26 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 pub static CURRENT_THREAD_PER_CPU: [AtomicUsize; MAX_CPUS] =
     [const { AtomicUsize::new(0) }; MAX_CPUS];
 
+/// Monotonic per-CPU TSC timestamp used to charge elapsed CFS `vruntime` on ticks,
+/// yields, and switches without double-counting.
+static LAST_VRUNTIME_TSC: [core::sync::atomic::AtomicU64; MAX_CPUS] =
+    [const { core::sync::atomic::AtomicU64::new(0) }; MAX_CPUS];
+
+/// Charges elapsed CPU time since the last vruntime update on `cpu_idx` to `tcb`.
+#[inline]
+pub fn account_running_vruntime(cpu_idx: usize, tcb: &ThreadControlBlock) {
+    let idx = cpu_idx.min(MAX_CPUS - 1);
+    let now_tsc = tsc::read_tsc();
+    let prev_tsc = LAST_VRUNTIME_TSC[idx].swap(now_tsc, Ordering::AcqRel);
+    if prev_tsc != 0
+        && !tcb.is_idle()
+        && matches!(tcb.policy, SchedPolicy::Normal | SchedPolicy::Batch)
+    {
+        let delta_ns = tsc::tsc_cycles_to_ns(now_tsc.wrapping_sub(prev_tsc));
+        tcb.advance_vruntime(delta_ns, tcb.priority.cfs_weight());
+    }
+}
+
 /// Optional hook called on the outgoing thread before state transition.
 ///
 /// Upper layers install it at boot; scheduler only keeps a
@@ -379,16 +399,11 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
         if last != 0 {
             let delta_ns = tsc::tsc_cycles_to_ns(now_tsc.wrapping_sub(last));
             prev.run_time_acc = prev.run_time_acc.saturating_add(delta_ns);
-            match prev.policy {
-                SchedPolicy::Normal | SchedPolicy::Batch => {
-                    prev.advance_vruntime(delta_ns, prev.priority.cfs_weight());
-                }
-                SchedPolicy::Deadline => {
-                    crate::scheduler::policies::deadline::consume_budget(prev, delta_ns);
-                }
-                _ => {}
+            if prev.policy == SchedPolicy::Deadline {
+                crate::scheduler::policies::deadline::consume_budget(prev, delta_ns);
             }
         }
+        account_running_vruntime(cpu_idx, prev);
     }
 
     // Publish `next` BEFORE ASM jump.
@@ -473,9 +488,11 @@ pub unsafe fn context_switch(prev: &mut ThreadControlBlock, next: &mut ThreadCon
     if cpu_idx < MAX_CPUS {
         // SAFETY: cpu_idx < MAX_CPUS; exclusive access to current core's per-CPU
         // slot (no cross-CPU mutable sharing). Ring 0, preemption off.
+        let switch_tsc = tsc::read_tsc();
         let cpu_data = unsafe { percpu::per_cpu_mut(cpu_idx) };
         cpu_data.ctx_switch_count = cpu_data.ctx_switch_count.wrapping_add(1);
-        cpu_data.last_switch_tsc = tsc::read_tsc();
+        cpu_data.last_switch_tsc = switch_tsc;
+        LAST_VRUNTIME_TSC[cpu_idx].store(switch_tsc, Ordering::Release);
         CURRENT_THREAD_PER_CPU[cpu_idx]
             .store(next as *mut ThreadControlBlock as usize, Ordering::Release);
     }
@@ -523,6 +540,9 @@ pub unsafe fn schedule_yield(
         }
 
         // Re-enqueue current BEFORE picking next (CFS round-robin).
+        // Charge elapsed CPU time first so current's vruntime reflects its run
+        // and cannot starve newly woken IPC/IRQ threads across yields.
+        account_running_vruntime(cpu_id.0 as usize, current);
         // SAFETY: current is a valid mutable reference, non-null by construction.
         if current.is_queued() {
             let _ = rq.remove(ptr);
@@ -646,6 +666,32 @@ pub unsafe fn schedule_current_if_needed() -> bool {
 /// CPL 0, called outside non-preemptible critical sections.
 pub unsafe fn cooperative_reschedule() -> bool {
     schedule_current(true)
+}
+
+/// Cooperatively yields CPU from interruptible Ring 0 kthread code when a
+/// higher-priority or waiting task requested preemption (`need_resched()`).
+///
+/// Safe no-op in tests, under `PreemptGuard`, or inside `IF = 0` syscalls.
+#[inline]
+pub fn maybe_yield_kthread() {
+    #[cfg(all(target_arch = "x86_64", not(test)))]
+    {
+        if crate::scheduler::core::preempt::PreemptGuard::depth() == 0
+            && (crate::arch::x86_64::read_rflags() & (1 << 9)) != 0
+        {
+            let tcb_ptr = current_thread_raw();
+            if !tcb_ptr.is_null() {
+                // SAFETY: `tcb_ptr` is the currently executing thread on this CPU.
+                let need = unsafe { (*tcb_ptr).need_resched() };
+                if need {
+                    // SAFETY: `PreemptGuard::depth() == 0` and `IF == 1`.
+                    unsafe {
+                        let _ = cooperative_reschedule();
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// A scheduling attempt from current CPU's boot idle thread.

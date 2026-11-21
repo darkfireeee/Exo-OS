@@ -294,15 +294,26 @@ fn collect_epoch_blobs(epoch_id: u64) -> ExofsResult<Vec<EpochJournalEntry>> {
 
 /// Invalide les blobs marqués dirty après commit.
 fn flush_dirty_blobs(entries: &[EpochJournalEntry]) -> ExofsResult<()> {
+    let mut wrote_any = false;
     let mut i = 0usize;
     while i < entries.len() {
         let bid = BlobId(entries[i].blob_id);
         if let Some(data) = BLOB_CACHE.get(&bid) {
-            if super::object_store::persist_blob_data_if_disk(bid, data.as_ref(), true)? {
+            if super::object_store::persist_blob_data_if_disk_options(
+                bid,
+                data.as_ref(),
+                false,
+                false,
+            )? {
                 let _ = BLOB_CACHE.mark_clean(&bid);
+                wrote_any = true;
             }
         }
+        super::object_store::maybe_yield_io();
         i = i.wrapping_add(1);
+    }
+    if wrote_any {
+        let _ = super::object_store::persist_catalog_to_global_disk_with_sync(false)?;
     }
     Ok(())
 }
@@ -355,7 +366,12 @@ fn save_epoch_root_blob(epoch_id: u64, root: &EpochRootInMemory) -> ExofsResult<
     BLOB_CACHE
         .insert(root_blob, first_flat.to_vec())
         .map_err(|_| ExofsError::NoSpace)?;
-    let _ = super::object_store::persist_blob_data_if_disk(root_blob, &first_flat, true)?;
+    let _ = super::object_store::persist_blob_data_if_disk_options(
+        root_blob,
+        &first_flat,
+        false,
+        true,
+    )?;
 
     if let Some(base) = super::object_store::mapping_disk_offset(&root_blob) {
         let mut offsets = Vec::new();

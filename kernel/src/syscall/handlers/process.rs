@@ -6,9 +6,9 @@
 //! RULE BUG-04: do_exec() must initialize %fs (TLS) before jump_to_entry.
 //! RULE BUG-09: block_all_except_kill() during exec to avoid inter-exec signal.
 
-use crate::syscall::errno::{EAGAIN, ECHILD, EFAULT, EINTR, EINVAL, ENOMEM, ENOSYS};
+use crate::syscall::errno::{ECHILD, EFAULT, EINTR, EINVAL, ENOSYS};
 use crate::syscall::validation::{
-    copy_to_user, read_user_path, read_user_typed, write_user_typed, USER_ADDR_MAX,
+    copy_to_user, read_user_path, write_user_typed, USER_ADDR_MAX,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -241,94 +241,5 @@ pub fn sys_waitid(idtype: u64, id: u64, infop: u64, options: u64, _rusage: u64, 
         Err(WaitError::NoChild) => ECHILD,
         Err(WaitError::Interrupted) => EINTR,
         Err(WaitError::InvalidPid) => EINVAL,
-    }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// clone() — thread creation
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// `clone(flags, stack, ptid, ctid, tls)` -> TID or errno.
-pub fn sys_clone(flags: u64, stack: u64, ptid: u64, ctid: u64, tls: u64, entry: u64) -> i64 {
-    const CLONE_SETTLS: u64 = 0x0008_0000;
-
-    if ptid != 0 && ptid >= USER_ADDR_MAX {
-        return EFAULT;
-    }
-    if ctid != 0 && ctid >= USER_ADDR_MAX {
-        return EFAULT;
-    }
-    let start_func = if entry != 0 {
-        entry
-    } else if flags & CLONE_SETTLS == 0 && tls != 0 {
-        tls
-    } else {
-        ctid
-    };
-    if start_func == 0 {
-        return EINVAL;
-    }
-
-    let arg = if entry != 0 && stack != 0 {
-        match read_user_typed::<u64>(stack) {
-            Ok(value) => value,
-            Err(e) => return e.to_errno(),
-        }
-    } else {
-        0
-    };
-    let stack_addr = stack;
-    let stack_size = if stack != 0 { 0u64 } else { 8 * 1024 * 1024u64 };
-    let detached = (flags & 0x0040_0000) != 0;
-    // Read current PID from per-CPU TCB
-    let current_pid_val: u32 = unsafe {
-        let ptr: u64;
-        core::arch::asm!("mov {}, gs:[0x20]", out(reg) ptr, options(nomem, nostack));
-        if ptr == 0 {
-            return EFAULT;
-        }
-        (*(ptr as *const crate::scheduler::core::task::ThreadControlBlock))
-            .pid
-            .0
-    };
-    let pcb_ref = match crate::process::core::registry::PROCESS_REGISTRY
-        .find_by_pid(crate::process::core::pid::Pid(current_pid_val))
-    {
-        Some(p) => p,
-        None => return -3i64, // ESRCH
-    };
-    let attr = crate::process::thread::creation::ThreadAttr {
-        stack_size,
-        stack_addr,
-        policy: crate::scheduler::core::task::SchedPolicy::Normal,
-        priority: crate::scheduler::core::task::Priority::NORMAL_DEFAULT,
-        detached,
-        cpu_affinity: -1,
-        sigaltstack_size: 8192,
-    };
-    let params = crate::process::thread::creation::ThreadCreateParams {
-        pcb: pcb_ref as *const crate::process::core::pcb::ProcessControlBlock,
-        attr,
-        start_func,
-        arg,
-        initial_rsp: stack,
-        tls_base: if flags & CLONE_SETTLS != 0 { tls } else { 0 },
-        target_cpu: unsafe {
-            let p = crate::scheduler::core::switch::current_thread_raw();
-            if p.is_null() {
-                0
-            } else {
-                (*p).current_cpu().0
-            }
-        },
-        pthread_out: if flags & 0x0010_0000 != 0 { ptid } else { 0 },
-        child_tid_ptr: if flags & 0x0100_0000 != 0 { ctid } else { 0 },
-        clear_child_tid: if flags & 0x0020_0000 != 0 { ctid } else { 0 },
-    };
-    match crate::process::thread::creation::create_thread(&params) {
-        Ok(handle) => handle.tid.0 as i64,
-        Err(crate::process::thread::creation::ThreadCreateError::OutOfMemory) => ENOMEM,
-        Err(crate::process::thread::creation::ThreadCreateError::TidExhausted) => EAGAIN,
-        Err(_) => EINVAL,
     }
 }

@@ -2,7 +2,7 @@
 
 use super::common::*;
 use crate::syscall::numbers::*;
-use crate::syscall::validation::{read_user_path, read_user_typed};
+use crate::syscall::validation::read_user_path;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Process / Thread handlers (delegated to process/)
@@ -33,146 +33,14 @@ pub fn sys_vfork(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> 
     ENOSYS
 }
 
-/// `clone(flags, stack, ptid, ctid, tls)` — creates a new thread via create_thread.
+/// `clone(flags, stack, ptid, ctid, tls)` — intercepted by dispatch.rs [5b] via
+/// `handle_clone_inplace()`.
 ///
-/// Exo-OS convention:
-/// - `stack`: initial RSP of child thread and `arg` slot of musl wrapper.
-/// - `tls`: FS base when `CLONE_SETTLS` is present.
-/// - `entry`: 6th syscall register; musl x86_64 wrapper passes `func` in it.
-/// - `ctid`/`ptid`: POSIX TID pointers preserved for clone protocol.
-/// - CLONE_DETACHED (0x0040_0000): detached thread.
-pub fn sys_clone(flags: u64, stack: u64, ptid: u64, ctid: u64, tls: u64, entry: u64) -> i64 {
+/// Safety net identical to `sys_fork` / `sys_vfork`: if reached outside [5b],
+/// return `ENOSYS` rather than diverging from the register-frame clone ABI.
+pub fn sys_clone(_flags: u64, _stack: u64, _ptid: u64, _ctid: u64, _tls: u64, _a6: u64) -> i64 {
     stat_inc(SYS_CLONE);
-
-    const CLONE_VM: u64 = 0x0000_0100;
-    const CLONE_FS: u64 = 0x0000_0200;
-    const CLONE_FILES: u64 = 0x0000_0400;
-    const CLONE_SIGHAND: u64 = 0x0000_0800;
-    const CLONE_THREAD: u64 = 0x0001_0000;
-    const CLONE_SYSVSEM: u64 = 0x0004_0000;
-    const CLONE_SETTLS: u64 = 0x0008_0000;
-    const CLONE_PARENT_SETTID: u64 = 0x0010_0000;
-    const CLONE_CHILD_CLEARTID: u64 = 0x0020_0000;
-    const CLONE_DETACHED: u64 = 0x0040_0000;
-    const CLONE_CHILD_SETTID: u64 = 0x0100_0000;
-    const SUPPORTED_THREAD_FLAGS: u64 = CLONE_VM
-        | CLONE_FS
-        | CLONE_FILES
-        | CLONE_SIGHAND
-        | CLONE_THREAD
-        | CLONE_SYSVSEM
-        | CLONE_SETTLS
-        | CLONE_PARENT_SETTID
-        | CLONE_CHILD_CLEARTID
-        | CLONE_DETACHED
-        | CLONE_CHILD_SETTID;
-
-    let thread_core = CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | CLONE_THREAD;
-    if flags & CLONE_THREAD == 0 {
-        return ENOSYS;
-    }
-    if flags & thread_core != thread_core {
-        return EINVAL;
-    }
-    if flags & !SUPPORTED_THREAD_FLAGS != 0 {
-        return EINVAL;
-    }
-
-    // Retrieve PID of current thread via GS:[0x20].
-    // SAFETY: GS:[0x20] is initialized by context_switch before any syscall entry.
-    let current_pid_val: u32 = unsafe {
-        let ptr: u64;
-        core::arch::asm!("mov {}, gs:[0x20]", out(reg) ptr, options(nomem, nostack));
-        if ptr == 0 {
-            return EFAULT;
-        }
-        (*(ptr as *const crate::scheduler::core::task::ThreadControlBlock))
-            .pid
-            .0
-    };
-
-    // Find current process PCB in global registry.
-    let pcb_ref = match crate::process::core::registry::PROCESS_REGISTRY
-        .find_by_pid(crate::process::core::pid::Pid(current_pid_val))
-    {
-        Some(p) => p,
-        None => return -3i64, // ESRCH
-    };
-
-    // The musl x86_64 wrapper keeps `func` in r9 during SYS_clone. Tolerate
-    // legacy Exo-OS path only when `tls` is not a TLS base.
-    let start_func = if entry != 0 {
-        entry
-    } else if flags & CLONE_SETTLS == 0 && tls != 0 {
-        tls
-    } else {
-        ctid
-    };
-    if start_func == 0 {
-        return EINVAL;
-    }
-
-    let arg = if entry != 0 && stack != 0 {
-        match read_user_typed::<u64>(stack) {
-            Ok(value) => value,
-            Err(e) => return e.to_errno(),
-        }
-    } else {
-        0
-    };
-
-    // Stack: caller provides RSP or we preserve legacy fallback.
-    let stack_addr = stack;
-    let stack_size = if stack != 0 { 0 } else { 8 * 1024 * 1024 };
-    let detached = (flags & CLONE_DETACHED) != 0;
-
-    let attr = crate::process::thread::creation::ThreadAttr {
-        stack_size,
-        stack_addr,
-        policy: crate::scheduler::core::task::SchedPolicy::Normal,
-        priority: crate::scheduler::core::task::Priority::NORMAL_DEFAULT,
-        detached,
-        cpu_affinity: -1,
-        sigaltstack_size: 8192,
-    };
-    let params = crate::process::thread::creation::ThreadCreateParams {
-        pcb: pcb_ref as *const crate::process::core::pcb::ProcessControlBlock,
-        attr,
-        start_func,
-        arg,
-        initial_rsp: stack,
-        tls_base: if flags & CLONE_SETTLS != 0 { tls } else { 0 },
-        target_cpu: unsafe {
-            let p = crate::scheduler::core::switch::current_thread_raw();
-            if p.is_null() {
-                0
-            } else {
-                (*p).current_cpu().0
-            }
-        },
-        pthread_out: if flags & CLONE_PARENT_SETTID != 0 {
-            ptid
-        } else {
-            0
-        },
-        child_tid_ptr: if flags & CLONE_CHILD_SETTID != 0 {
-            ctid
-        } else {
-            0
-        },
-        clear_child_tid: if flags & CLONE_CHILD_CLEARTID != 0 {
-            ctid
-        } else {
-            0
-        },
-    };
-    match crate::process::thread::creation::create_thread(&params) {
-        Ok(handle) => handle.tid.0 as i64,
-        Err(crate::process::thread::creation::ThreadCreateError::OutOfMemory) => ENOMEM,
-        Err(crate::process::thread::creation::ThreadCreateError::TidExhausted)
-        | Err(crate::process::thread::creation::ThreadCreateError::TooManyThreads) => EAGAIN,
-        Err(_) => EINVAL,
-    }
+    ENOSYS
 }
 
 /// `execve(path, argv, envp)` — intercepted by dispatch.rs [5c] via `handle_execve_inplace()`.
@@ -279,6 +147,10 @@ pub fn sys_exit_group(status: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: 
         };
 
         pcb.set_exiting();
+        pcb.flags.fetch_or(
+            crate::process::core::pcb::process_flags::GROUP_EXITING,
+            core::sync::atomic::Ordering::Release,
+        );
         pcb.exit_code
             .store(exit_code, core::sync::atomic::Ordering::Release);
 
@@ -316,7 +188,7 @@ pub fn sys_exit_group(status: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: 
             crate::process::core::pcb::process_flags::VFORK_DONE,
             core::sync::atomic::Ordering::Release,
         );
-        {
+        if alloc::sync::Arc::strong_count(&pcb.files) == 1 {
             let mut files = pcb.files.lock();
             files.close_all_noalloc();
         }

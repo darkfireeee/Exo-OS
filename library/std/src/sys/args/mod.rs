@@ -15,6 +15,10 @@
 mod common;
 
 cfg_select! {
+    target_os = "exo" => {
+        mod exo;
+        pub use exo::*;
+    }
     any(
         all(target_family = "unix", not(any(target_os = "espidf", target_os = "vita"))),
         target_os = "hermit",
@@ -33,10 +37,6 @@ cfg_select! {
     target_os = "motor" => {
         mod motor;
         pub use motor::*;
-    }
-    target_os = "exo" => {
-        mod exo;
-        pub use exo::*;
     }
     target_os = "uefi" => {
         mod uefi;

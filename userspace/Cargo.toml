@@ -32,3 +32,6 @@ opt-level = 0
 debug     = true
 panic     = "abort"
 codegen-units = 1
+
+[patch.crates-io]
+libc = { path = "../libs/vendors/libc" }

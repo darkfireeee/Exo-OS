@@ -95,7 +95,7 @@ pub(crate) fn persist_cached_blob_if_disk(blob_id: BlobId) -> ExofsResult<()> {
     let Some(data) = BLOB_CACHE.get(&blob_id) else {
         return Ok(());
     };
-    if object_store::persist_blob_data_if_disk(blob_id, data.as_ref(), true)? {
+    if object_store::persist_blob_data_if_disk(blob_id, data.as_ref(), false)? {
         let _ = BLOB_CACHE.mark_clean(&blob_id);
     }
     Ok(())

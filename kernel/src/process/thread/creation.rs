@@ -17,9 +17,10 @@
 
 #[cfg(target_arch = "x86_64")]
 use crate::arch::x86_64::gdt::{GDT_USER_CS64, GDT_USER_DS};
-use crate::process::core::pcb::ProcessControlBlock;
+use crate::process::core::pcb::{process_flags, ProcessControlBlock};
 use crate::process::core::pid::{Tid, TID_ALLOCATOR};
 use crate::process::core::tcb::{ProcessThread, ThreadAddress};
+use crate::process::lifecycle::fork::{init_fork_child_kstack_frame, ForkChildRegs};
 use crate::scheduler::core::preempt::{PreemptGuard, MAX_CPUS};
 use crate::scheduler::core::runqueue::run_queue;
 use crate::scheduler::core::task::{CpuId, Priority, SchedPolicy};
@@ -71,7 +72,7 @@ impl Default for ThreadAttr {
             priority: Priority::NORMAL_DEFAULT,
             detached: false,
             cpu_affinity: -1,
-            sigaltstack_size: 8192,
+            sigaltstack_size: 0,
         }
     }
 }
@@ -109,6 +110,148 @@ pub struct ThreadHandle {
 // SAFETY: transferred from a single producer thread.
 unsafe impl Send for ThreadHandle {}
 
+/// Parameters for Linux-ABI `clone()` thread creation (`CLONE_THREAD`),
+/// resuming in child at `child_rip` on `child_rsp` with `rax = 0`.
+pub struct CloneThreadParams<'a> {
+    pub pcb: &'a ProcessControlBlock,
+    pub parent: &'a ProcessThread,
+    pub child_rip: u64,
+    pub child_rsp: u64,
+    pub parent_rflags: u64,
+    pub regs: ForkChildRegs,
+    pub tls_base: u64,
+    pub detached: bool,
+    pub target_cpu: u32,
+    pub ptid_ptr: u64,
+    pub ctid_ptr: u64,
+    pub clear_child_tid: u64,
+}
+
+#[inline]
+fn validate_and_publish_thread(
+    pcb: &ProcessControlBlock,
+    thread_ptr: *mut ProcessThread,
+    tid: Tid,
+    target_cpu: u32,
+    ptid_ptr: u64,
+    ctid_ptr: u64,
+) -> Result<(), ThreadCreateError> {
+    if ptid_ptr != 0 {
+        let _ = crate::syscall::validation::write_user_typed::<u32>(ptid_ptr, tid.0);
+    }
+    if ctid_ptr != 0 {
+        let _ = crate::syscall::validation::write_user_typed::<u32>(ctid_ptr, tid.0);
+    }
+
+    if !pcb.register_thread_ptr(thread_ptr) {
+        unsafe {
+            drop(Box::from_raw(thread_ptr));
+        }
+        TID_ALLOCATOR.free(tid.0);
+        return Err(ThreadCreateError::TooManyThreads);
+    }
+
+    pcb.inc_threads();
+
+    {
+        let _preempt = PreemptGuard::new();
+        if target_cpu as usize >= MAX_CPUS {
+            pcb.dec_threads();
+            pcb.unregister_thread_ptr(thread_ptr);
+            unsafe {
+                drop(Box::from_raw(thread_ptr));
+            }
+            TID_ALLOCATOR.free(tid.0);
+            return Err(ThreadCreateError::InvalidCpu);
+        }
+        unsafe {
+            let tcb_ptr = NonNull::new_unchecked((*thread_ptr).tcb_ptr());
+            run_queue(CpuId(target_cpu)).enqueue(tcb_ptr);
+        }
+    }
+
+    Ok(())
+}
+
+/// Creates a new POSIX thread from standard Linux 5-argument `clone()` syscall frame.
+pub fn create_cloned_thread(params: &CloneThreadParams<'_>) -> Result<ThreadHandle, ThreadCreateError> {
+    let pcb = params.pcb;
+    if pcb.is_exiting() || (pcb.flags.load(Ordering::Acquire) & process_flags::EXECING) != 0 {
+        return Err(ThreadCreateError::ProcessExiting);
+    }
+    if params.child_rsp == 0 {
+        return Err(ThreadCreateError::StackSetupFailed);
+    }
+
+    let tid_raw = TID_ALLOCATOR
+        .alloc()
+        .map_err(|_| ThreadCreateError::TidExhausted)?;
+    let tid = Tid(tid_raw);
+    let cr3 = pcb.cr3.load(Ordering::Relaxed);
+    let mut thread = ProcessThread::new(
+        tid,
+        pcb.pid,
+        cr3,
+        params.parent.sched_tcb.policy,
+        params.parent.sched_tcb.priority,
+    )
+    .ok_or_else(|| {
+        TID_ALLOCATOR.free(tid_raw);
+        ThreadCreateError::OutOfMemory
+    })?;
+
+    unsafe {
+        init_fork_child_kstack_frame(
+            &mut thread,
+            &params.parent.sched_tcb,
+            params.child_rip,
+            params.child_rsp,
+            params.parent_rflags,
+            &params.regs,
+        );
+        thread
+            .tcb_mut()
+            .set_kpti_user_cr3(params.parent.sched_tcb.kpti_user_cr3());
+        thread.addresses = ThreadAddress {
+            stack_base: params.child_rsp.saturating_sub(8 * 1024 * 1024),
+            stack_size: 8 * 1024 * 1024,
+            entry_point: params.child_rip,
+            initial_rsp: params.child_rsp,
+            tls_base: params.tls_base,
+            entry_arg0: 0,
+            pthread_ptr: params.ptid_ptr,
+            sigaltstack_base: 0,
+            sigaltstack_size: 0,
+        };
+        thread.sched_tcb.fs_base = params.tls_base;
+        thread.sched_tcb.user_gs_base = params.parent.sched_tcb.user_gs_base;
+        thread.tls_gs_base.store(params.tls_base, Ordering::Release);
+        if params.detached {
+            thread.detached.store(true, Ordering::Relaxed);
+        }
+        if params.clear_child_tid != 0 {
+            thread
+                .clear_child_tid
+                .store(params.clear_child_tid, Ordering::Release);
+        }
+    }
+
+    let thread_ptr = Box::into_raw(thread);
+    validate_and_publish_thread(
+        pcb,
+        thread_ptr,
+        tid,
+        params.target_cpu,
+        params.ptid_ptr,
+        params.ctid_ptr,
+    )?;
+
+    Ok(ThreadHandle {
+        tid,
+        thread: thread_ptr,
+    })
+}
+
 /// Creates a new POSIX thread in the given process.
 ///
 /// # Safety
@@ -117,8 +260,8 @@ pub fn create_thread(params: &ThreadCreateParams) -> Result<ThreadHandle, Thread
     // SAFETY: pcb is guaranteed valid by the caller.
     let pcb = unsafe { &*params.pcb };
 
-    // Reject if process is exiting.
-    if pcb.is_exiting() {
+    // Reject if process is exiting or execing.
+    if pcb.is_exiting() || (pcb.flags.load(Ordering::Acquire) & process_flags::EXECING) != 0 {
         return Err(ThreadCreateError::ProcessExiting);
     }
 
@@ -130,6 +273,14 @@ pub fn create_thread(params: &ThreadCreateParams) -> Result<ThreadHandle, Thread
 
     // 2. Create ProcessThread.
     let cr3 = pcb.cr3.load(Ordering::Relaxed);
+    let leader_kpti = {
+        let alive = pcb.find_alive_thread();
+        if alive.is_null() {
+            0
+        } else {
+            unsafe { (*alive).sched_tcb.kpti_user_cr3() }
+        }
+    };
     let thread = ProcessThread::new(tid, pcb.pid, cr3, params.attr.policy, params.attr.priority)
         .ok_or_else(|| {
             TID_ALLOCATOR.free(tid_raw);
@@ -169,6 +320,7 @@ pub fn create_thread(params: &ThreadCreateParams) -> Result<ThreadHandle, Thread
         *frame.add(10) = initial_rsp; // RSP userspace
         *frame.add(11) = GDT_USER_DS as u64; // SS
         (*thread_ptr).sched_tcb.kstack_ptr = kernel_rsp;
+        (*thread_ptr).tcb_mut().set_kpti_user_cr3(leader_kpti);
 
         // Userspace addresses.
         (*thread_ptr).addresses = ThreadAddress {
@@ -209,44 +361,14 @@ pub fn create_thread(params: &ThreadCreateParams) -> Result<ThreadHandle, Thread
         }
     }
 
-    if params.pthread_out != 0 {
-        let _ = crate::syscall::validation::write_user_typed::<u32>(params.pthread_out, tid_raw);
-    }
-    if params.child_tid_ptr != 0 {
-        let _ = crate::syscall::validation::write_user_typed::<u32>(params.child_tid_ptr, tid_raw);
-    }
-
-    if !pcb.register_thread_ptr(thread_ptr) {
-        // SAFETY: thread_ptr was just allocated and is not published.
-        unsafe {
-            drop(Box::from_raw(thread_ptr));
-        }
-        TID_ALLOCATOR.free(tid_raw);
-        return Err(ThreadCreateError::TooManyThreads);
-    }
-
-    // 4. Increment PCB thread counter.
-    pcb.inc_threads();
-
-    // 5. Enqueue into run queue.
-    {
-        let _preempt = PreemptGuard::new();
-        if params.target_cpu as usize >= MAX_CPUS {
-            pcb.dec_threads();
-            pcb.unregister_thread_ptr(thread_ptr);
-            // SAFETY: thread_ptr is valid.
-            unsafe {
-                drop(Box::from_raw(thread_ptr));
-            }
-            TID_ALLOCATOR.free(tid_raw);
-            return Err(ThreadCreateError::InvalidCpu);
-        }
-        // SAFETY: cpu verified, thread_ptr is valid.
-        unsafe {
-            let tcb_ptr = NonNull::new_unchecked((*thread_ptr).tcb_ptr());
-            run_queue(CpuId(params.target_cpu)).enqueue(tcb_ptr);
-        }
-    }
+    validate_and_publish_thread(
+        pcb,
+        thread_ptr,
+        tid,
+        params.target_cpu,
+        params.pthread_out,
+        params.child_tid_ptr,
+    )?;
 
     Ok(ThreadHandle {
         tid,

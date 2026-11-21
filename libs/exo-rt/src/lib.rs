@@ -38,42 +38,79 @@ pub const SIG_SETMASK: i32 = 2;
 // 1. GenericTcb (adaptation de generic-rt pour x86_64 Exo-OS)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Thread Control Block générique situé à `%fs:0` (x86_64 TLS variant II).
+/// Thread Control Block générique situé à `%fs:0` (x86_64 TLS variant II),
+/// aligné champ-à-champ sur `struct pthread` (`musl-exo`) et `std::sys::pal::exo_os`.
 #[repr(C)]
 pub struct GenericTcb<Os> {
-    /// `[%fs:0]` : Pointeur vers la fin de la région TLS statique (variables TLS à offset négatif).
-    pub tls_end: *mut u8,
-    /// `[%fs:8]` : Taille totale de la région mémoire allouée pour TLS + TCB.
-    pub tls_len: usize,
-    /// `[%fs:16]` : Self-pointer vers ce `GenericTcb`.
+    /// `[%fs:0x00]` : Self-pointer vers ce `GenericTcb` (`mov %fs:0`).
     pub tcb_ptr: *mut Self,
-    /// `[%fs:24]` : Taille du TCB.
+    /// `[%fs:0x08]` : Dynamic Thread Vector (`dtv[0]` = module count).
+    pub dtv: *mut usize,
+    /// `[%fs:0x10]` : Liste chaînée `musl` (prev).
+    pub prev: *mut u8,
+    /// `[%fs:0x18]` : Liste chaînée `musl` (next).
+    pub next: *mut u8,
+    /// `[%fs:0x20]` : Sysinfo `musl` (0 sur Exo-OS).
+    pub sysinfo: usize,
+    /// `[%fs:0x28]` : Canari pile (`-fstack-protector`).
+    pub canary: usize,
+    /// `[%fs:0x30]` : Identifiant de thread OS (TID).
+    pub tid: i32,
+    /// `[%fs:0x34]` : `errno` par thread (`__errno_location()`).
+    pub errno: i32,
+    /// `[%fs:0x38]` : Pointeur vers la fin de la région TLS statique.
+    pub tls_end: *mut u8,
+    /// `[%fs:0x40]` : Taille totale de la région mémoire allouée pour TLS + TCB.
+    pub tls_len: usize,
+    /// `[%fs:0x48]` : Taille du TCB.
     pub tcb_len: usize,
-    /// `[%fs:32]` : Données spécifiques à l'OS (adresse virtuelle `SignalTcb` sur Exo-OS).
+    /// `[%fs:0x50]` : Données spécifiques à l'OS (`SignalTcb*`).
     pub os_specific: Os,
 }
+
+const _: () = {
+    assert!(core::mem::offset_of!(GenericTcb<usize>, tcb_ptr) == 0);
+    assert!(core::mem::offset_of!(GenericTcb<usize>, dtv) == 8);
+    assert!(core::mem::offset_of!(GenericTcb<usize>, canary) == 40);
+    assert!(core::mem::offset_of!(GenericTcb<usize>, tid) == 48);
+    assert!(core::mem::offset_of!(GenericTcb<usize>, errno) == 52);
+    assert!(core::mem::offset_of!(GenericTcb<usize>, tls_end) == 56);
+    assert!(core::mem::offset_of!(GenericTcb<usize>, os_specific) == 80);
+    assert!(core::mem::size_of::<GenericTcb<usize>>() == 88);
+};
 
 pub type ExoTcb = GenericTcb<*mut SignalTcb>;
 
 impl ExoTcb {
-    /// Lit le pointeur `ExoTcb` courant depuis `%fs:16` en 1 instruction.
+    /// Lit le pointeur `ExoTcb` courant depuis `%fs:0` en 1 instruction.
     #[inline(always)]
     pub unsafe fn current_ptr() -> *mut Self {
-        #[cfg(target_arch = "x86_64")]
+        #[cfg(all(target_arch = "x86_64", any(target_os = "exo", target_os = "none")))]
         {
             let ptr: *mut Self;
             unsafe {
                 core::arch::asm!(
-                    "mov {}, fs:[16]",
+                    "mov {}, fs:[0]",
                     out(reg) ptr,
                     options(nostack, preserves_flags, readonly)
                 );
             }
             ptr
         }
-        #[cfg(not(target_arch = "x86_64"))]
+        #[cfg(not(all(target_arch = "x86_64", any(target_os = "exo", target_os = "none"))))]
         {
             core::ptr::null_mut()
+        }
+    }
+
+    /// Retourne le pointeur vers `errno` par thread (`%fs:0x34`).
+    #[inline(always)]
+    pub unsafe fn errno_ptr() -> *mut i32 {
+        let ptr = unsafe { Self::current_ptr() };
+        if ptr.is_null() {
+            core::ptr::null_mut()
+        } else {
+            unsafe { &raw mut (*ptr).errno }
         }
     }
 }
@@ -193,23 +230,26 @@ unsafe fn atomic_read_slot(src: *const SigActionSlot) -> SigActionSlot {
 #[cfg(target_arch = "x86_64")]
 #[inline]
 unsafe fn write_u128_cmpxchg16b(ptr: *mut u64, new_lo: u64, new_hi: u64) {
-    // Rbx est réservé par LLVM : on le sauvegarde/restaure manuellement autour de cmpxchg16b.
+    // Rbx est réservé par LLVM : on épingle tous les opérandes sur des registres fixes sans rbx.
     unsafe {
         let mut prev_lo = ptr.read_volatile();
         let mut prev_hi = ptr.add(1).read_volatile();
         loop {
-            let ok: u8;
+            let ok: u64;
             core::arch::asm!(
-                "xchg rbx, {rbx_in}",
-                "lock cmpxchg16b [{ptr}]",
-                "sete {ok}",
-                "xchg rbx, {rbx_in}",
-                ptr = in(reg) ptr,
-                rbx_in = inout(reg) new_lo => _,
+                "mov r8, rbx",
+                "mov rbx, rsi",
+                "lock cmpxchg16b [rdi]",
+                "sete r9b",
+                "mov rbx, r8",
+                "movzx r9d, r9b",
+                in("rdi") ptr,
+                in("rsi") new_lo,
                 in("rcx") new_hi,
                 inout("rax") prev_lo,
                 inout("rdx") prev_hi,
-                ok = out(reg_byte) ok,
+                out("r8") _,
+                lateout("r9") ok,
                 options(nostack)
             );
             if ok != 0 {
@@ -224,18 +264,18 @@ unsafe fn write_u128_cmpxchg16b(ptr: *mut u64, new_lo: u64, new_hi: u64) {
 unsafe fn read_u128_cmpxchg16b(ptr: *mut u64) -> (u64, u64) {
     let mut lo = 0u64;
     let mut hi = 0u64;
-    let zero = 0u64;
     unsafe {
         core::arch::asm!(
-            "xchg rbx, {zero}",
-            "xor rcx, rcx",
-            "lock cmpxchg16b [{ptr}]",
-            "xchg rbx, {zero}",
-            ptr = in(reg) ptr,
-            zero = inout(reg) zero => _,
+            "mov r8, rbx",
+            "xor ebx, ebx",
+            "xor ecx, ecx",
+            "lock cmpxchg16b [rdi]",
+            "mov rbx, r8",
+            in("rdi") ptr,
             inout("rax") lo,
             inout("rdx") hi,
             out("rcx") _,
+            out("r8") _,
             options(nostack)
         );
     }

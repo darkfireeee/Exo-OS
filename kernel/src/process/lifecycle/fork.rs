@@ -287,6 +287,92 @@ fn fork_debug_cloned(label: &[u8], cloned_as: &ClonedAddressSpace) {
 // do_fork — main implementation
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Registers preserved across `fork_child_trampoline` on the child kernel stack.
+#[derive(Copy, Clone, Default)]
+pub struct ForkChildRegs {
+    pub rbx: u64,
+    pub rbp: u64,
+    pub r12: u64,
+    pub r13: u64,
+    pub r14: u64,
+    pub r15: u64,
+    pub rdi: u64,
+    pub rsi: u64,
+    pub rdx: u64,
+    pub r10: u64,
+    pub r8: u64,
+    pub r9: u64,
+}
+
+/// Initializes a 144-byte `fork_child_trampoline` frame on `child_thread`'s kernel stack
+/// so the newly scheduled thread returns `rax = 0` at `child_rip` on `child_rsp`.
+///
+/// # Safety
+/// `child_thread` must be freshly created and not yet queued on any runqueue.
+pub(crate) unsafe fn init_fork_child_kstack_frame(
+    child_thread: &mut ProcessThread,
+    parent_sched: &ThreadControlBlock,
+    child_rip: u64,
+    child_rsp: u64,
+    parent_rflags: u64,
+    regs: &ForkChildRegs,
+) {
+    let kstack_top = child_thread.kernel_stack.top_addr();
+    let child_tcb = child_thread.tcb_mut();
+    let parent_vruntime = parent_sched.vruntime.load(Ordering::Acquire);
+    child_tcb
+        .vruntime
+        .store(parent_vruntime.saturating_add(6_000_000), Ordering::Release);
+
+    #[cfg(target_arch = "x86_64")]
+    extern "C" {
+        fn fork_child_trampoline();
+    }
+
+    let frame_ptr = (kstack_top - 144) as *mut u64;
+    *frame_ptr.add(0) = regs.rbx;
+    *frame_ptr.add(1) = regs.rbp;
+    *frame_ptr.add(2) = regs.r12;
+    *frame_ptr.add(3) = regs.r13;
+    *frame_ptr.add(4) = regs.r14;
+    *frame_ptr.add(5) = regs.r15;
+    #[cfg(target_arch = "x86_64")]
+    {
+        *frame_ptr.add(6) = fork_child_trampoline as *const () as u64;
+        *frame_ptr.add(14) = GDT_USER_CS64 as u64;
+        *frame_ptr.add(17) = GDT_USER_DS as u64;
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        *frame_ptr.add(6) = 0;
+        *frame_ptr.add(14) = 0;
+        *frame_ptr.add(17) = 0;
+    }
+    *frame_ptr.add(7) = regs.rdi;
+    *frame_ptr.add(8) = regs.rsi;
+    *frame_ptr.add(9) = regs.rdx;
+    *frame_ptr.add(10) = regs.r10;
+    *frame_ptr.add(11) = regs.r8;
+    *frame_ptr.add(12) = regs.r9;
+    *frame_ptr.add(13) = child_rip;
+
+    // Preserve safe arithmetic/direction flags, force IF=1, strip TF/IOPL/NT/RF/VM.
+    const RFLAGS_SAFE_MASK: u64 = 0x0000_0000_0024_0CD5;
+    const RFLAGS_FORCE_SET: u64 = 0x0000_0000_0000_0200;
+    const RFLAGS_FORCE_CLR: u64 = 0x0000_0000_0003_7100;
+    let child_rflags =
+        (((parent_rflags & RFLAGS_SAFE_MASK) | RFLAGS_FORCE_SET) & !RFLAGS_FORCE_CLR) | 0x0002;
+
+    *frame_ptr.add(15) = child_rflags;
+    *frame_ptr.add(16) = child_rsp;
+    child_tcb.kstack_ptr = kstack_top - 144;
+    crate::scheduler::fpu::clone_fpu_state(parent_sched, child_tcb);
+    child_tcb.signal_mask.store(
+        parent_sched.signal_mask.load(Ordering::Acquire),
+        Ordering::Release,
+    );
+}
+
 /// Input parameters for do_fork().
 pub struct ForkContext<'a> {
     /// Parent process ProcessThread.
@@ -321,6 +407,14 @@ pub struct ForkContext<'a> {
     pub user_r10: u64,
     pub user_r8: u64,
     pub user_r9: u64,
+    /// Optional child FS/TLS override (`CLONE_SETTLS`).
+    pub tls_override: Option<u64>,
+    /// Parent TID output pointer (`CLONE_PARENT_SETTID`).
+    pub ptid_ptr: u64,
+    /// Child TID output pointer (`CLONE_CHILD_SETTID`).
+    pub ctid_ptr: u64,
+    /// Child futex clear-on-exit pointer (`CLONE_CHILD_CLEARTID`).
+    pub clear_child_tid: u64,
 }
 
 /// fork() result for the parent.
@@ -420,95 +514,74 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
     let child_thread_ptr = Box::into_raw(child_thread);
     fork_trace(b"fork: thread\n");
 
-    // Configure child return point (RIP + RSP on fork return).
+    // Configure child return point (RIP + RSP on fork return) and shared KPTI shadow if CLONE_VM.
     // SAFETY: child_thread_ptr valid.
     unsafe {
-        let child_tcb = (*child_thread_ptr).tcb_mut();
-        let parent_vruntime = parent.sched_tcb.vruntime.load(Ordering::Acquire);
-        child_tcb
-            .vruntime
-            .store(parent_vruntime.saturating_add(6_000_000), Ordering::Release);
-        // Child returns 0 via syscall convention (rax=0 in frame).
-        // switch_to_new_thread restores stack then ret to fork_child_trampoline.
-        // fork_child_trampoline: xor eax,eax ; swapgs ; iretq → userspace.
-        // SAFETY: fork_child_trampoline is defined in switch_asm.s, statically linked.
-        extern "C" {
-            fn fork_child_trampoline();
-        }
-
-        let kstack_top = (*child_thread_ptr).kernel_stack.top_addr();
-        // Full frame: 18 × u64 = 144 bytes.
-        // Layout (indices from kernel_rsp = kstack_top - 144):
-        //   [0..48)    = 6 parent callee-saved regs  ← switch_to_new_thread format
-        //   [48]       = fork_child_trampoline        ← ret address after 6 pops
-        //   [56..104)  = 6 caller-saved regs restored by trampoline
-        //   [104..144) = iretq frame (RIP, CS, RFLAGS, RSP, SS)
-        let frame_ptr = (kstack_top - 144) as *mut u64;
-        // Callee-saved registers. switch_to_new_thread pops them before ret.
-        *frame_ptr.add(0) = ctx.user_rbx; // rbx
-        *frame_ptr.add(1) = ctx.user_rbp; // rbp
-        *frame_ptr.add(2) = ctx.user_r12; // r12
-        *frame_ptr.add(3) = ctx.user_r13; // r13
-        *frame_ptr.add(4) = ctx.user_r14; // r14
-        *frame_ptr.add(5) = ctx.user_r15; // r15
-                                          // Return address: fork_child_trampoline (executed after the 6 pops).
-        *frame_ptr.add(6) = fork_child_trampoline as *const () as u64;
-        // Caller-saved registers that userspace syscall wrapper expects preserved.
-        *frame_ptr.add(7) = ctx.user_rdi;
-        *frame_ptr.add(8) = ctx.user_rsi;
-        *frame_ptr.add(9) = ctx.user_rdx;
-        *frame_ptr.add(10) = ctx.user_r10;
-        *frame_ptr.add(11) = ctx.user_r8;
-        *frame_ptr.add(12) = ctx.user_r9;
-        // iretq frame (RSP points here on entry to fork_child_trampoline).
-        *frame_ptr.add(13) = ctx.child_rip; // Userspace RIP
-        *frame_ptr.add(14) = GDT_USER_CS64 as u64; // CS ring3 (code64)
-
-        // FIX P2-02: propagate parent RFLAGS with secure masking.
-        // Mask of safe flags to inherit (POSIX + kernel security).
-        // - Preserve: CF(0), PF(2), AF(4), ZF(6), SF(7), OF(11), DF(10), AC(18), ID(21)
-        // - Force   : IF=1 (bit 9) — child must accept interrupts
-        // - Clear   : TF=0 (bit 8) — do not trace child if parent was traced
-        //             NT=0 (bit 14) — Nested Task flag — never inherited
-        //             IOPL=0 (bits 12-13) — never inherited in Ring3/capability model
-        //             RF=0 (bit 16) — Resume Flag — never inherited
-        //             VM=0 (bit 17) — Virtual 8086 — unsupported
-        const RFLAGS_SAFE_MASK: u64 = 0x0000_0000_0024_0CD5; // CF,PF,AF,ZF,SF,DF,OF,AC,ID
-        const RFLAGS_FORCE_SET: u64 = 0x0000_0000_0000_0200; // IF=1
-        const RFLAGS_FORCE_CLR: u64 = 0x0000_0000_0003_7100; // TF=0, IOPL=0, NT=0, RF=0, VM=0
-
-        let child_rflags =
-            ((ctx.parent_rflags & RFLAGS_SAFE_MASK) | RFLAGS_FORCE_SET) & !RFLAGS_FORCE_CLR;
-        // Ensure reserved bit 1 is always 1.
-        let child_rflags = child_rflags | 0x0002;
-
-        *frame_ptr.add(15) = child_rflags; // RFLAGS (inherited from parent with masking)
-        *frame_ptr.add(16) = ctx.child_rsp; // Userspace RSP
-        *frame_ptr.add(17) = GDT_USER_DS as u64; // SS ring3
-        child_tcb.kstack_ptr = kstack_top - 144;
-        crate::scheduler::fpu::clone_fpu_state(&parent.sched_tcb, child_tcb);
-        child_tcb.signal_mask.store(
-            parent.sched_tcb.signal_mask.load(Ordering::Acquire),
-            Ordering::Release,
+        let regs = ForkChildRegs {
+            rbx: ctx.user_rbx,
+            rbp: ctx.user_rbp,
+            r12: ctx.user_r12,
+            r13: ctx.user_r13,
+            r14: ctx.user_r14,
+            r15: ctx.user_r15,
+            rdi: ctx.user_rdi,
+            rsi: ctx.user_rsi,
+            rdx: ctx.user_rdx,
+            r10: ctx.user_r10,
+            r8: ctx.user_r8,
+            r9: ctx.user_r9,
+        };
+        init_fork_child_kstack_frame(
+            &mut *child_thread_ptr,
+            &parent.sched_tcb,
+            ctx.child_rip,
+            ctx.child_rsp,
+            ctx.parent_rflags,
+            &regs,
         );
+        if shares_address_space {
+            (*child_thread_ptr)
+                .tcb_mut()
+                .set_kpti_user_cr3(parent.sched_tcb.kpti_user_cr3());
+        }
     }
     #[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
     fork_debug_parent(b"fork_dbg: after_child_frame", parent, parent_pcb);
 
-    // Copy user addresses.
+    // Copy user addresses and apply optional CLONE_SETTLS / CLONE_CHILD_CLEARTID.
     // SAFETY: child_thread_ptr valid.
     unsafe {
         (*child_thread_ptr).addresses = parent.addresses;
         let child = &mut *child_thread_ptr;
-        child.sched_tcb.fs_base = parent.sched_tcb.fs_base;
+        if ctx.child_rsp != 0 {
+            child.addresses.initial_rsp = ctx.child_rsp;
+        }
+        let tls_base = ctx
+            .tls_override
+            .unwrap_or_else(|| parent.tls_gs_base.load(Ordering::Relaxed));
+        child.sched_tcb.fs_base = if ctx.tls_override.is_some() {
+            tls_base
+        } else {
+            parent.sched_tcb.fs_base
+        };
         child.sched_tcb.user_gs_base = parent.sched_tcb.user_gs_base;
-        let tls_base = parent.tls_gs_base.load(Ordering::Relaxed);
         child.addresses.tls_base = tls_base;
         child.tls_gs_base.store(tls_base, Ordering::Release);
         child
             .tls_block
             .store(parent.tls_block.load(Ordering::Acquire), Ordering::Release);
         child.tls_size = parent.tls_size;
+        if ctx.clear_child_tid != 0 {
+            child
+                .clear_child_tid
+                .store(ctx.clear_child_tid, Ordering::Release);
+        }
+    }
+    if ctx.ptid_ptr != 0 {
+        let _ = crate::syscall::validation::write_user_typed::<u32>(ctx.ptid_ptr, child_pid_raw);
+    }
+    if ctx.ctid_ptr != 0 && shares_address_space {
+        let _ = crate::syscall::validation::write_user_typed::<u32>(ctx.ctid_ptr, child_tid_raw);
     }
     fork_trace(b"fork: addresses\n");
     #[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
@@ -571,9 +644,11 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
     #[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
     fork_debug_parent(b"fork_dbg: after_child_pcb", parent, parent_pcb);
 
-    // Copy fds if !CLONE_FILES.
+    // Copy or share fds (`CLONE_FILES`).
     if let Some(cloned_files) = cloned_files {
         *child_pcb.files.lock() = cloned_files;
+    } else if ctx.flags.has(ForkFlags::CLONE_FILES) {
+        child_pcb.files = alloc::sync::Arc::clone(&parent_pcb.files);
     }
     child_pcb.set_name_bytes(&parent_pcb.name_snapshot());
     child_pcb.set_main_thread_ptr(child_thread_ptr);

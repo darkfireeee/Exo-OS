@@ -12,11 +12,24 @@ use terminal::*;
 use builtins::*;
 use exec::*;
 
+#[allow(unused_unsafe)]
+fn seed_default_wayland_env() {
+    unsafe {
+        if std::env::var_os("XDG_RUNTIME_DIR").is_none() {
+            std::env::set_var("XDG_RUNTIME_DIR", "/run");
+        }
+        if std::env::var_os("WAYLAND_DISPLAY").is_none() {
+            std::env::set_var("WAYLAND_DISPLAY", "wayland-0");
+        }
+    }
+}
+
 fn main() {
     attach_stdio_to_tty();
     register_readiness_endpoint();
     ensure_input_ready();
     ignore_sigint();
+    seed_default_wayland_env();
     crate::terminal::register_exosh_wayland_surface();
 
     let mut state = ShellState::new();

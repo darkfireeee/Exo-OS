@@ -22,7 +22,7 @@ cfg_select! {
         mod solid;
         pub use solid::*;
     }
-    any(target_family = "unix", target_os = "wasi") => {
+    all(any(target_family = "unix", target_os = "wasi"), not(target_os = "exo")) => {
         mod unix;
         pub use unix::*;
     }

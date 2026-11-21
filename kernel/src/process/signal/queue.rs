@@ -8,8 +8,8 @@
 // queued. A fixed array per signal is used (max SIGQUEUE_DEPTH = 32
 // entries) + atomic counter, without dynamic allocation.
 
-use core::cell::UnsafeCell;
-use core::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU64, Ordering};
+use crate::scheduler::sync::spinlock::SpinLock;
 
 /// Maximum queue depth per RT signal.
 pub const SIGQUEUE_DEPTH: usize = 32;
@@ -165,50 +165,17 @@ struct RTEntry {
     valid: bool,
 }
 
-/// Circular ring buffer per RT signal — SIGQUEUE_DEPTH entries.
-struct RTRing {
-    /// Raw data.
-    entries: UnsafeCell<[RTEntry; SIGQUEUE_DEPTH]>,
-    /// Read index.
-    head: UnsafeCell<usize>,
-    /// Write index.
-    tail: AtomicUsize,
-    /// Number of queued elements.
-    count: AtomicU32,
+struct RTRingInner {
+    entries: [RTEntry; SIGQUEUE_DEPTH],
+    head: usize,
+    tail: usize,
+    count: u32,
 }
 
-// SAFETY: Exo-OS operates in a uniprocessor kernel with a single producer/consumer
-// per RT queue; exclusive access is guaranteed by the PCB lock or masked
-// interrupt context. UnsafeCell fields are protected by convention.
-unsafe impl Send for RTRing {}
-unsafe impl Sync for RTRing {}
-
-impl RTRing {
+impl RTRingInner {
     const fn new() -> Self {
         Self {
-            entries: UnsafeCell::new(
-                [RTEntry {
-                    info: SigInfo {
-                        signo: 0,
-                        code: 0,
-                        sender_pid: 0,
-                        sender_uid: 0,
-                        value_int: 0,
-                        value_ptr: 0,
-                        fault_addr: 0,
-                    },
-                    valid: false,
-                }; SIGQUEUE_DEPTH],
-            ),
-            head: UnsafeCell::new(0),
-            tail: AtomicUsize::new(0),
-            count: AtomicU32::new(0),
-        }
-    }
-
-    unsafe fn init_at(dst: *mut Self) {
-        core::ptr::addr_of_mut!((*dst).entries).write(UnsafeCell::new(
-            [RTEntry {
+            entries: [RTEntry {
                 info: SigInfo {
                     signo: 0,
                     code: 0,
@@ -220,63 +187,77 @@ impl RTRing {
                 },
                 valid: false,
             }; SIGQUEUE_DEPTH],
-        ));
-        core::ptr::addr_of_mut!((*dst).head).write(UnsafeCell::new(0));
-        core::ptr::addr_of_mut!((*dst).tail).write(AtomicUsize::new(0));
-        core::ptr::addr_of_mut!((*dst).count).write(AtomicU32::new(0));
+            head: 0,
+            tail: 0,
+            count: 0,
+        }
+    }
+}
+
+/// Circular ring buffer per RT signal — SIGQUEUE_DEPTH entries, synchronized by SpinLock.
+struct RTRing {
+    inner: SpinLock<RTRingInner>,
+}
+
+// SAFETY: Internal state is serialized by `SpinLock`.
+unsafe impl Send for RTRing {}
+unsafe impl Sync for RTRing {}
+
+impl RTRing {
+    const fn new() -> Self {
+        Self {
+            inner: SpinLock::new(RTRingInner::new()),
+        }
+    }
+
+    unsafe fn init_at(dst: *mut Self) {
+        core::ptr::addr_of_mut!((*dst).inner).write(SpinLock::new(RTRingInner::new()));
     }
 
     /// Enqueues a SigInfo.
     fn push(&self, info: SigInfo) -> bool {
-        if self.count.load(Ordering::Acquire) as usize >= SIGQUEUE_DEPTH {
+        let mut guard = self.inner.lock();
+        if guard.count as usize >= SIGQUEUE_DEPTH {
             SIGQUEUE_OVERFLOW.fetch_add(1, Ordering::Relaxed);
             return false;
         }
-        let tail = self.tail.load(Ordering::Acquire);
-        // SAFETY: exclusive access guaranteed by caller context (PCB lock).
-        unsafe {
-            (*self.entries.get())[tail % SIGQUEUE_DEPTH] = RTEntry { info, valid: true };
-        }
-        self.tail.store(tail + 1, Ordering::Release);
-        self.count.fetch_add(1, Ordering::AcqRel);
+        let idx = guard.tail % SIGQUEUE_DEPTH;
+        guard.entries[idx] = RTEntry { info, valid: true };
+        guard.tail = guard.tail.wrapping_add(1);
+        guard.count += 1;
         true
     }
 
     /// Dequeues the next valid element.
     fn pop(&self) -> Option<SigInfo> {
-        if self.count.load(Ordering::Acquire) == 0 {
+        let mut guard = self.inner.lock();
+        if guard.count == 0 {
             return None;
         }
-        // SAFETY: exclusive access guaranteed by caller context.
-        let info = unsafe {
-            let head_ptr = self.head.get();
-            let head = *head_ptr;
-            let entry = &mut (*self.entries.get())[head % SIGQUEUE_DEPTH];
-            if !entry.valid {
-                return None;
-            }
-            let info = entry.info;
-            entry.valid = false;
-            *head_ptr += 1;
-            info
-        };
-        self.count.fetch_sub(1, Ordering::AcqRel);
+        let idx = guard.head % SIGQUEUE_DEPTH;
+        let entry = &mut guard.entries[idx];
+        if !entry.valid {
+            return None;
+        }
+        let info = entry.info;
+        entry.valid = false;
+        guard.head = guard.head.wrapping_add(1);
+        guard.count -= 1;
         Some(info)
     }
 
     fn is_empty(&self) -> bool {
-        self.count.load(Ordering::Acquire) == 0
+        self.inner.lock().count == 0
     }
 
     fn clear(&self) {
-        unsafe {
-            for entry in (*self.entries.get()).iter_mut() {
-                entry.valid = false;
-            }
-            *self.head.get() = 0;
+        let mut guard = self.inner.lock();
+        for entry in guard.entries.iter_mut() {
+            entry.valid = false;
         }
-        self.tail.store(0, Ordering::Release);
-        self.count.store(0, Ordering::Release);
+        guard.head = 0;
+        guard.tail = 0;
+        guard.count = 0;
     }
 }
 

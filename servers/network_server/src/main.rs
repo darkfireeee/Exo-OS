@@ -2,12 +2,9 @@
 #![no_main]
 #![allow(dead_code)]
 
-//! network_server V4 -- serveur reseau IPC-only.
-//!
-//! Cette implementation suit le plan `EXOOS_NETWORK_MODULE_V4.md`:
-//! protocole fixe NetMsg/NetReply, table de sockets bornee, pool DMA optionnel,
-//! lien driver par IPC et cycle RX `released_buf -> RxReleaseMsg`.
+//! network_server V5 -- serveur reseau ExoNet IPC + fenêtre 16 Kio + loopback 127.0.0.1 + DHCP.
 
+use core::cell::UnsafeCell;
 use core::panic::PanicInfo;
 
 use spin::Mutex;
@@ -26,53 +23,56 @@ mod tcp_store;
 mod virtio_device;
 
 use buf_pool::{NetBufPool, VIRTIO_NET_HDR_SIZE_MODERN};
+use dhcp::DhcpAction;
 use driver_link::DriverLink;
 use isolation::IsolationState;
 use protocol::{
     parse_driver_ctrl, parse_net_msg, parse_raw_call, recv_raw, register_endpoint, send_rpc_reply,
     send_rpc_reply_with_data, DriverCtrlMsg, MacReplyMsg, NetMsg, NetReply, RxReadyMsg,
     TxCompleteMsg, NET_CTRL_MAC_REPLY, NET_CTRL_RX_READY, NET_CTRL_TX_COMPLETE,
-    NET_INLINE_DATA_MAX, NET_OP_ACCEPT, NET_OP_BIND, NET_OP_CLOSE, NET_OP_CONNECT,
-    NET_OP_GETPEERNAME, NET_OP_GETSOCKNAME, NET_OP_GETSOCKOPT, NET_OP_LISTEN, NET_OP_OPEN,
-    NET_OP_RECVFROM, NET_OP_RECVMSG, NET_OP_SENDMSG, NET_OP_SENDTO, NET_OP_SETSOCKOPT,
-    NET_OP_SHUTDOWN, NET_OP_SOCKETPAIR, RAW_MSG_SIZE,
+    NET_DATA_WINDOW_SIZE, NET_FLAG_USE_DATA_WINDOW, NET_INLINE_DATA_MAX, NET_OP_ACCEPT,
+    NET_OP_BIND, NET_OP_CLOSE, NET_OP_CONNECT, NET_OP_GETPEERNAME, NET_OP_GETSOCKNAME,
+    NET_OP_GETSOCKOPT, NET_OP_HANDSHAKE, NET_OP_LISTEN, NET_OP_OPEN, NET_OP_POLL, NET_OP_RECVFROM,
+    NET_OP_RECVMSG, NET_OP_SENDMSG, NET_OP_SENDTO, NET_OP_SETSOCKOPT, NET_OP_SHUTDOWN,
+    NET_OP_SOCKETPAIR, RAW_MSG_SIZE,
 };
 use routing::RouteTable;
-use smoltcp_iface::{SmoltcpIface, TcpConnectStatus};
-
-// Constantes errno réseau non définies dans syscall_abi v0.2.0
-const ECONNREFUSED: i64 = -111;  // Linux-compatible connection refused
-const EINPROGRESS:  i64 = -115;  // Linux-compatible operation in progress
-use socket_table::{SocketKind, SocketTable};
+use smoltcp_iface::{is_loopback_ipv4, SmoltcpIface, TcpConnectStatus};
+use socket_table::{SocketKind, SocketSnapshot, SocketState, SocketTable, MAX_SOCKETS};
 use stats::NetStats;
 use tcp_store::TcpStateStore;
 use virtio_device::ExoNetDevice;
 
+const ECONNREFUSED: i64 = -111;
+const EINPROGRESS: i64 = -115;
+const MSG_PEEK: u32 = 0x02;
+
 const DEFAULT_IPV4: u32 = 0x0a00_020f;
 const DEFAULT_PREFIX_LEN: u8 = 24;
+const DEFAULT_GATEWAY: u32 = 0x0a00_0202;
+const DEFAULT_DNS: u32 = 0x0a00_0203;
+const CONNECT_TIMEOUT_TICKS: u64 = 500; // ~10s at 20ms recv timeout
 
-/// Connexion TCP en attente d'établissement.
-/// FIX-SRV-M5 : au lieu de retourner EAGAIN, on stocke le reply endpoint
-/// et on répond de manière asynchrone quand la connexion devient établie.
-#[derive(Clone, Copy)]
-struct PendingConnect {
-    sender_pid:  u32,
-    fd:          u32,
-    reply_ep:    u64,
-    cookie:      u64,
-    is_active:   bool,
+/// 4 KiB-aligned 16 KiB kernel-mediated data transfer window (owned by network_server).
+/// Ring 0 `net_bridge` copies caller payload into/out of this window under a mutex,
+/// avoiding the 128-byte inline IPC cap without exposing client address spaces to Ring 1.
+#[repr(C, align(4096))]
+struct AlignedDataWindow {
+    buf: UnsafeCell<[u8; NET_DATA_WINDOW_SIZE]>,
 }
 
-impl PendingConnect {
-    const fn empty() -> Self {
-        Self { sender_pid: 0, fd: 0, reply_ep: 0, cookie: 0, is_active: false }
-    }
-}
+// SAFETY: Accessed sequentially by network_server's single service loop (under NETWORK_SERVICE)
+// and mediated by Ring 0 `net_bridge` while serialized by `NET_DATA_LOCK`.
+unsafe impl Sync for AlignedDataWindow {}
+
+static NET_DATA_WINDOW: AlignedDataWindow = AlignedDataWindow {
+    buf: UnsafeCell::new([0u8; NET_DATA_WINDOW_SIZE]),
+};
 
 #[derive(Clone, Copy)]
 struct PendingArpPacket {
     active: bool,
-    snapshot: socket_table::SocketSnapshot,
+    snapshot: SocketSnapshot,
     data: [u8; NET_INLINE_DATA_MAX],
     len: usize,
 }
@@ -81,26 +81,12 @@ impl PendingArpPacket {
     const fn empty() -> Self {
         Self {
             active: false,
-            snapshot: socket_table::SocketSnapshot {
-                handle: 0,
-                owner_pid: 0,
-                kind: SocketKind::Udp,
-                state: socket_table::SocketState::Closed,
-                local_addr: 0,
-                local_port: 0,
-                remote_addr: 0,
-                remote_port: 0,
-                pending_rx: 0,
-                tx_bytes: 0,
-                rx_bytes: 0,
-            },
+            snapshot: SocketSnapshot::empty(),
             data: [0u8; NET_INLINE_DATA_MAX],
             len: 0,
         }
     }
 }
-
-const MAX_PENDING_CONNECTS: usize = 16;
 
 struct NetworkService {
     sockets: SocketTable,
@@ -110,6 +96,7 @@ struct NetworkService {
     iface: SmoltcpIface,
     routes: RouteTable,
     dhcp: dhcp::DhcpClient,
+    dhcp_last_tx_tick: u64,
     stats: NetStats,
     tcp_store: TcpStateStore,
     isolation: IsolationState,
@@ -117,9 +104,6 @@ struct NetworkService {
     ticks: u64,
     unsupported_msg_ops: u64,
     reported_no_hardware_route: bool,
-    // FIX-SRV-M5 : file d'attente des connexions TCP en cours d'établissement.
-    pending_connects: [PendingConnect; MAX_PENDING_CONNECTS],
-    pending_connect_count: usize,
     pending_arp: PendingArpPacket,
 }
 
@@ -133,6 +117,7 @@ impl NetworkService {
             iface: SmoltcpIface::empty(),
             routes: RouteTable::new(),
             dhcp: dhcp::DhcpClient::new(),
+            dhcp_last_tx_tick: 0,
             stats: NetStats::new(),
             tcp_store: TcpStateStore::new_empty(),
             isolation: IsolationState::new(),
@@ -140,8 +125,6 @@ impl NetworkService {
             ticks: 0,
             unsupported_msg_ops: 0,
             reported_no_hardware_route: false,
-            pending_connects: [const { PendingConnect::empty() }; MAX_PENDING_CONNECTS],
-            pending_connect_count: 0,
             pending_arp: PendingArpPacket::empty(),
         }
     }
@@ -150,6 +133,16 @@ impl NetworkService {
         if self.bootstrapped {
             return;
         }
+        // Demand-fault and zero every page of NET_DATA_WINDOW so all 4 PTEs are present & writable.
+        unsafe {
+            let win = &mut *NET_DATA_WINDOW.buf.get();
+            let mut off = 0usize;
+            while off < win.len() {
+                core::ptr::write_volatile(&mut win[off], 0);
+                off += 4096;
+            }
+        }
+
         self.pool = match NetBufPool::init(VIRTIO_NET_HDR_SIZE_MODERN) {
             Ok(pool) => {
                 debug_write(b"network_server: pool ready\n");
@@ -163,12 +156,16 @@ impl NetworkService {
         self.driver = DriverLink::connect_net_driver(&self.pool);
         let (ip, prefix_len) = configured_ipv4();
         self.routes.clear();
+        let _ = self.routes.add(0x7f00_0000, 8, 0, 0);
         let on_link = ip & routing::mask(prefix_len);
-        let _ = self.routes.add(on_link, prefix_len, 0, 0);
-        let _ = self.routes.add(0, 0, 0x0a00_0202, 10);
+        let _ = self.routes.add(on_link, prefix_len, 0, 1);
+        let _ = self.routes.add(0, 0, DEFAULT_GATEWAY, 10);
         self.dhcp.configure_mac(self.driver.mac());
         self.dhcp.start(ip);
         self.iface = SmoltcpIface::init(self.driver.mac(), ip, prefix_len);
+        self.iface.ensure_loopback();
+        // Ensure /etc/resolv.conf exists with QEMU SLIRP DNS default until DHCP overrides it.
+        seed_default_resolv_conf(DEFAULT_DNS);
         let phoenix =
             unsafe { exo_syscall_abi::syscall0(exo_syscall_abi::SYS_EXO_PHOENIX_STATE_GET) };
         if phoenix == exo_syscall_abi::ExoPhoenixStateWire::Normal.as_syscall_arg() as i64 {
@@ -178,15 +175,17 @@ impl NetworkService {
     }
 
     fn tick(&mut self) {
-        // FIX-SRV-M5 + SRV-P3 : vérifier les connexions TCP en attente à chaque tick.
-        self.check_pending_connects();
         self.ticks = self.ticks.saturating_add(1);
+        // Always pump loopback interface first (even without hardware NIC).
+        let _ = self.iface.poll_loopback();
+        self.advance_connecting_sockets();
+
         self.driver.ensure_connected(&self.pool);
         if !self.driver.hardware_ready() {
             self.driver.flush_released(&mut self.device);
-            let _ = self.dhcp.poll(self.ticks);
             return;
         }
+
         let mut polls = 0usize;
         while self.iface.poll_one(&mut self.device, &self.pool) {
             polls += 1;
@@ -194,8 +193,6 @@ impl NetworkService {
                 break;
             }
         }
-        // Si au moins une trame entrante (ex: ARP Reply) a été traitée et qu'un paquet
-        // ICMP/UDP attendait la résolution ARP, on le ré-injecte immédiatement !
         if polls > 0 && self.pending_arp.active {
             let snap = self.pending_arp.snapshot;
             let len = self.pending_arp.len;
@@ -204,10 +201,73 @@ impl NetworkService {
             self.pending_arp.active = false;
             let _ = self.iface.send_socket_data(&snap, &buf[..len]);
         }
+        self.poll_dhcp();
         let _ = self.iface.poll_egress(&mut self.device, &self.pool);
         self.driver.flush_tx(&mut self.device, &self.pool);
         self.driver.flush_released(&mut self.device);
-        let _ = self.dhcp.poll(self.ticks);
+        self.advance_connecting_sockets();
+    }
+
+    fn advance_connecting_sockets(&mut self) {
+        let mut connecting = [(SocketSnapshot::empty(), 0u64); MAX_SOCKETS];
+        let count = self.sockets.connecting_sockets(&mut connecting);
+        for i in 0..count {
+            let (snap, started) = connecting[i];
+            match self.iface.tcp_connect_status(&snap) {
+                TcpConnectStatus::Established => {
+                    self.sockets.complete_tcp_connect_by_handle(snap.handle);
+                }
+                TcpConnectStatus::Failed => {
+                    self.sockets
+                        .fail_tcp_connect_by_handle(snap.handle, (-ECONNREFUSED) as i32);
+                }
+                TcpConnectStatus::Pending => {
+                    if self.ticks.saturating_sub(started) >= CONNECT_TIMEOUT_TICKS {
+                        self.sockets
+                            .fail_tcp_connect_by_handle(snap.handle, (-exo_syscall_abi::ETIMEDOUT) as i32);
+                    }
+                }
+            }
+        }
+    }
+
+    fn poll_dhcp(&mut self) {
+        let mut pkt = [0u8; 576];
+        let now_ms = self.ticks.saturating_mul(20);
+        // Ingest any incoming DHCP OFFER / ACK packet.
+        while let Some(n) = self.iface.dhcp_recv(&mut pkt) {
+            if let Some(lease) = self.dhcp.ingest(&pkt[..n], now_ms) {
+                let gw = if lease.gateway != 0 {
+                    lease.gateway
+                } else {
+                    DEFAULT_GATEWAY
+                };
+                self.iface.reconfigure_ipv4(lease.ip, lease.prefix_len, gw);
+                self.routes.clear();
+                let _ = self.routes.add(0x7f00_0000, 8, 0, 0);
+                let on_link = lease.ip & routing::mask(lease.prefix_len);
+                let _ = self.routes.add(on_link, lease.prefix_len, 0, 1);
+                let _ = self.routes.add(0, 0, gw, 10);
+                if lease.dns != 0 {
+                    write_resolv_conf(lease.dns);
+                }
+            }
+        }
+        // Transmit DISCOVER / REQUEST / RENEW periodically without flooding.
+        if self.ticks.saturating_sub(self.dhcp_last_tx_tick) < 50 && self.dhcp_last_tx_tick != 0 {
+            return;
+        }
+        let action = self.dhcp.poll(now_ms);
+        let len_opt = match action {
+            DhcpAction::Discover => self.dhcp.build_discover(&mut pkt),
+            DhcpAction::Request | DhcpAction::Renew => self.dhcp.build_request(&mut pkt),
+            DhcpAction::None => None,
+        };
+        if let Some(len) = len_opt {
+            if self.iface.dhcp_send(&pkt[..len]) {
+                self.dhcp_last_tx_tick = self.ticks;
+            }
+        }
     }
 
     fn flush_released(&mut self) {
@@ -275,31 +335,27 @@ impl NetworkService {
         self.tick();
     }
 
-    fn dispatch(&mut self, msg: NetMsg) -> NetReply {
+    fn dispatch(&mut self, msg: NetMsg, data: &[u8]) -> NetReply {
         match msg.opcode {
+            NET_OP_HANDSHAKE => self.handle_handshake(),
+            NET_OP_POLL => self.handle_poll(msg),
             NET_OP_OPEN => self.handle_open(msg),
             NET_OP_BIND => self.handle_bind(msg),
             NET_OP_CONNECT => self.handle_connect(msg),
             NET_OP_LISTEN => self.handle_listen(msg),
             NET_OP_ACCEPT => self.handle_accept(msg),
-            NET_OP_SENDTO => self.handle_sendto(msg),
-            NET_OP_RECVFROM => self.handle_recvfrom(msg),
-            NET_OP_SENDMSG => (self.handle_sendmsg(msg, &[]), [0; NET_INLINE_DATA_MAX], 0).0,
+            NET_OP_SENDTO => self.handle_sendto_data(msg, data),
+            NET_OP_SENDMSG => self.handle_sendto_data(msg, data),
+            NET_OP_RECVFROM => self.handle_recvfrom_data(msg).0,
             NET_OP_SHUTDOWN => self.handle_shutdown(msg),
             NET_OP_GETSOCKNAME => self.handle_getsockname(msg),
             NET_OP_GETPEERNAME => self.handle_getpeername(msg),
             NET_OP_SOCKETPAIR => self.handle_socketpair(msg),
-            NET_OP_SETSOCKOPT => self.handle_setsockopt(msg),
+            NET_OP_SETSOCKOPT => self.handle_setsockopt(msg, data),
             NET_OP_GETSOCKOPT => self.handle_getsockopt(msg),
             NET_OP_CLOSE => self.handle_close(msg),
             _ => NetReply::error(exo_syscall_abi::EINVAL),
         }
-    }
-
-    fn dispatch_and_tick(&mut self, msg: NetMsg) -> NetReply {
-        let reply = self.dispatch(msg);
-        self.tick();
-        reply
     }
 
     fn dispatch_raw_call(
@@ -319,132 +375,74 @@ impl NetworkService {
             &[]
         };
         match msg.opcode {
-            NET_OP_SENDTO => {
+            NET_OP_SENDTO | NET_OP_SENDMSG => {
                 let reply = self.handle_sendto_data(msg, data);
                 self.tick();
                 (reply, [0; NET_INLINE_DATA_MAX], 0)
             }
-            NET_OP_SENDMSG => {
-                // FIX-SRV-M6 : sendmsg avec données inline
-                let reply = self.handle_sendmsg(msg, data);
-                self.tick();
-                (reply, [0; NET_INLINE_DATA_MAX], 0)
-            }
-            NET_OP_RECVMSG => {
-                // FIX-SRV-M6 : recvmsg = recvfrom avec header msghdr ignoré
-                self.tick();
-                let result = self.handle_recvmsg(msg);
-                self.tick();
-                result
-            }
-            NET_OP_RECVFROM => {
+            NET_OP_RECVFROM | NET_OP_RECVMSG => {
                 self.tick();
                 let result = self.handle_recvfrom_data(msg);
                 self.tick();
                 result
             }
-            _ => (self.dispatch_and_tick(msg), [0; NET_INLINE_DATA_MAX], 0),
+            NET_OP_POLL => {
+                self.tick();
+                let reply = self.handle_poll(msg);
+                (reply, [0; NET_INLINE_DATA_MAX], 0)
+            }
+            NET_OP_ACCEPT => {
+                self.tick();
+                let reply = self.handle_accept(msg);
+                self.tick();
+                (reply, [0; NET_INLINE_DATA_MAX], 0)
+            }
+            _ => {
+                let reply = self.dispatch(msg, data);
+                self.tick();
+                (reply, [0; NET_INLINE_DATA_MAX], 0)
+            }
         }
     }
 
-    fn unsupported_msg_reply(&mut self) -> NetReply {
-        self.unsupported_msg_ops = self.unsupported_msg_ops.saturating_add(1);
-        NetReply::error(exo_syscall_abi::EOPNOTSUPP)
+    fn handle_handshake(&self) -> NetReply {
+        let my_pid = unsafe { exo_syscall_abi::syscall0(exo_syscall_abi::SYS_GETPID) }.max(0) as u32;
+        let window_va = NET_DATA_WINDOW.buf.get() as u64;
+        NetReply::ok(0)
+            .with_u32(0, my_pid)
+            .with_u64(8, window_va)
+            .with_u32(16, NET_DATA_WINDOW_SIZE as u32)
     }
 
-    /// FIX-SRV-M5 : enregistre une connexion TCP en attente d'établissement.
-    fn register_pending_connect(&mut self, sender_pid: u32, fd: u32, reply_ep: u64, cookie: u64) {
-        if self.pending_connect_count >= MAX_PENDING_CONNECTS {
-            return; // table pleine — le caller aura reçu EINPROGRESS sans suivi
-        }
-        let idx = self.pending_connect_count;
-        self.pending_connects[idx] = PendingConnect {
-            sender_pid, fd, reply_ep, cookie, is_active: true,
+    fn handle_poll(&mut self, msg: NetMsg) -> NetReply {
+        let snap = match self.sockets.snapshot_owned(msg.sender_pid, msg.fd) {
+            Ok(s) => s,
+            Err(err) => return NetReply::error(err),
         };
-        self.pending_connect_count += 1;
+        let (mask, avail) = self.iface.poll_socket(&snap);
+        NetReply::ok(0)
+            .with_u32(0, mask)
+            .with_u32(4, avail)
+            .with_u32(8, snap.so_error as u32)
     }
 
-    /// FIX-SRV-M5 : vérifie les connexions TCP en attente à chaque tick().
-    /// Pour chaque connexion devenue établie, envoie la réponse asynchrone.
-    fn check_pending_connects(&mut self) {
-        let mut i = 0usize;
-        while i < self.pending_connect_count {
-            let pc = self.pending_connects[i];
-            if !pc.is_active { i += 1; continue; }
-            let status = match self.sockets.snapshot_owned(pc.sender_pid, pc.fd) {
-                Ok(snap) => self.iface.tcp_connect_status(&snap),
-                Err(_) => {
-                    // Socket fermée entre-temps — retirer
-                    self.pending_connects[i].is_active = false;
-                    i += 1; continue;
-                }
-            };
-            match status {
-                TcpConnectStatus::Established => {
-                    let reply = match self.sockets.complete_tcp_connect(pc.sender_pid, pc.fd) {
-                        Ok(connected) => socket_reply(0, &connected),
-                        Err(err) => NetReply::error(err),
-                    };
-                    if pc.reply_ep != 0 {
-                        let _ = send_rpc_reply(pc.reply_ep, pc.cookie, &reply);
-                    }
-                    self.pending_connects[i].is_active = false;
-                }
-                TcpConnectStatus::Failed => {
-                    if pc.reply_ep != 0 {
-                        let _ = send_rpc_reply(pc.reply_ep, pc.cookie,
-                            &NetReply::error(ECONNREFUSED));
-                    }
-                    self.pending_connects[i].is_active = false;
-                }
-                TcpConnectStatus::Pending => {} // encore en attente
-            }
-            i += 1;
-        }
-        // Compacter la table : retirer les entrées inactives
-        let mut write = 0usize;
-        for read in 0..self.pending_connect_count {
-            if self.pending_connects[read].is_active {
-                self.pending_connects[write] = self.pending_connects[read];
-                write += 1;
-            }
-        }
-        self.pending_connect_count = write;
-    }
-
-    /// FIX-SRV-M6 (ANALYSE_SERVERS §M6) : sendmsg → délègue à sendto_data.
-    /// sendmsg est sémantiquement équivalent à sendto avec les données inline.
-    fn handle_sendmsg(&mut self, msg: NetMsg, data: &[u8]) -> NetReply {
-        self.handle_sendto_data(msg, data)
-    }
-
-    /// FIX-SRV-M6 : recvmsg → délègue à recvfrom_data avec iov inline.
-    fn handle_recvmsg(&mut self, msg: NetMsg) -> (NetReply, [u8; NET_INLINE_DATA_MAX], usize) {
-        self.handle_recvfrom_data(msg)
-    }
-
-    /// FIX-SRV-M6 : socketpair → deux sockets UDP loopback connectées ensemble.
-    /// Implémentation v0.2.0 : AF_UNIX émulé via UDP loopback 127.0.0.1.
     fn handle_socketpair(&mut self, msg: NetMsg) -> NetReply {
         let domain = msg.arg1 as u32;
-        let ty     = msg.arg2 as u32;
-        // Seuls AF_UNIX (1) et AF_LOCAL sont supportés en v0.2.0
+        let ty = msg.arg2 as u32;
         const AF_UNIX: u32 = 1;
         if domain != AF_UNIX {
             return NetReply::error(exo_syscall_abi::EAFNOSUPPORT);
         }
         const SOCK_STREAM_T: u32 = 1;
-        const SOCK_DGRAM_T:  u32 = 2;
+        const SOCK_DGRAM_T: u32 = 2;
         let kind = match ty & 0x0f {
-            SOCK_STREAM_T | SOCK_DGRAM_T => crate::socket_table::SocketKind::Udp,
+            SOCK_STREAM_T | SOCK_DGRAM_T => SocketKind::Udp,
             _ => return NetReply::error(exo_syscall_abi::EINVAL),
         };
-        // Créer socket A
         let snap_a = match self.sockets.open(msg.sender_pid, kind) {
             Ok(s) => s,
             Err(e) => return NetReply::error(e),
         };
-        // Créer socket B
         let snap_b = match self.sockets.open(msg.sender_pid, kind) {
             Ok(s) => s,
             Err(e) => {
@@ -452,26 +450,35 @@ impl NetworkService {
                 return NetReply::error(e);
             }
         };
-        // Relier : A pointe vers port de B (loopback 127.0.0.1)
-        let port_a = 49152u16.wrapping_add(snap_a.handle as u16);
-        let port_b = 49152u16.wrapping_add(snap_b.handle as u16);
-        let loopback: u32 = 0x7f00_0001; // 127.0.0.1
-        let _ = self.sockets.bind(msg.sender_pid, snap_a.handle, loopback, port_a);
-        let _ = self.sockets.bind(msg.sender_pid, snap_b.handle, loopback, port_b);
-        let _ = self.sockets.connect(msg.sender_pid, snap_a.handle, loopback, port_b);
-        let _ = self.sockets.connect(msg.sender_pid, snap_b.handle, loopback, port_a);
-        // Retourner les deux fds dans le payload de réponse
+        let _ = self.iface.register_socket(snap_a.handle, kind);
+        let _ = self.iface.register_socket(snap_b.handle, kind);
+        let loopback: u32 = 0x7f00_0001;
+        let bound_a = match self.sockets.bind(msg.sender_pid, snap_a.handle, loopback, 0) {
+            Ok(s) => s,
+            Err(e) => return NetReply::error(e),
+        };
+        let bound_b = match self.sockets.bind(msg.sender_pid, snap_b.handle, loopback, 0) {
+            Ok(s) => s,
+            Err(e) => return NetReply::error(e),
+        };
+        let _ = self
+            .sockets
+            .connect(msg.sender_pid, snap_a.handle, loopback, bound_b.local_port);
+        let _ = self
+            .sockets
+            .connect(msg.sender_pid, snap_b.handle, loopback, bound_a.local_port);
         let mut reply = NetReply::ok(0);
-        let fd_a_bytes = (snap_a.handle as u32).to_le_bytes();
-        let fd_b_bytes = (snap_b.handle as u32).to_le_bytes();
-        reply.payload[0..4].copy_from_slice(&fd_a_bytes);
-        reply.payload[4..8].copy_from_slice(&fd_b_bytes);
+        reply.payload[0..4].copy_from_slice(&snap_a.handle.to_le_bytes());
+        reply.payload[4..8].copy_from_slice(&snap_b.handle.to_le_bytes());
         reply
     }
 
-    fn require_hardware_route(&mut self, remote_addr: u32) -> Result<(), i64> {
-        if remote_addr == 0 {
+    fn require_route(&mut self, remote_addr: u32) -> Result<(), i64> {
+        if remote_addr == 0 || is_loopback_ipv4(remote_addr) {
             return Ok(());
+        }
+        if self.routes.lookup(remote_addr).is_none() {
+            return Err(exo_syscall_abi::ENETUNREACH);
         }
         if self.driver.probe_hardware_now(&self.pool) {
             return Ok(());
@@ -484,10 +491,6 @@ impl NetworkService {
     }
 
     fn handle_open(&mut self, msg: NetMsg) -> NetReply {
-        // FIX-SOCK-RAW (Security_Audit_Passe2 §D-01) : chemin client — la
-        // vérification de privilège SOCK_RAW doit recevoir le PID réel de
-        // l'expéditeur. L'ancien appel à from_domain_type() (wrapper compat
-        // pid=1 implicite) court-circuitait entièrement le contrôle.
         let kind = match SocketKind::from_domain_type_privileged(
             msg.arg1 as u32,
             msg.arg2 as u32,
@@ -517,6 +520,7 @@ impl NetworkService {
         {
             Ok(snapshot) => {
                 self.iface.apply_socket_state(&snapshot);
+                self.iface.apply_socket_options(&snapshot);
                 socket_reply(0, &snapshot)
             }
             Err(err) => NetReply::error(err),
@@ -524,45 +528,57 @@ impl NetworkService {
     }
 
     fn handle_connect(&mut self, msg: NetMsg) -> NetReply {
-        if let Err(err) = self.require_hardware_route(msg.arg1 as u32) {
+        let remote_addr = msg.arg1 as u32;
+        let remote_port = msg.arg2 as u16;
+        let nonblock = (msg.arg4 & 1) != 0;
+
+        if let Err(err) = self.require_route(remote_addr) {
             return NetReply::error(err);
         }
         self.iface.ensure_interface(&mut self.device, &self.pool);
         match self
             .sockets
-            .connect(msg.sender_pid, msg.fd, msg.arg1 as u32, msg.arg2 as u16)
+            .connect_at_tick(msg.sender_pid, msg.fd, remote_addr, remote_port, self.ticks)
         {
             Ok(snapshot) => {
                 if snapshot.kind != SocketKind::Tcp {
                     self.iface.apply_socket_state(&snapshot);
+                    self.iface.apply_socket_options(&snapshot);
+                    return socket_reply(0, &snapshot);
+                }
+                if snapshot.state == SocketState::Connected {
                     return socket_reply(0, &snapshot);
                 }
                 self.iface.apply_socket_state(&snapshot);
+                self.iface.apply_socket_options(&snapshot);
+
+                // Pump loopback immediately (3-way handshake on 127.0.0.1 completes synchronously)
+                // or flush SYN egress to hardware NIC.
+                if is_loopback_ipv4(remote_addr) {
+                    let _ = self.iface.poll_loopback();
+                } else {
+                    let _ = self.iface.poll_egress(&mut self.device, &self.pool);
+                    self.driver.flush_tx(&mut self.device, &self.pool);
+                }
+
                 match self.iface.tcp_connect_status(&snapshot) {
-                    TcpConnectStatus::Failed => {
-                        self.iface.poll_egress(&mut self.device, &self.pool);
-                        self.driver.flush_tx(&mut self.device, &self.pool);
-                        match self.iface.tcp_connect_status(&snapshot) {
-                            TcpConnectStatus::Established => {
-                                match self.sockets.complete_tcp_connect(msg.sender_pid, msg.fd) {
-                                    Ok(connected) => socket_reply(0, &connected),
-                                    Err(err) => NetReply::error(err),
-                                }
-                            }
-                            TcpConnectStatus::Pending => NetReply::error(exo_syscall_abi::EAGAIN),
-                            TcpConnectStatus::Failed => NetReply::error(exo_syscall_abi::EAGAIN),
-                        }
-                    }
                     TcpConnectStatus::Established => {
                         match self.sockets.complete_tcp_connect(msg.sender_pid, msg.fd) {
                             Ok(connected) => socket_reply(0, &connected),
                             Err(err) => NetReply::error(err),
                         }
                     }
+                    TcpConnectStatus::Failed => {
+                        self.sockets
+                            .fail_tcp_connect_by_handle(snapshot.handle, (-ECONNREFUSED) as i32);
+                        NetReply::error(ECONNREFUSED)
+                    }
                     TcpConnectStatus::Pending => {
-                        self.iface.poll_egress(&mut self.device, &self.pool);
-                        self.driver.flush_tx(&mut self.device, &self.pool);
-                        NetReply::error(exo_syscall_abi::EAGAIN)
+                        if nonblock {
+                            NetReply::error(EINPROGRESS)
+                        } else {
+                            NetReply::error(exo_syscall_abi::EAGAIN)
+                        }
                     }
                 }
             }
@@ -582,21 +598,66 @@ impl NetworkService {
     }
 
     fn handle_accept(&mut self, msg: NetMsg) -> NetReply {
-        match self.sockets.accept(msg.sender_pid, msg.fd) {
-            Ok(snapshot) => socket_reply(snapshot.handle as i64, &snapshot),
-            Err(err) => NetReply::error(err),
-        }
-    }
-
-    fn handle_sendto(&mut self, msg: NetMsg) -> NetReply {
-        self.handle_sendto_data(msg, &[])
-    }
-
-    fn handle_sendto_data(&mut self, msg: NetMsg, data: &[u8]) -> NetReply {
-        let len = msg.arg1.min(u32::MAX as u64) as u32;
-        if !data.is_empty() && data.len() != len as usize {
+        let listener = match self.sockets.snapshot_owned(msg.sender_pid, msg.fd) {
+            Ok(s) => s,
+            Err(err) => return NetReply::error(err),
+        };
+        if listener.kind != SocketKind::Tcp || listener.state != SocketState::Listening {
             return NetReply::error(exo_syscall_abi::EINVAL);
         }
+        if !self.iface.has_acceptable_connection(listener.handle) {
+            return NetReply::error(exo_syscall_abi::EAGAIN);
+        }
+        // Allocate child handle in SocketTable, transfer established smoltcp slot to it.
+        let child = match self.sockets.open_accepted(
+            msg.sender_pid,
+            listener.local_addr,
+            listener.local_port,
+            0,
+            0,
+        ) {
+            Ok(s) => s,
+            Err(err) => return NetReply::error(err),
+        };
+        let (local_addr, local_port, remote_addr, remote_port) =
+            match self.iface.accept_ready_connection(listener.handle, child.handle) {
+                Ok(eps) => eps,
+                Err(err) => {
+                    let _ = self.sockets.close(msg.sender_pid, child.handle);
+                    return NetReply::error(err);
+                }
+            };
+        match self.sockets.update_endpoints(
+            msg.sender_pid,
+            child.handle,
+            local_addr,
+            local_port,
+            remote_addr,
+            remote_port,
+        ) {
+            Ok(updated) => NetReply::ok(updated.handle as i64)
+                .with_u64(0, updated.handle as u64)
+                .with_u32(8, remote_addr)
+                .with_u16(12, remote_port),
+            Err(err) => {
+                self.iface.unregister_socket(child.handle);
+                let _ = self.sockets.close(msg.sender_pid, child.handle);
+                NetReply::error(err)
+            }
+        }
+    }
+
+    fn handle_sendto_data(&mut self, msg: NetMsg, inline_data: &[u8]) -> NetReply {
+        let use_window = (msg.arg4 & NET_FLAG_USE_DATA_WINDOW) != 0;
+        let len = msg.arg1.min(u32::MAX as u64) as usize;
+        if use_window {
+            if len > NET_DATA_WINDOW_SIZE {
+                return NetReply::error(exo_syscall_abi::EMSGSIZE);
+            }
+        } else if !inline_data.is_empty() && inline_data.len() != len {
+            return NetReply::error(exo_syscall_abi::EINVAL);
+        }
+
         let target_addr = if msg.arg2 != 0 {
             msg.arg2 as u32
         } else {
@@ -605,51 +666,65 @@ impl NetworkService {
                 Err(err) => return NetReply::error(err),
             }
         };
-        if let Err(err) = self.require_hardware_route(target_addr) {
+        if let Err(err) = self.require_route(target_addr) {
             return NetReply::error(err);
         }
         let snapshot = match self.sockets.send_to(
             msg.sender_pid,
             msg.fd,
-            len,
+            len as u32,
             msg.arg2 as u32,
             msg.arg3 as u16,
         ) {
             Ok(snapshot) => snapshot,
             Err(err) => return NetReply::error(err),
         };
+        self.iface.ensure_interface(&mut self.device, &self.pool);
         self.iface.apply_socket_state(&snapshot);
-        if !data.is_empty() {
+
+        // SAFETY: `NET_DATA_WINDOW` is owned by network_server and serialized with Ring 0 `NET_DATA_LOCK`.
+        let data: &[u8] = if use_window {
+            unsafe { &(&*NET_DATA_WINDOW.buf.get())[..len] }
+        } else {
+            inline_data
+        };
+
+        let sent_len = if !data.is_empty() {
             match self.iface.send_socket_data(&snapshot, data) {
-                Ok(sent) if sent == data.len() => self.stats.note_tx(sent as u64),
-                Ok(_) => return NetReply::error(exo_syscall_abi::EAGAIN),
+                Ok(sent) => {
+                    self.stats.note_tx(sent as u64);
+                    sent
+                }
                 Err(err) => return NetReply::error(err),
             }
-        }
-        let only_arp_sent = self.iface.poll_egress(&mut self.device, &self.pool);
-        self.driver.flush_tx(&mut self.device, &self.pool);
+        } else {
+            0
+        };
 
-        // Si smoltcp a émis un ARP Request (0x0806) au lieu du paquet IPv4,
-        // sauvegarder le paquet pour le ré-émettre dès réception de l'ARP Reply !
-        if only_arp_sent && !data.is_empty() && data.len() <= NET_INLINE_DATA_MAX {
-            self.pending_arp.active = true;
-            self.pending_arp.snapshot = snapshot;
-            self.pending_arp.len = data.len();
-            self.pending_arp.data[..data.len()].copy_from_slice(data);
+        if is_loopback_ipv4(snapshot.remote_addr) {
+            let _ = self.iface.poll_loopback();
+        } else {
+            let only_arp_sent = self.iface.poll_egress(&mut self.device, &self.pool);
+            self.driver.flush_tx(&mut self.device, &self.pool);
+            if only_arp_sent && !data.is_empty() && data.len() <= NET_INLINE_DATA_MAX {
+                self.pending_arp.active = true;
+                self.pending_arp.snapshot = snapshot;
+                self.pending_arp.len = data.len();
+                self.pending_arp.data[..data.len()].copy_from_slice(data);
+            }
         }
-        socket_reply(len as i64, &snapshot)
-    }
-
-    fn handle_recvfrom(&mut self, msg: NetMsg) -> NetReply {
-        let (reply, _, _) = self.handle_recvfrom_data(msg);
-        reply
+        socket_reply(sent_len as i64, &snapshot)
     }
 
     fn handle_recvfrom_data(
         &mut self,
         msg: NetMsg,
     ) -> (NetReply, [u8; NET_INLINE_DATA_MAX], usize) {
-        let mut data = [0u8; NET_INLINE_DATA_MAX];
+        let mut inline_out = [0u8; NET_INLINE_DATA_MAX];
+        let use_window = (msg.arg3 & NET_FLAG_USE_DATA_WINDOW) != 0;
+        let peek = (msg.arg3 & MSG_PEEK) != 0;
+
+        let _ = self.iface.poll_loopback();
         let mut polls = 0usize;
         while self.iface.poll_one(&mut self.device, &self.pool) {
             polls += 1;
@@ -657,43 +732,91 @@ impl NetworkService {
                 break;
             }
         }
+
         let before = match self.sockets.snapshot_owned(msg.sender_pid, msg.fd) {
             Ok(snapshot) => snapshot,
-            Err(err) => return (NetReply::error(err), data, 0),
+            Err(err) => return (NetReply::error(err), inline_out, 0),
         };
-        let budget = (msg.arg1 as usize).min(data.len());
+        let max_cap = if use_window {
+            NET_DATA_WINDOW_SIZE
+        } else {
+            NET_INLINE_DATA_MAX
+        };
+        let budget = (msg.arg1 as usize).min(max_cap);
         if budget == 0 {
-            return (socket_reply(0, &before), data, 0);
+            return (socket_reply(0, &before), inline_out, 0);
         }
-        let (delivered, peer_addr, peer_port) =
-            match self.iface.recv_socket_data(&before, &mut data[..budget]) {
-                Ok(result) => result,
-                Err(err) => return (NetReply::error(err), data, 0),
+
+        let recv_res = if use_window {
+            // SAFETY: serialized under NETWORK_SERVICE and Ring 0 `NET_DATA_LOCK`.
+            let win = unsafe {
+                core::slice::from_raw_parts_mut(NET_DATA_WINDOW.buf.get().cast::<u8>(), budget)
             };
-        let snapshot = match self
-            .sockets
-            .record_recv(msg.sender_pid, msg.fd, delivered as u32)
-        {
-            Ok(snapshot) => snapshot,
-            Err(err) => return (NetReply::error(err), data, 0),
+            self.iface.recv_socket_data(&before, win, peek)
+        } else {
+            self.iface
+                .recv_socket_data(&before, &mut inline_out[..budget], peek)
         };
+
+        let (delivered, peer_addr, peer_port) = match recv_res {
+            Ok(result) => result,
+            Err(err) => return (NetReply::error(err), inline_out, 0),
+        };
+        let snapshot = if !peek {
+            match self
+                .sockets
+                .record_recv(msg.sender_pid, msg.fd, delivered as u32)
+            {
+                Ok(snapshot) => snapshot,
+                Err(err) => return (NetReply::error(err), inline_out, 0),
+            }
+        } else {
+            before
+        };
+
+        // Pump loopback ACKs / window updates right after draining TCP RX buffer!
+        if delivered > 0 && is_loopback_ipv4(snapshot.remote_addr) {
+            let _ = self.iface.poll_loopback();
+        }
+
         let mut reply = socket_reply(delivered as i64, &snapshot);
         if peer_addr != 0 {
             reply = reply.with_u32(8, peer_addr).with_u16(12, peer_port);
         }
-        (reply, data, delivered)
+        let inline_len = if use_window { 0 } else { delivered };
+        (reply, inline_out, inline_len)
     }
 
     fn handle_shutdown(&mut self, msg: NetMsg) -> NetReply {
-        match self.sockets.shutdown(msg.sender_pid, msg.fd) {
-            Ok(snapshot) => socket_reply(0, &snapshot),
+        let how = msg.arg1 as u32;
+        match self.sockets.shutdown_how(msg.sender_pid, msg.fd, how) {
+            Ok(snapshot) => {
+                self.iface
+                    .shutdown_tcp(&snapshot, how, &mut self.device, &self.pool);
+                self.driver.flush_tx(&mut self.device, &self.pool);
+                socket_reply(0, &snapshot)
+            }
             Err(err) => NetReply::error(err),
         }
     }
 
     fn handle_getsockname(&mut self, msg: NetMsg) -> NetReply {
         match self.sockets.snapshot_owned(msg.sender_pid, msg.fd) {
-            Ok(snapshot) => socket_reply(0, &snapshot),
+            Ok(snapshot) => {
+                let local_addr = if snapshot.local_addr != 0 {
+                    snapshot.local_addr
+                } else if is_loopback_ipv4(snapshot.remote_addr) {
+                    0x7f00_0001
+                } else if snapshot.state == SocketState::Connected {
+                    self.iface.ip()
+                } else {
+                    0
+                };
+                NetReply::ok(0)
+                    .with_u64(0, snapshot.handle as u64)
+                    .with_u32(8, local_addr)
+                    .with_u16(12, snapshot.local_port)
+            }
             Err(err) => NetReply::error(err),
         }
     }
@@ -704,25 +827,44 @@ impl NetworkService {
                 if snapshot.remote_addr != 0
                     && (snapshot.remote_port != 0 || snapshot.kind == SocketKind::Raw) =>
             {
-                socket_reply(0, &snapshot)
+                NetReply::ok(0)
+                    .with_u64(0, snapshot.handle as u64)
+                    .with_u32(8, snapshot.remote_addr)
+                    .with_u16(12, snapshot.remote_port)
             }
             Ok(_) => NetReply::error(exo_syscall_abi::ENOTCONN),
             Err(err) => NetReply::error(err),
         }
     }
 
-    fn handle_setsockopt(&mut self, msg: NetMsg) -> NetReply {
-        match self.sockets.snapshot_owned(msg.sender_pid, msg.fd) {
-            Ok(snapshot) => socket_reply(0, &snapshot),
+    fn handle_setsockopt(&mut self, msg: NetMsg, optval: &[u8]) -> NetReply {
+        let level = msg.arg1 as i32;
+        let optname = msg.arg2 as i32;
+        match self
+            .sockets
+            .set_option(msg.sender_pid, msg.fd, level, optname, optval)
+        {
+            Ok(snapshot) => {
+                self.iface.apply_socket_options(&snapshot);
+                socket_reply(0, &snapshot)
+            }
             Err(err) => NetReply::error(err),
         }
     }
 
     fn handle_getsockopt(&mut self, msg: NetMsg) -> NetReply {
-        match self.sockets.snapshot_owned(msg.sender_pid, msg.fd) {
-            Ok(snapshot) => socket_reply(0, &snapshot)
-                .with_u32(16, 0)
-                .with_u32(36, self.unsupported_msg_ops.min(u32::MAX as u64) as u32),
+        let level = msg.arg1 as i32;
+        let optname = msg.arg2 as i32;
+        match self
+            .sockets
+            .get_option(msg.sender_pid, msg.fd, level, optname)
+        {
+            Ok((snapshot, val_bytes, val_len)) => {
+                let mut reply = socket_reply(0, &snapshot);
+                reply.payload[16..24].copy_from_slice(&val_bytes);
+                reply = reply.with_u32(24, val_len as u32);
+                reply
+            }
             Err(err) => NetReply::error(err),
         }
     }
@@ -730,7 +872,9 @@ impl NetworkService {
     fn handle_close(&mut self, msg: NetMsg) -> NetReply {
         match self.sockets.close(msg.sender_pid, msg.fd) {
             Ok(snapshot) => {
-                self.iface.unregister_socket(snapshot.handle);
+                self.iface
+                    .close_socket_graceful(&snapshot, &mut self.device, &self.pool);
+                self.driver.flush_tx(&mut self.device, &self.pool);
                 socket_reply(0, &snapshot)
             }
             Err(err) => NetReply::error(err),
@@ -766,14 +910,8 @@ pub extern "C" fn _start() -> ! {
 
         if let Some(call) = parse_raw_call(&raw[..n]) {
             let (reply, data, data_len) = {
-                // FIX-SRV-P3 : try_lock() pour les tick périodiques (non-bloquants).
-                // Pour les requêtes réelles, on lock normalement — le lock est bref
-                // car chaque opération est O(1) ou O(sockets) bornée.
                 let mut service = NETWORK_SERVICE.lock();
-                // Injecter reply_ep dans le payload pour async connect (SRV-M5)
-                let payload_with_ep = call.payload;
-                let _ = (call.reply_ep, call.cookie); // disponibles si needed
-                service.dispatch_raw_call(payload_with_ep)
+                service.dispatch_raw_call(call.payload)
             };
             let _ = if data_len == 0 {
                 send_rpc_reply(call.reply_ep, call.cookie, &reply)
@@ -785,6 +923,75 @@ pub extern "C" fn _start() -> ! {
         } else {
             NETWORK_SERVICE.lock().tick();
         }
+    }
+}
+
+fn seed_default_resolv_conf(dns_ip: u32) {
+    let path = b"/etc/resolv.conf\0";
+    let fd =
+        unsafe { exo_syscall_abi::syscall2(exo_syscall_abi::SYS_OPEN, path.as_ptr() as u64, 0) };
+    if fd >= 0 {
+        let _ = unsafe { exo_syscall_abi::syscall1(exo_syscall_abi::SYS_CLOSE, fd as u64) };
+        return;
+    }
+    write_resolv_conf(dns_ip);
+}
+
+fn write_resolv_conf(dns_ip: u32) {
+    // Ensure /etc exists (ignore EEXIST).
+    let etc = b"/etc\0";
+    let _ = unsafe { exo_syscall_abi::syscall2(exo_syscall_abi::SYS_MKDIR, etc.as_ptr() as u64, 0o755) };
+    let path = b"/etc/resolv.conf\0";
+    // O_WRONLY (1) | O_CREAT (0x40) | O_TRUNC (0x200)
+    let fd = unsafe {
+        exo_syscall_abi::syscall3(
+            exo_syscall_abi::SYS_OPEN,
+            path.as_ptr() as u64,
+            1 | 0x40 | 0x200,
+            0o644,
+        )
+    };
+    if fd < 0 {
+        return;
+    }
+    let mut line = [0u8; 48];
+    let prefix = b"nameserver ";
+    line[..prefix.len()].copy_from_slice(prefix);
+    let mut pos = prefix.len();
+    let octets = dns_ip.to_be_bytes();
+    for (i, &oct) in octets.iter().enumerate() {
+        pos += fmt_u8(oct, &mut line[pos..]);
+        if i < 3 {
+            line[pos] = b'.';
+            pos += 1;
+        }
+    }
+    line[pos] = b'\n';
+    pos += 1;
+    let _ = unsafe {
+        exo_syscall_abi::syscall3(
+            exo_syscall_abi::SYS_WRITE,
+            fd as u64,
+            line.as_ptr() as u64,
+            pos as u64,
+        )
+    };
+    let _ = unsafe { exo_syscall_abi::syscall1(exo_syscall_abi::SYS_CLOSE, fd as u64) };
+}
+
+fn fmt_u8(v: u8, out: &mut [u8]) -> usize {
+    if v >= 100 {
+        out[0] = b'0' + (v / 100);
+        out[1] = b'0' + ((v / 10) % 10);
+        out[2] = b'0' + (v % 10);
+        3
+    } else if v >= 10 {
+        out[0] = b'0' + (v / 10);
+        out[1] = b'0' + (v % 10);
+        2
+    } else {
+        out[0] = b'0' + v;
+        1
     }
 }
 
@@ -879,7 +1086,7 @@ fn parse_ipv4_cidr(buf: &[u8]) -> Option<(u32, u8)> {
     ))
 }
 
-fn socket_reply(status: i64, snapshot: &socket_table::SocketSnapshot) -> NetReply {
+fn socket_reply(status: i64, snapshot: &SocketSnapshot) -> NetReply {
     NetReply::ok(status)
         .with_u64(0, snapshot.handle as u64)
         .with_u32(

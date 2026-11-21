@@ -118,12 +118,18 @@ def wait_for_e9(needle, timeout):
     raise TimeoutError(needle.decode("ascii", "replace"))
 
 def prompt_count(data):
-    return data.count(b"\n\rexosh:") + data.count(b"\nexosh:") + data.count(b"\x0cexosh:")
+    return (
+        data.count(b"\n\rexosh:")
+        + data.count(b"\nexosh:")
+        + data.count(b"\x0c\rexosh:")
+        + data.count(b"\x0cexosh:")
+    )
 
 def input_prompt_ready(data):
     prompt_start = max(
         data.rfind(b"\n\rexosh:"),
         data.rfind(b"\nexosh:"),
+        data.rfind(b"\x0c\rexosh:"),
         data.rfind(b"\x0cexosh:"),
     )
     require_cursor = os.environ.get("EXOOS_SHELL_REQUIRE_CURSOR", "1") != "0"
@@ -152,10 +158,10 @@ KEYS = {
     "_": ["shift", "minus"],
     "*": ["shift", "8"],
 }
-key_hold_ms = int(os.environ.get("EXOOS_SHELL_KEY_HOLD_MS", "20"))
+key_hold_ms = int(os.environ.get("EXOOS_SHELL_KEY_HOLD_MS", "45"))
 key_delay = float(os.environ.get("EXOOS_SHELL_KEY_DELAY", "0.35"))
-key_echo_timeout = float(os.environ.get("EXOOS_SHELL_KEY_ECHO_TIMEOUT", "2.0"))
-verify_key_echo = os.environ.get("EXOOS_SHELL_VERIFY_KEY_ECHO", "0") != "0"
+key_echo_timeout = float(os.environ.get("EXOOS_SHELL_KEY_ECHO_TIMEOUT", "3.0"))
+verify_key_echo = os.environ.get("EXOOS_SHELL_VERIFY_KEY_ECHO", "1") != "0"
 post_command_delay = float(os.environ.get("EXOOS_SHELL_POST_COMMAND_DELAY", "0.5"))
 
 def send_key(keys):
@@ -174,6 +180,7 @@ def wait_for_key_echo(ch, start, timeout):
         if needle in data[start:]:
             return
         time.sleep(0.01)
+    save_timeout_e9()
     raise TimeoutError(f"shell key echo did not include {needle!r}")
 
 def send_text(text):
@@ -181,7 +188,15 @@ def send_text(text):
         echo_start = len(e9_bytes())
         send_key(KEYS.get(ch, ch))
         if verify_key_echo and ch != "\n":
-            wait_for_key_echo(ch, echo_start, key_echo_timeout)
+            try:
+                wait_for_key_echo(ch, echo_start, key_echo_timeout)
+            except TimeoutError:
+                echo_start = len(e9_bytes())
+                send_key(KEYS.get(ch, ch))
+                try:
+                    wait_for_key_echo(ch, echo_start, key_echo_timeout)
+                except TimeoutError as exc:
+                    raise TimeoutError(f"{exc} while sending {text!r}") from None
         time.sleep(key_delay)
 
 ready_timeout = int(os.environ.get("EXOOS_SHELL_READY_TIMEOUT", "600"))

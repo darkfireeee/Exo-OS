@@ -19,12 +19,14 @@ impl FileDesc {
     }
 
     pub fn read_vectored(&self, bufs: &mut [IoSliceMut<'_>]) -> io::Result<usize> {
-        io::default_read_vectored(|b| self.read(b), bufs)
+        let iovcnt = cmp::min(bufs.len(), 1024);
+        unsafe { syscall::readv(self.as_raw_fd(), bufs.as_ptr() as *const u8, iovcnt) }
+            .map_err(map_exo_err)
     }
 
     #[inline]
     pub fn is_read_vectored(&self) -> bool {
-        false
+        true
     }
 
     pub fn read_to_end(&self, buf: &mut Vec<u8>) -> io::Result<usize> {
@@ -49,12 +51,14 @@ impl FileDesc {
     }
 
     pub fn write_vectored(&self, bufs: &[IoSlice<'_>]) -> io::Result<usize> {
-        io::default_write_vectored(|b| self.write(b), bufs)
+        let iovcnt = cmp::min(bufs.len(), 1024);
+        unsafe { syscall::writev(self.as_raw_fd(), bufs.as_ptr() as *const u8, iovcnt) }
+            .map_err(map_exo_err)
     }
 
     #[inline]
     pub fn is_write_vectored(&self) -> bool {
-        false
+        true
     }
 
     pub fn write_at(&self, buf: &[u8], offset: u64) -> io::Result<usize> {
@@ -71,9 +75,9 @@ impl FileDesc {
     }
 
     pub fn set_nonblocking(&self, nonblocking: bool) -> io::Result<()> {
-        let flags = syscall::fcntl(self.as_raw_fd(), 3, 0).unwrap_or(0);
+        let flags = syscall::fcntl(self.as_raw_fd(), 3 /* F_GETFL */, 0).map_err(map_exo_err)?;
         let new_flags = if nonblocking { flags | 0o4000 } else { flags & !0o4000 };
-        let _ = syscall::fcntl(self.as_raw_fd(), 4, new_flags as u64);
+        syscall::fcntl(self.as_raw_fd(), 4 /* F_SETFL */, new_flags as u64).map_err(map_exo_err)?;
         Ok(())
     }
 }

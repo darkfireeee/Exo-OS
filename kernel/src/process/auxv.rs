@@ -58,14 +58,18 @@ pub const AT_PLATFORM: u64 = 15;
 pub const AT_HWCAP: u64 = 16;
 /// Clock tick frequency.
 pub const AT_CLKTCK: u64 = 17;
+/// Non-zero if process should be treated securely (setuid/setgid).
+pub const AT_SECURE: u64 = 23;
+/// Pointer to 16 bytes of random data (security cookie).
+pub const AT_RANDOM: u64 = 25;
+/// Extended HWCAP2 bitmask.
+pub const AT_HWCAP2: u64 = 26;
+/// Filename of program being executed.
+pub const AT_EXECFN: u64 = 31;
 /// Virtual address of vDSO file.
 pub const AT_SYSINFO: u64 = 32;
 /// Address of vDSO ELF page (for fast-path clock_gettime).
 pub const AT_SYSINFO_EHDR: u64 = 33;
-/// Extended HWCAP2 bitmask.
-pub const AT_HWCAP2: u64 = 26;
-/// Pointer to 16 bytes of random data (security cookie).
-pub const AT_RANDOM: u64 = 25;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Exo-OS extensions
@@ -111,6 +115,7 @@ impl AuxEntry {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// ELF information required to build the auxv vector.
+#[derive(Copy, Clone, Debug, Default)]
 pub struct AuxvParams {
     /// Address of program headers (PT_PHDR or computed from EHDR).
     pub phdr_vaddr: u64,
@@ -131,6 +136,14 @@ pub struct AuxvParams {
     pub gid: u32,
     /// Pointer to 16 random bytes ALREADY on the stack.
     pub random_ptr: u64,
+    /// Pointer to platform string ("x86_64\0") on the stack.
+    pub platform_ptr: u64,
+    /// Pointer to executed filename string on the stack.
+    pub execfn_ptr: u64,
+    /// Non-zero when executed with elevated privilege boundaries (AT_SECURE).
+    pub secure: u64,
+    /// Extended HWCAP2 bitmask (AT_HWCAP2).
+    pub hwcap2: u64,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -144,8 +157,8 @@ pub struct AuxvParams {
 #[allow(clippy::result_unit_err)]
 pub fn build_auxv(params: &AuxvParams) -> Result<Vec<AuxEntry>, ()> {
     let mut v: Vec<AuxEntry> = Vec::new();
-    // Maximum known count: ~16 entries + AT_NULL.
-    v.try_reserve(20).map_err(|_| ())?;
+    // Maximum known count: ~22 entries + AT_NULL.
+    v.try_reserve(24).map_err(|_| ())?;
 
     v.push(AuxEntry::new(AT_PHDR, params.phdr_vaddr));
     v.push(AuxEntry::new(AT_PHENT, 56)); // Elf64_Phdr = standard 56 bytes
@@ -158,9 +171,18 @@ pub fn build_auxv(params: &AuxvParams) -> Result<Vec<AuxEntry>, ()> {
     v.push(AuxEntry::new(AT_EUID, params.uid as u64));
     v.push(AuxEntry::new(AT_GID, params.gid as u64));
     v.push(AuxEntry::new(AT_EGID, params.gid as u64));
+    v.push(AuxEntry::new(AT_SECURE, params.secure));
     v.push(AuxEntry::new(AT_RANDOM, params.random_ptr));
     v.push(AuxEntry::new(AT_CLKTCK, 100));
     v.push(AuxEntry::new(AT_HWCAP, 0));
+    v.push(AuxEntry::new(AT_HWCAP2, params.hwcap2));
+
+    if params.platform_ptr != 0 {
+        v.push(AuxEntry::new(AT_PLATFORM, params.platform_ptr));
+    }
+    if params.execfn_ptr != 0 {
+        v.push(AuxEntry::new(AT_EXECFN, params.execfn_ptr));
+    }
 
     // vDSO: present only if the page address is non-zero.
     if params.vdso_ehdr_vaddr != 0 {

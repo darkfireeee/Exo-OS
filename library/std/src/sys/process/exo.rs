@@ -296,39 +296,98 @@ impl Command {
         };
 
         if pid == 0 {
+            let fail_child = |err_code: i32| -> ! {
+                let bytes = err_code.to_ne_bytes();
+                let _ = syscall::write(exec_fail_pipe[1], &bytes);
+                let _ = syscall::close(exec_fail_pipe[1]);
+                syscall::exit_group(127);
+            };
             let _ = syscall::close(exec_fail_pipe[0]);
+
+            let dup_or_fail = |src: i32, dst: i32| {
+                if src != dst {
+                    if let Err(e) = syscall::dup2(src, dst) {
+                        fail_child(e.errno());
+                    }
+                }
+            };
+            let open_dev_null_to = |dst: i32, flags: u32| {
+                if dst == 0 {
+                    let mut p = [-1i32; 2];
+                    if let Err(e) = syscall::pipe2(&mut p, 0) {
+                        fail_child(e.errno());
+                    }
+                    let _ = syscall::close(p[1]);
+                    if p[0] != 0 {
+                        if let Err(e) = syscall::dup2(p[0], 0) {
+                            fail_child(e.errno());
+                        }
+                        let _ = syscall::close(p[0]);
+                    }
+                    return;
+                }
+                let null_flags = syscall::EXOFS_OPEN_WRONLY
+                    | syscall::EXOFS_OPEN_CREATE
+                    | syscall::EXOFS_OPEN_TRUNC;
+                let open_res = syscall::exofs_open(b"/dev/null\0", flags, 0)
+                    .or_else(|_| syscall::exofs_open(b"/tmp/.exo_dev_null\0", null_flags, 0o666))
+                    .or_else(|_| syscall::exofs_open(b"/.exo_dev_null\0", null_flags, 0o666));
+                match open_res {
+                    Ok(nfd) => {
+                        if nfd != dst {
+                            if let Err(e) = syscall::dup2(nfd, dst) {
+                                fail_child(e.errno());
+                            }
+                            let _ = syscall::close(nfd);
+                        }
+                    }
+                    Err(e) => fail_child(e.errno()),
+                }
+            };
 
             if stdin_pipe[0] >= 0 {
                 let _ = syscall::close(stdin_pipe[1]);
-                let _ = syscall::dup2(stdin_pipe[0], 0);
+                dup_or_fail(stdin_pipe[0], 0);
                 let _ = syscall::close(stdin_pipe[0]);
             } else if let Some(fd) = child_stdin_fd {
-                let _ = syscall::dup2(fd, 0);
+                dup_or_fail(fd, 0);
+            } else if matches!(stdin_cfg, Stdio::Null) {
+                open_dev_null_to(0, syscall::EXOFS_OPEN_RDONLY);
             }
 
             if stdout_pipe[1] >= 0 {
                 let _ = syscall::close(stdout_pipe[0]);
-                let _ = syscall::dup2(stdout_pipe[1], 1);
+                dup_or_fail(stdout_pipe[1], 1);
                 let _ = syscall::close(stdout_pipe[1]);
             } else if let Some(fd) = child_stdout_fd {
-                let _ = syscall::dup2(fd, 1);
+                dup_or_fail(fd, 1);
+            } else if matches!(stdout_cfg, Stdio::Null) {
+                open_dev_null_to(1, syscall::EXOFS_OPEN_WRONLY);
             }
 
             if stderr_pipe[1] >= 0 {
                 let _ = syscall::close(stderr_pipe[0]);
-                let _ = syscall::dup2(stderr_pipe[1], 2);
+                dup_or_fail(stderr_pipe[1], 2);
                 let _ = syscall::close(stderr_pipe[1]);
             } else if let Some(fd) = child_stderr_fd {
-                let _ = syscall::dup2(fd, 2);
+                dup_or_fail(fd, 2);
+            } else if matches!(stderr_cfg, Stdio::Null) {
+                open_dev_null_to(2, syscall::EXOFS_OPEN_WRONLY);
             }
 
             if let Some(ref cwd_bytes) = cwd_c {
-                let _ = syscall::chdir(cwd_bytes);
+                if let Err(e) = syscall::chdir(cwd_bytes) {
+                    fail_child(e.errno());
+                }
             }
 
-            let _ = runtime::sigprocmask_0syscall(runtime::SIG_SETMASK, Some(0), None);
+            if let Err(errno) = runtime::sigprocmask_0syscall(runtime::SIG_SETMASK, Some(0), None) {
+                fail_child(errno);
+            }
             if let Some(mask) = child_pledge {
-                let _ = syscall::exo_pledge(mask);
+                if let Err(e) = syscall::exo_pledge(mask) {
+                    fail_child(e.errno());
+                }
             }
 
             let rc = unsafe {
@@ -338,10 +397,7 @@ impl Command {
                 Ok(()) => 0,
                 Err(code) => code,
             };
-            let bytes = err_code.to_ne_bytes();
-            let _ = syscall::write(exec_fail_pipe[1], &bytes);
-            let _ = syscall::close(exec_fail_pipe[1]);
-            syscall::exit_group(127);
+            fail_child(err_code);
         }
 
         // Parent process
@@ -357,13 +413,24 @@ impl Command {
         }
 
         let mut err_buf = [0u8; 4];
-        let n = syscall::read(exec_fail_pipe[0], &mut err_buf).unwrap_or(0);
+        let n = loop {
+            match syscall::read(exec_fail_pipe[0], &mut err_buf) {
+                Ok(n) => break n,
+                Err(e) if e == syscall::SysError::EINTR => continue,
+                Err(_) => break 0,
+            }
+        };
         let _ = syscall::close(exec_fail_pipe[0]);
 
         if n == 4 {
             let child_errno = i32::from_ne_bytes(err_buf);
             let mut dummy_status = 0i32;
-            let _ = syscall::wait4(pid, &mut dummy_status, 0);
+            loop {
+                match syscall::wait4(pid, &mut dummy_status, 0) {
+                    Err(e) if e == syscall::SysError::EINTR => continue,
+                    _ => break,
+                }
+            }
             if stdin_pipe[1] >= 0 {
                 let _ = syscall::close(stdin_pipe[1]);
             }
@@ -589,11 +656,60 @@ pub fn read_output(
     err: ChildPipe,
     stderr: &mut Vec<u8>,
 ) -> io::Result<()> {
-    let _ = (&out).read_to_end(stdout);
-    let _ = (&err).read_to_end(stderr);
+    let mut out_open = true;
+    let mut err_open = true;
+    let out_fd = out.as_raw_fd();
+    let err_fd = err.as_raw_fd();
+    let mut buf = [0u8; 4096];
+
+    while out_open || err_open {
+        let mut pfds = [
+            syscall::PollFd {
+                fd: if out_open { out_fd } else { -1 },
+                events: syscall::POLLIN,
+                revents: 0,
+            },
+            syscall::PollFd {
+                fd: if err_open { err_fd } else { -1 },
+                events: syscall::POLLIN,
+                revents: 0,
+            },
+        ];
+        match syscall::poll(&mut pfds, -1) {
+            Ok(_) => {}
+            Err(e) if e == syscall::SysError::EINTR => continue,
+            Err(e) => return Err(map_exo_err(e)),
+        }
+
+        if out_open && (pfds[0].revents & (syscall::POLLIN | syscall::POLLHUP | 0x0008 /* POLLERR */)) != 0 {
+            match syscall::read(out_fd, &mut buf) {
+                Ok(0) => out_open = false,
+                Ok(n) => stdout.extend_from_slice(&buf[..n]),
+                Err(e) if e == syscall::SysError::EINTR || e == syscall::SysError::EAGAIN => {}
+                Err(e) => return Err(map_exo_err(e)),
+            }
+        } else if out_open && (pfds[0].revents & 0x0020 /* POLLNVAL */) != 0 {
+            return Err(map_exo_err(syscall::SysError::EBADF));
+        }
+
+        if err_open && (pfds[1].revents & (syscall::POLLIN | syscall::POLLHUP | 0x0008 /* POLLERR */)) != 0 {
+            match syscall::read(err_fd, &mut buf) {
+                Ok(0) => err_open = false,
+                Ok(n) => stderr.extend_from_slice(&buf[..n]),
+                Err(e) if e == syscall::SysError::EINTR || e == syscall::SysError::EAGAIN => {}
+                Err(e) => return Err(map_exo_err(e)),
+            }
+        } else if err_open && (pfds[1].revents & 0x0020 /* POLLNVAL */) != 0 {
+            return Err(map_exo_err(syscall::SysError::EBADF));
+        }
+    }
     Ok(())
 }
 
 pub fn getpid() -> u32 {
     syscall::getpid()
+}
+
+pub fn getppid() -> u32 {
+    syscall::getppid()
 }

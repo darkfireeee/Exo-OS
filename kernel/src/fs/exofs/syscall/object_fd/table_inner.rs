@@ -142,10 +142,12 @@ impl ObjectFdTableInner {
         if let Some(new_idx) = promote_idx {
             let old_entry = self.slots[idx];
             let new_fd = self.slots[new_idx].fd;
+            let new_owner = self.slots[new_idx].owner_uid;
             let mut replacement = old_entry;
             replacement.fd = new_fd;
             replacement.shared_fd = new_fd;
             replacement.ref_count = rc.saturating_sub(1);
+            replacement.owner_uid = new_owner;
             self.slots[new_idx] = replacement;
 
             let mut j = 0usize;
@@ -171,9 +173,11 @@ impl ObjectFdTableInner {
 
     /// Lit l'entrée d'un fd (clonée).
     pub fn get_entry(&self, fd: u32) -> ExofsResult<ObjectFdEntry> {
-        let canon_idx = self.canonical_slot_of_fd(fd)?;
+        let idx = self.slot_of_fd(fd).ok_or(ExofsError::ObjectNotFound)?;
+        let canon_idx = self.canonical_slot_of_index(idx)?;
         let mut entry = self.slots[canon_idx];
         entry.fd = fd;
+        entry.owner_uid = self.slots[idx].owner_uid;
         Ok(entry)
     }
 
@@ -195,7 +199,7 @@ impl ObjectFdTableInner {
     pub fn set_status_flags(&mut self, fd: u32, flags: u32) -> ExofsResult<u32> {
         let idx = self.canonical_slot_of_fd(fd)?;
         let access_mode = self.slots[idx].flags & 0x0003;
-        let mutable_mask = open_flags::O_APPEND;
+        let mutable_mask = open_flags::O_APPEND | open_flags::O_NONBLOCK;
         let retained = self.slots[idx].flags & !(mutable_mask | 0x0003);
         let updated = retained | access_mode | (flags & mutable_mask);
         self.slots[idx].flags = updated;
@@ -204,6 +208,13 @@ impl ObjectFdTableInner {
 
     /// Duplique un fd (nouveau descripteur partageant le même état).
     pub fn dup_fd(&mut self, fd: u32) -> ExofsResult<u32> {
+        let idx = self.slot_of_fd(fd).ok_or(ExofsError::ObjectNotFound)?;
+        let slot_owner = self.slots[idx].owner_uid;
+        self.dup_fd_with_owner(fd, slot_owner)
+    }
+
+    /// Duplique un fd en attribuant explicitement `owner_uid` au nouveau slot.
+    pub fn dup_fd_with_owner(&mut self, fd: u32, owner_uid: u64) -> ExofsResult<u32> {
         let canon_idx = self.canonical_slot_of_fd(fd)?;
         let new_idx = self.find_free_slot().ok_or(ExofsError::NoSpace)?;
         let new_fd = FD_RESERVED.saturating_add(new_idx as u32);
@@ -212,6 +223,7 @@ impl ObjectFdTableInner {
         duplicate.fd = new_fd;
         duplicate.shared_fd = self.slots[canon_idx].fd;
         duplicate.ref_count = 0;
+        duplicate.owner_uid = owner_uid;
         self.slots[new_idx] = duplicate;
         self.slots[canon_idx].ref_count = self.slots[canon_idx].ref_count.saturating_add(1);
         self.open_count = self.open_count.saturating_add(1);
@@ -228,7 +240,9 @@ impl ObjectFdTableInner {
             return Ok(newfd);
         }
 
-        let canon_idx = self.canonical_slot_of_fd(oldfd)?;
+        let old_idx = self.slot_of_fd(oldfd).ok_or(ExofsError::ObjectNotFound)?;
+        let slot_owner = self.slots[old_idx].owner_uid;
+        let canon_idx = self.canonical_slot_of_index(old_idx)?;
         if let Some(existing_idx) = self.slot_of_fd(newfd) {
             let existing_canon = self.canonical_slot_of_index(existing_idx)?;
             if existing_canon == canon_idx {
@@ -246,6 +260,7 @@ impl ObjectFdTableInner {
         duplicate.fd = newfd;
         duplicate.shared_fd = self.slots[canon_idx].fd;
         duplicate.ref_count = 0;
+        duplicate.owner_uid = slot_owner;
         self.slots[new_idx] = duplicate;
         self.slots[canon_idx].ref_count = self.slots[canon_idx].ref_count.saturating_add(1);
         self.open_count = self.open_count.saturating_add(1);

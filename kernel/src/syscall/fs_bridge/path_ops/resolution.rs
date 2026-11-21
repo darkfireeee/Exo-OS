@@ -130,12 +130,89 @@ pub fn ensure_directory_exists(path: &[u8]) -> Result<(), FsBridgeError> {
         return ensure_root_directory();
     }
 
-    let blob_id = blob_id_for_path(path)?;
-    if blob_is_directory_by_id(&blob_id) {
-        Ok(())
-    } else {
-        Err(FsBridgeError::NotDir)
+    match path_entry(path) {
+        Ok((blob_id, kind)) => {
+            if kind == PATH_INDEX_KIND_DIR || blob_is_directory_by_id(&blob_id) {
+                Ok(())
+            } else {
+                Err(FsBridgeError::NotDir)
+            }
+        }
+        Err(err) => Err(err),
     }
+}
+
+/// Allocates a `BlobId` for a newly created regular file/symlink/FIFO.
+/// If the default path-derived `BlobId` is still referenced by open descriptors
+/// (POSIX deferred unlink), derives a collision-free unique `BlobId` so the new
+/// file does not alias the still-open unlinked blob.
+#[inline]
+pub fn allocate_fresh_file_blob(normalized_path: &[u8]) -> Result<BlobId, FsBridgeError> {
+    let base = blob_id_for_path(normalized_path)?;
+    if crate::fs::exofs::syscall::object_fd::OBJECT_TABLE.open_count_for(&base) == 0
+        && !is_deferred_unlink(&base)
+    {
+        return Ok(base);
+    }
+    loop {
+        let gen = NEXT_UNLINK_GEN.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        let mut key = Vec::new();
+        key.try_reserve(normalized_path.len() + 16)
+            .map_err(|_| FsBridgeError::NoMemory)?;
+        key.extend_from_slice(normalized_path);
+        key.extend_from_slice(b"\0gen:");
+        key.extend_from_slice(&gen.to_le_bytes());
+        let candidate = BlobId::from_bytes_blake3(&key);
+        if crate::fs::exofs::syscall::object_fd::OBJECT_TABLE.open_count_for(&candidate) == 0
+            && !is_deferred_unlink(&candidate)
+            && !BLOB_CACHE.contains(&candidate)
+        {
+            return Ok(candidate);
+        }
+    }
+}
+
+/// Resolves a `(dirfd, path)` pair per POSIX `*at` semantics:
+/// - `AT_FDCWD` or absolute `path`: returns `path` as-is.
+/// - `dirfd >= 0` + relative `path`: resolves directory path from `dirfd` and joins.
+#[inline]
+pub fn resolve_dirfd_path(
+    dirfd: i32,
+    path: &[u8],
+    pid: u32,
+) -> Result<Vec<u8>, FsBridgeError> {
+    if dirfd == AT_FDCWD || path.starts_with(b"/") {
+        let mut out = Vec::new();
+        out.try_reserve(path.len())
+            .map_err(|_| FsBridgeError::NoMemory)?;
+        out.extend_from_slice(path);
+        return Ok(out);
+    }
+    if dirfd < 0 {
+        return Err(FsBridgeError::BadFd);
+    }
+    let resolved = resolve_fd(pid, dirfd as u32)?;
+    if is_tty_handle(resolved.handle) {
+        return Err(FsBridgeError::NotDir);
+    }
+    let entry = crate::fs::exofs::syscall::object_fd::OBJECT_TABLE
+        .get(resolved.handle)
+        .map_err(exofs_to_bridge_error)?;
+    if !blob_is_directory_by_id(&entry.blob_id) {
+        return Err(FsBridgeError::NotDir);
+    }
+    let base = crate::syscall::fs_bridge::cwd::dir_path_for_blob(&entry.blob_id)
+        .ok_or(FsBridgeError::NotFound)?;
+    let mut joined = Vec::new();
+    joined
+        .try_reserve(base.len() + 1 + path.len())
+        .map_err(|_| FsBridgeError::NoMemory)?;
+    joined.extend_from_slice(&base);
+    if !joined.ends_with(b"/") {
+        joined.push(b'/');
+    }
+    joined.extend_from_slice(path);
+    Ok(joined)
 }
 
 #[inline]
@@ -256,13 +333,13 @@ pub fn blob_is_directory(data: &[u8]) -> bool {
 pub fn blob_is_directory_by_id(blob_id: &BlobId) -> bool {
     let header_len = size_of::<PathIndexHeader>();
     if let Ok(prefix) = BLOB_CACHE.read_at(blob_id, 0, header_len) {
-        if prefix.len() == header_len {
-            return blob_is_directory(&prefix);
-        }
+        return prefix.len() == header_len && blob_is_directory(&prefix);
     }
     if let Ok(Some(data)) = object_store::load_blob_data_if_available(blob_id) {
         let is_dir = blob_is_directory(&data);
-        let _ = BLOB_CACHE.insert(*blob_id, data);
+        if !BLOB_CACHE.contains(blob_id) {
+            let _ = BLOB_CACHE.insert(*blob_id, data);
+        }
         return is_dir;
     }
     false

@@ -160,7 +160,14 @@ pub fn handle_page_fault<A: FaultAllocator>(ctx: &FaultContext, alloc: &A) -> Fa
                 };
             }
         }
-        FaultCause::Read => {} // Always OK if the VMA is present
+        FaultCause::Read => {
+            if !vma.flags.contains(VmaFlags::READ) {
+                FAULT_STATS.protection.fetch_add(1, Ordering::Relaxed);
+                return FaultResult::Segfault {
+                    addr: ctx.fault_addr,
+                };
+            }
+        }
     }
 
     if ctx.present {
@@ -171,7 +178,9 @@ pub fn handle_page_fault<A: FaultAllocator>(ctx: &FaultContext, alloc: &A) -> Fa
         VirtAddr::new(ctx.fault_addr.as_u64() & !(crate::memory::core::PAGE_SIZE as u64 - 1));
     let raw_pte = alloc.read_pte_raw(page_addr);
 
-    if crate::memory::integrity::guard_pages::is_guard_pte(raw_pte) {
+    if crate::memory::integrity::guard_pages::is_guard_pte(raw_pte)
+        || crate::memory::virt::page_table::PageTableEntry::from_raw(raw_pte).is_prot_none()
+    {
         FAULT_STATS.protection.fetch_add(1, Ordering::Relaxed);
         return FaultResult::Segfault {
             addr: ctx.fault_addr,
@@ -237,5 +246,117 @@ pub trait FaultAllocator: Sync {
         _new: u64,
     ) -> Result<(), u64> {
         Err(self.read_pte_raw(virt))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::memory::core::{Frame, PhysAddr};
+    use crate::memory::integrity::guard_pages::GUARD_PTE_VALUE;
+    use core::sync::atomic::AtomicUsize;
+
+    struct MockFaultAllocator {
+        pte_raw: AtomicU64,
+        alloc_calls: AtomicUsize,
+    }
+
+    impl MockFaultAllocator {
+        fn new(pte_raw: u64) -> Self {
+            Self {
+                pte_raw: AtomicU64::new(pte_raw),
+                alloc_calls: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl FaultAllocator for MockFaultAllocator {
+        fn alloc_zeroed(&self) -> Result<Frame, AllocError> {
+            self.alloc_calls.fetch_add(1, Ordering::Relaxed);
+            Ok(Frame::containing(PhysAddr::new(0x10_000)))
+        }
+
+        fn alloc_nonzeroed(&self) -> Result<Frame, AllocError> {
+            self.alloc_calls.fetch_add(1, Ordering::Relaxed);
+            Ok(Frame::containing(PhysAddr::new(0x10_000)))
+        }
+
+        fn free_frame(&self, _f: Frame) {}
+
+        fn map_page(&self, _virt: VirtAddr, _frame: Frame, _flags: PageFlags) -> Result<(), AllocError> {
+            Ok(())
+        }
+
+        fn remap_flags(&self, _virt: VirtAddr, _flags: PageFlags) -> Result<(), AllocError> {
+            Ok(())
+        }
+
+        fn translate(&self, _virt: VirtAddr) -> Option<PhysAddr> {
+            None
+        }
+
+        fn read_pte_raw(&self, _virt: VirtAddr) -> u64 {
+            self.pte_raw.load(Ordering::Acquire)
+        }
+    }
+
+    #[test]
+    fn prot_none_vma_faults_return_segfault_for_all_causes() {
+        let vaddr = VirtAddr::new(0x4000_0000);
+        let vma = crate::memory::virt::vma::VmaDescriptor::new(
+            vaddr,
+            VirtAddr::new(0x4000_1000),
+            VmaFlags::ANONYMOUS,
+            PageFlags::PROT_NONE | PageFlags::USER | PageFlags::NO_EXECUTE,
+            VmaBacking::Anonymous,
+        );
+        let pte = PageTableEntry::from_page_flags(
+            Frame::containing(PhysAddr::new(0x20_000)),
+            PageFlags::PROT_NONE | PageFlags::USER | PageFlags::NO_EXECUTE,
+        );
+        let alloc = MockFaultAllocator::new(pte.raw());
+
+        for present in [false, true] {
+            for cause in [FaultCause::Read, FaultCause::Write, FaultCause::Execute] {
+                let ctx = FaultContext::new(vaddr, cause, false)
+                    .with_present(present)
+                    .with_vma(&vma as *const _);
+                let res = handle_page_fault(&ctx, &alloc);
+                assert!(
+                    matches!(res, FaultResult::Segfault { addr } if addr == vaddr),
+                    "expected Segfault for cause={cause:?}, present={present}, got {res:?}"
+                );
+            }
+        }
+        assert_eq!(alloc.alloc_calls.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn prot_none_pte_and_guard_pte_never_trigger_demand_paging() {
+        let vaddr = VirtAddr::new(0x4000_2000);
+        let vma = crate::memory::virt::vma::VmaDescriptor::new(
+            vaddr,
+            VirtAddr::new(0x4000_4000),
+            VmaFlags::ANONYMOUS | VmaFlags::READ | VmaFlags::WRITE,
+            PageFlags::PRESENT | PageFlags::USER | PageFlags::WRITABLE | PageFlags::NO_EXECUTE,
+            VmaBacking::Anonymous,
+        );
+        let prot_none_raw = PageTableEntry::from_page_flags(
+            Frame::containing(PhysAddr::new(0x30_000)),
+            PageFlags::PROT_NONE | PageFlags::USER | PageFlags::NO_EXECUTE,
+        )
+        .raw();
+
+        for raw in [prot_none_raw, GUARD_PTE_VALUE] {
+            let alloc = MockFaultAllocator::new(raw);
+            for cause in [FaultCause::Read, FaultCause::Write] {
+                let ctx = FaultContext::new(vaddr, cause, false)
+                    .with_present(false)
+                    .with_vma(&vma as *const _);
+                let res = handle_page_fault(&ctx, &alloc);
+                assert!(matches!(res, FaultResult::Segfault { addr } if addr == vaddr));
+            }
+            assert_eq!(alloc.alloc_calls.load(Ordering::Relaxed), 0);
+        }
     }
 }

@@ -353,13 +353,32 @@ pub fn run_external(line: &[u8], state: &mut ShellState) -> Result<(), ()> {
         return Err(());
     };
 
-    let mut pwd_env = [0u8; PATH_MAX + 5];
-    pwd_env[..4].copy_from_slice(b"PWD=");
+    let mut env_storage: std::vec::Vec<std::vec::Vec<u8>> = std::vec::Vec::new();
     let cwd = state.cwd();
     let cwd_len = cwd.len().min(PATH_MAX);
-    pwd_env[4..4 + cwd_len].copy_from_slice(&cwd[..cwd_len]);
-    pwd_env[4 + cwd_len] = 0;
-    let envp = [pwd_env.as_ptr() as u64, 0u64];
+    let mut pwd_entry = std::vec::Vec::with_capacity(5 + cwd_len);
+    pwd_entry.extend_from_slice(b"PWD=");
+    pwd_entry.extend_from_slice(&cwd[..cwd_len]);
+    pwd_entry.push(0);
+    env_storage.push(pwd_entry);
+    for (k, v) in std::env::vars_os() {
+        let kb = k.as_encoded_bytes();
+        if kb.is_empty() || kb == b"PWD" {
+            continue;
+        }
+        let vb = v.as_encoded_bytes();
+        let mut entry = std::vec::Vec::with_capacity(kb.len() + 1 + vb.len() + 1);
+        entry.extend_from_slice(kb);
+        entry.push(b'=');
+        entry.extend_from_slice(vb);
+        entry.push(0);
+        env_storage.push(entry);
+    }
+    let mut envp: std::vec::Vec<u64> = std::vec::Vec::with_capacity(env_storage.len() + 1);
+    for entry in &env_storage {
+        envp.push(entry.as_ptr() as u64);
+    }
+    envp.push(0u64);
 
     exo_libc::fflush_all();
     let child = match std::os::exo::fork() {

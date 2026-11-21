@@ -206,6 +206,11 @@ pub struct UContextRegs {
 /// # Safety
 /// `uc_ptr` must be a valid userspace address (verified internally).
 pub fn verify_and_extract_uc(uc_ptr: u64) -> Option<UContextRegs> {
+    extract_and_sanitize_sigframe(uc_ptr).map(|(regs, _)| regs)
+}
+
+/// Verifies magic SIG-13 in constant time and extracts both general registers and FPU bytes.
+pub fn extract_and_sanitize_sigframe(uc_ptr: u64) -> Option<(UContextRegs, [u8; 512])> {
     const USER_SPACE_TOP: u64 = 0x0000_7FFF_FFFF_F000;
     if !(0x1000..USER_SPACE_TOP).contains(&uc_ptr) {
         return None;
@@ -237,15 +242,15 @@ pub fn verify_and_extract_uc(uc_ptr: u64) -> Option<UContextRegs> {
         gs_base: uc.uc_gs_base,
         signal_mask: uc.uc_sigmask,
     };
+    let fpregs = uc._fpregs_mem;
 
     // Constant-time magic verification: XOR then test (no predictor leak).
-    // SIG-13 / SIG-14: if magic is wrong, sigreturn is rejected.
     let magic_diff = uc.uc_flags ^ (SIGNAL_FRAME_MAGIC as u64);
     if magic_diff != 0 {
         return None;
     }
 
-    Some(regs)
+    Some((regs, fpregs))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -279,7 +284,7 @@ fn save_fpu_regs_to_bytes() -> [u8; 512] {
 
 #[cfg(target_os = "none")]
 #[inline]
-fn restore_fpu_regs_from_bytes(src: &[u8; 512]) {
+pub fn restore_fpu_regs_from_bytes(src: &[u8; 512]) {
     let mut fp = AlignedFpRegs(*src);
     // Mask reserved bits of MXCSR (bytes 24..28) to prohibit forged #GP(0) from Ring 3.
     let mxcsr = u32::from_le_bytes([fp.0[24], fp.0[25], fp.0[26], fp.0[27]]) & 0x0000_FFBF;
@@ -296,7 +301,7 @@ fn restore_fpu_regs_from_bytes(src: &[u8; 512]) {
 
 #[cfg(not(target_os = "none"))]
 #[inline]
-fn restore_fpu_regs_from_bytes(_src: &[u8; 512]) {}
+pub fn restore_fpu_regs_from_bytes(_src: &[u8; 512]) {}
 
 /// Constructs a SignalFrame on user stack and redirects RIP to
 /// handler. Called from delivery::deliver_one() only.
@@ -315,27 +320,40 @@ pub fn setup_signal_frame(
     action: &SigAction,
 ) {
     const USER_SPACE_TOP: u64 = 0x0000_7FFF_FFFF_F000;
-    let sig_tcb_opt = crate::process::core::registry::PROCESS_REGISTRY
-        .find_by_pid(crate::process::core::pid::Pid(thread.sched_tcb.pid.0))
-        .and_then(|pcb| {
-            let vaddr = pcb.signal_tcb_vaddr.load(Ordering::Acquire);
-            if (0x1000..USER_SPACE_TOP).contains(&vaddr) {
-                Some(unsafe { &*(vaddr as *const super::tcb::SignalTcb) })
-            } else {
-                None
-            }
-        });
+    let pcb_opt = crate::process::core::registry::PROCESS_REGISTRY
+        .find_by_pid(crate::process::core::pid::Pid(thread.sched_tcb.pid.0));
+    let is_single_threaded = pcb_opt
+        .as_ref()
+        .is_none_or(|pcb| pcb.thread_count.load(Ordering::Acquire) <= 1);
+    let sig_tcb_opt = pcb_opt.and_then(|pcb| {
+        let vaddr = pcb.signal_tcb_vaddr.load(Ordering::Acquire);
+        if (0x1000..USER_SPACE_TOP).contains(&vaddr) {
+            Some(unsafe { &*(vaddr as *const super::tcb::SignalTcb) })
+        } else {
+            None
+        }
+    });
 
-    // Choose target stack.
+    // Choose target stack (per-thread sigaltstack; stay on current stack if already on altstack).
+    let alt_base = thread.addresses.sigaltstack_base;
+    let alt_size = thread.addresses.sigaltstack_size;
+    let alt_top = thread.addresses.sigaltstack_top();
+    let on_altstack =
+        alt_top != 0 && frame.user_rsp >= alt_base && frame.user_rsp <= alt_top;
     let target_rsp = if action.flags & SigAction::SA_ONSTACK != 0 {
-        let alt = thread.addresses.sigaltstack_top();
-        if alt != 0 {
-            alt
-        } else if let Some(stcb) = sig_tcb_opt {
-            if stcb.has_altstack() {
-                stcb.altstack_sp
-                    .load(Ordering::Acquire)
-                    .saturating_add(stcb.altstack_size.load(Ordering::Acquire))
+        if on_altstack {
+            frame.user_rsp
+        } else if alt_top != 0 {
+            alt_top
+        } else if is_single_threaded {
+            if let Some(stcb) = sig_tcb_opt {
+                if stcb.has_altstack() {
+                    stcb.altstack_sp
+                        .load(Ordering::Acquire)
+                        .saturating_add(stcb.altstack_size.load(Ordering::Acquire))
+                } else {
+                    frame.user_rsp
+                }
             } else {
                 frame.user_rsp
             }
@@ -346,34 +364,21 @@ pub fn setup_signal_frame(
         frame.user_rsp
     };
 
-    // Align according to SysV: (rsp - frame_size) & ~0xF, then -8 (for red zone).
-    //
-    // FIX-SIGALIGN (bisect OOM/GP run 12/13): this comment already described the
-    // proper algorithm, but the "-8" was never applied — `sig_rsp` came out
-    // ≡0 mod16 and was used as is as entry RSP for handler
-    // (`frame.user_rsp = sig_rsp` below). But SysV ABI expects RSP ≡8 mod16
-    // at entry of function reached "as if by call" (what a signal handler
-    // simulates): compiler of user binary emits a
-    // prologue assuming this invariant (e.g. `movaps [rsp+N], xmmM`, which
-    // is only correct 16-aligned). With previous calculation, this prologue saw
-    // incorrect RSP by 8 bytes and `movaps` raised #GP — exactly the crash
-    // observed (`<GP1 ... rsp=...b8>`, rsp mod16=8 instead of 0 expected by
-    // compiled code once its own push was done).
     let frame_size = core::mem::size_of::<SignalFrame>() as u64;
     let sig_rsp = ((target_rsp - frame_size) & !0xFu64) - 8;
 
-    // Build frame contents in a temporary buffer.
-    // Ensure that sig_rsp is a valid user address (< USER_SPACE_TOP).
     if !(0x1000..USER_SPACE_TOP).contains(&sig_rsp) {
-        // Corrupted user stack: force SIGSEGV.
-        // In prod, set thread to SIGSEGV and proceed to Core action.
         return;
     }
 
-    let old_mask = {
-        let k_mask = thread.sched_tcb.signal_mask.load(Ordering::Acquire);
-        let u_mask = sig_tcb_opt.map(|s| s.get_mask()).unwrap_or(0);
-        k_mask | u_mask
+    let old_mask = thread.sched_tcb.signal_mask.load(Ordering::Acquire);
+
+    let uc_stack_flags = if alt_top == 0 {
+        SS_DISABLE
+    } else if on_altstack || (action.flags & SigAction::SA_ONSTACK) != 0 {
+        SS_ONSTACK
+    } else {
+        0
     };
 
     // Build SignalFrame.
@@ -384,20 +389,12 @@ pub fn setup_signal_frame(
         puc: sig_rsp + offset_of_uc(),
         info: SigInfoC::from_queue(info),
         uc: UContext {
-            // SIG-13: store SIGNAL_FRAME_MAGIC in uc_flags for verification on sigreturn.
             uc_flags: SIGNAL_FRAME_MAGIC as u64,
             uc_link: 0,
             uc_stack: SigAltStack {
-                ss_sp: thread
-                    .addresses
-                    .sigaltstack_top()
-                    .saturating_sub(thread.addresses.stack_size),
-                ss_flags: if action.flags & SigAction::SA_ONSTACK != 0 {
-                    SS_ONSTACK
-                } else {
-                    SS_DISABLE
-                },
-                ss_size: thread.addresses.stack_size,
+                ss_sp: alt_base,
+                ss_flags: uc_stack_flags,
+                ss_size: alt_size,
                 _pad: 0,
             },
             uc_mcontext: GRegs {
@@ -429,16 +426,15 @@ pub fn setup_signal_frame(
     };
 
     // Write frame onto user stack.
-    // SAFETY: sig_rsp points to validated userspace address above; write = POSIX signal delivery.
     unsafe {
         let ptr = sig_rsp as *mut SignalFrame;
         ptr.write(sig_frame);
     }
 
-    // Update mask during handler execution (SA_NODEFER excludes sig_n).
+    // Update per-thread mask during handler execution (SA_NODEFER excludes sig_n).
     let mut new_mask = old_mask | action.mask;
     if action.flags & SigAction::SA_NODEFER == 0 {
-        new_mask |= 1u64 << (sig_n - 1); // block current signal
+        new_mask |= 1u64 << (sig_n - 1);
     }
     use super::mask::SigMask;
     let safe_new_mask = SigMask::from(new_mask).0;
@@ -446,15 +442,17 @@ pub fn setup_signal_frame(
         .sched_tcb
         .signal_mask
         .store(safe_new_mask, Ordering::Release);
-    if let Some(stcb) = sig_tcb_opt {
-        stcb.set_mask(safe_new_mask);
-        stcb.in_handler.store(1, Ordering::Release);
+    thread.in_handler.store(1, Ordering::Release);
+    if is_single_threaded {
+        if let Some(stcb) = sig_tcb_opt {
+            stcb.set_mask(safe_new_mask);
+            stcb.in_handler.store(1, Ordering::Release);
+        }
     }
 
     // Redirect syscall return to handler.
     frame.user_rip = action.handler;
     frame.user_rsp = sig_rsp;
-    // SA_SIGINFO convention (rdi = signo, rsi = *siginfo, rdx = *ucontext).
     frame.user_rdi = sig_n as u64;
     frame.user_rsi = sig_rsp + offset_of_info();
     frame.user_rdx = sig_rsp + offset_of_uc();
@@ -532,21 +530,24 @@ pub fn restore_signal_frame(thread: &mut ProcessThread, frame: &mut SyscallFrame
     thread.sched_tcb.user_gs_base = gs_base_saved;
     thread.tls_gs_base.store(fs_base_saved, Ordering::Release);
 
-    // Restore saved signal mask (without SIGKILL/SIGSTOP).
+    // Restore saved signal mask and handler state on per-thread structures.
     use super::mask::SigMask;
     let restored_mask = SigMask::from(mask_saved);
     thread
         .sched_tcb
         .signal_mask
         .store(restored_mask.0, Ordering::Release);
+    thread.in_handler.store(0, Ordering::Release);
     if let Some(pcb) = crate::process::core::registry::PROCESS_REGISTRY
         .find_by_pid(crate::process::core::pid::Pid(thread.sched_tcb.pid.0))
     {
-        let vaddr = pcb.signal_tcb_vaddr.load(Ordering::Acquire);
-        if (0x1000..USER_SPACE_TOP).contains(&vaddr) {
-            let stcb = unsafe { &*(vaddr as *const super::tcb::SignalTcb) };
-            stcb.set_mask(restored_mask.0);
-            stcb.in_handler.store(0, Ordering::Release);
+        if pcb.thread_count.load(Ordering::Acquire) <= 1 {
+            let vaddr = pcb.signal_tcb_vaddr.load(Ordering::Acquire);
+            if (0x1000..USER_SPACE_TOP).contains(&vaddr) {
+                let stcb = unsafe { &*(vaddr as *const super::tcb::SignalTcb) };
+                stcb.set_mask(restored_mask.0);
+                stcb.in_handler.store(0, Ordering::Release);
+            }
         }
     }
 }

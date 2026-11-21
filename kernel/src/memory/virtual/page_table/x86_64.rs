@@ -39,6 +39,7 @@ impl PageTableEntry {
     pub const FLAG_GLOBAL: u64 = 1 << 8;
     pub const FLAG_COW: u64 = 1 << 9; // Available to OS
     pub const FLAG_PINNED: u64 = 1 << 10; // Available to OS
+    pub const FLAG_PROT_NONE: u64 = 1 << 55; // Available to OS (PROT_NONE with P=0)
     pub const FLAG_NO_EXECUTE: u64 = 1 << 63;
 
     /// Physical address bitmask.
@@ -90,6 +91,10 @@ impl PageTableEntry {
         self.0 & Self::FLAG_PINNED != 0
     }
     #[inline]
+    pub fn is_prot_none(self) -> bool {
+        !self.is_present() && (self.0 & Self::FLAG_PROT_NONE != 0)
+    }
+    #[inline]
     pub fn is_accessed(self) -> bool {
         self.0 & Self::FLAG_ACCESSED != 0
     }
@@ -108,6 +113,16 @@ impl PageTableEntry {
     #[inline]
     pub fn frame(self) -> Option<Frame> {
         if self.is_present() {
+            Some(Frame::containing(self.phys_addr()))
+        } else {
+            None
+        }
+    }
+
+    /// Physical frame pointed to by this entry when present or `PROT_NONE`.
+    #[inline]
+    pub fn frame_or_prot_none(self) -> Option<Frame> {
+        if self.is_present() || self.is_prot_none() {
             Some(Frame::containing(self.phys_addr()))
         } else {
             None
@@ -168,6 +183,9 @@ impl PageTableEntry {
         if flags.contains(PageFlags::HUGE_PAGE) {
             raw |= Self::FLAG_HUGE_PAGE;
         }
+        if flags.contains(PageFlags::PROT_NONE) {
+            raw |= Self::FLAG_PROT_NONE;
+        }
         PageTableEntry(raw)
     }
 
@@ -214,6 +232,9 @@ impl PageTableEntry {
         }
         if self.0 & Self::FLAG_PINNED != 0 {
             f = f.set(PageFlags::PINNED);
+        }
+        if self.0 & Self::FLAG_PROT_NONE != 0 {
+            f = f.set(PageFlags::PROT_NONE);
         }
         f
     }

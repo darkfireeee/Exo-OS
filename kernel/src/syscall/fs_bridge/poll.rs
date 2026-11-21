@@ -22,6 +22,142 @@ use crate::fs::exofs::syscall::object_store;
 use crate::ipc::core::types::{EndpointId, IpcError};
 use crate::syscall::validation::{copy_from_user, copy_to_user, read_user_typed, write_user_typed};
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Event-driven I/O wait hub & per-blob edge generation tracker
+// ─────────────────────────────────────────────────────────────────────────────
+
+static IO_WAIT_GEN: AtomicU64 = AtomicU64::new(0);
+static IO_WAITERS: Mutex<Vec<u64>> = Mutex::new(Vec::new());
+static BLOB_EDGE_SEQ: Mutex<Vec<(BlobId, u64)>> = Mutex::new(Vec::new());
+
+/// Monotonic generation counter incremented on every kernel I/O readiness transition.
+#[inline]
+pub fn io_wait_gen() -> u64 {
+    IO_WAIT_GEN.load(Ordering::Acquire)
+}
+
+/// Returns the current edge generation for `blob_id` (used by `EPOLLET`).
+pub fn blob_edge_gen(blob_id: BlobId) -> u64 {
+    BLOB_EDGE_SEQ
+        .lock()
+        .iter()
+        .find(|(b, _)| *b == blob_id)
+        .map(|(_, seq)| *seq)
+        .unwrap_or(0)
+}
+
+/// Removes edge-tracking state when a blob is fully closed and reclaimed.
+pub fn remove_blob_edge(blob_id: &BlobId) {
+    let mut seqs = BLOB_EDGE_SEQ.lock();
+    if let Some(pos) = seqs.iter().position(|(b, _)| b == blob_id) {
+        seqs.swap_remove(pos);
+    }
+}
+
+/// Notifies all threads sleeping on `epoll_wait`, `poll`, `select`, pipes, or sockets.
+/// If `blob_id` is provided, also advances its per-blob edge sequence for `EPOLLET`.
+pub fn notify_io_event(blob_id: Option<BlobId>) {
+    if let Some(b) = blob_id {
+        let mut seqs = BLOB_EDGE_SEQ.lock();
+        if let Some((_, seq)) = seqs.iter_mut().find(|(id, _)| *id == b) {
+            *seq = seq.wrapping_add(1).max(1);
+        } else if seqs.try_reserve(1).is_ok() {
+            seqs.push((b, 1));
+        }
+    }
+    IO_WAIT_GEN.fetch_add(1, Ordering::AcqRel);
+    let to_wake: Vec<u64> = {
+        let mut waiters = IO_WAITERS.lock();
+        let mut out = Vec::new();
+        core::mem::swap(&mut out, &mut *waiters);
+        out
+    };
+    for tcb_raw in to_wake {
+        crate::scheduler::timer::sleep::wake_sleeping_tcb(tcb_raw);
+    }
+}
+
+/// Event-driven wait on `IO_WAIT_HUB` until `IO_WAIT_GEN` changes from `observed_gen`,
+/// `deadline_ns` expires, or a signal interrupts the thread (`FsBridgeError::Interrupted`).
+///
+/// Returns `Ok(true)` if woken or before deadline, `Ok(false)` if `deadline_ns` has elapsed.
+pub fn wait_for_io_event(
+    observed_gen: u64,
+    deadline_ns: Option<u64>,
+    max_slice_ns: u64,
+) -> Result<bool, FsBridgeError> {
+    if let Some(dl) = deadline_ns {
+        if crate::scheduler::timer::clock::monotonic_ns() >= dl {
+            return Ok(false);
+        }
+    }
+    let tcb = crate::scheduler::core::switch::current_thread_raw() as u64;
+    if tcb == 0 {
+        let slice = match deadline_ns {
+            Some(dl) => {
+                let now = crate::scheduler::timer::clock::monotonic_ns();
+                if now >= dl {
+                    return Ok(false);
+                }
+                (dl - now).min(max_slice_ns.min(1_000_000))
+            }
+            None => max_slice_ns.min(1_000_000),
+        };
+        if !crate::scheduler::timer::sleep::sleep_ns(slice) {
+            return Err(FsBridgeError::Interrupted);
+        }
+        return Ok(deadline_ns
+            .map(|dl| crate::scheduler::timer::clock::monotonic_ns() < dl)
+            .unwrap_or(true));
+    }
+
+    {
+        let mut waiters = IO_WAITERS.lock();
+        if IO_WAIT_GEN.load(Ordering::Acquire) != observed_gen {
+            return Ok(true);
+        }
+        if !waiters.contains(&tcb) {
+            if waiters.try_reserve(1).is_ok() {
+                waiters.push(tcb);
+            }
+        }
+    }
+
+    let slice = match deadline_ns {
+        Some(dl) => {
+            let now = crate::scheduler::timer::clock::monotonic_ns();
+            if now >= dl {
+                let mut waiters = IO_WAITERS.lock();
+                if let Some(pos) = waiters.iter().position(|&w| w == tcb) {
+                    waiters.swap_remove(pos);
+                }
+                return Ok(false);
+            }
+            (dl - now).min(max_slice_ns)
+        }
+        None => max_slice_ns,
+    };
+
+    let ok = crate::scheduler::timer::sleep::sleep_ns_if(slice, || {
+        IO_WAIT_GEN.load(Ordering::Acquire) == observed_gen
+    });
+
+    {
+        let mut waiters = IO_WAITERS.lock();
+        if let Some(pos) = waiters.iter().position(|&w| w == tcb) {
+            waiters.swap_remove(pos);
+        }
+    }
+
+    if !ok {
+        return Err(FsBridgeError::Interrupted);
+    }
+
+    Ok(deadline_ns
+        .map(|dl| crate::scheduler::timer::clock::monotonic_ns() < dl)
+        .unwrap_or(true))
+}
+
 #[inline]
 pub fn set_fdset_bit(set: &mut [u8], fd: usize, present: bool) {
     let byte = fd / 8;
@@ -42,6 +178,27 @@ pub fn fdset_bit(set: &[u8], fd: usize) -> bool {
     let byte = fd / 8;
     let bit = fd % 8;
     byte < set.len() && (set[byte] & (1u8 << bit)) != 0
+}
+
+fn fd_needs_external_poll_slice(fd: u32, pid: u32) -> bool {
+    let Ok(res) = resolve_fd(pid, fd) else {
+        return false;
+    };
+    if is_tty_handle(res.handle) {
+        return true;
+    }
+    OBJECT_TABLE
+        .get(res.handle)
+        .map(|entry| is_pseudo_blob(&entry.blob_id, PSEUDO_NET_SOCKET_TAG))
+        .unwrap_or(false)
+}
+
+fn fd_blob_id(fd: u32, pid: u32) -> Option<BlobId> {
+    let res = resolve_fd(pid, fd).ok()?;
+    if is_tty_handle(res.handle) {
+        return None;
+    }
+    OBJECT_TABLE.get(res.handle).ok().map(|e| e.blob_id)
 }
 
 /// `epoll_create1(flags)`.
@@ -79,6 +236,9 @@ struct EpollWatch {
     fd: u32,
     events: u32,
     data: u64,
+    armed: bool,
+    last_mask: u32,
+    last_edge_gen: u64,
 }
 
 static EPOLL_WATCHES: Mutex<Vec<EpollWatch>> = Mutex::new(Vec::new());
@@ -107,32 +267,37 @@ pub fn remove_epoll_watches_for_blob(ep_blob: BlobId) {
     }
 }
 
+#[cfg(test)]
+pub fn epoll_watch_count() -> usize {
+    EPOLL_WATCHES.lock().len()
+}
+
 pub fn epoll_has_ready_watch(ep_blob: BlobId, pid: u32) -> bool {
     let snapshot: Vec<EpollWatch> = {
         let watches = EPOLL_WATCHES.lock();
         let mut out = Vec::new();
         for w in watches.iter() {
-            if w.pid == pid && w.ep_blob == ep_blob && out.try_reserve(1).is_ok() {
+            if w.pid == pid && w.ep_blob == ep_blob && w.armed && out.try_reserve(1).is_ok() {
                 out.push(*w);
             }
         }
         out
     };
     for w in snapshot {
-        if let Ok((readable, writable)) = fd_readiness(w.fd, pid) {
-            if (readable && (w.events & 0x001) != 0) || (writable && (w.events & 0x004) != 0) {
-                return true;
+        if let Ok(mask) = fd_readiness_mask(w.fd, pid) {
+            let interest = (w.events & (EPOLLIN | EPOLLOUT | EPOLLRDHUP)) | EPOLLERR | EPOLLHUP;
+            let active = mask & interest;
+            if active == 0 {
+                continue;
             }
-            if let Ok(res) = resolve_fd(pid, w.fd) {
-                if !is_tty_handle(res.handle) {
-                    if let Ok(entry) = OBJECT_TABLE.get(res.handle) {
-                        if is_pseudo_blob(&entry.blob_id, PSEUDO_SOCKET_TAG)
-                            && is_socket_peer_closed(entry.blob_id)
-                        {
-                            return true;
-                        }
-                    }
+            if (w.events & EPOLLET) != 0 {
+                let cur_edge = fd_blob_id(w.fd, pid).map(blob_edge_gen).unwrap_or(0);
+                let effective_last = w.last_mask & active;
+                if (active & !effective_last) != 0 || cur_edge != w.last_edge_gen {
+                    return true;
                 }
+            } else {
+                return true;
             }
         }
     }
@@ -187,6 +352,8 @@ pub fn fs_epoll_ctl(
                 return Err(FsBridgeError::Exists);
             }
             let ev = parsed_ev.ok_or(FsBridgeError::Invalid)?;
+            let ev_events = ev.events;
+            let ev_data = ev.data;
             watches
                 .try_reserve(1)
                 .map_err(|_| FsBridgeError::NoMemory)?;
@@ -194,15 +361,23 @@ pub fn fs_epoll_ctl(
                 pid,
                 ep_blob: ep_entry.blob_id,
                 fd,
-                events: ev.events,
-                data: ev.data,
+                events: ev_events,
+                data: ev_data,
+                armed: true,
+                last_mask: 0,
+                last_edge_gen: 0,
             });
         }
         EPOLL_CTL_MOD => {
             let pos = existing_pos.ok_or(FsBridgeError::NotFound)?;
             let ev = parsed_ev.ok_or(FsBridgeError::Invalid)?;
-            watches[pos].events = ev.events;
-            watches[pos].data = ev.data;
+            let ev_events = ev.events;
+            let ev_data = ev.data;
+            watches[pos].events = ev_events;
+            watches[pos].data = ev_data;
+            watches[pos].armed = true;
+            watches[pos].last_mask = 0;
+            watches[pos].last_edge_gen = 0;
         }
         EPOLL_CTL_DEL => {
             let pos = existing_pos.ok_or(FsBridgeError::NotFound)?;
@@ -210,6 +385,8 @@ pub fn fs_epoll_ctl(
         }
         _ => return Err(FsBridgeError::Invalid),
     }
+    drop(watches);
+    notify_io_event(Some(ep_entry.blob_id));
     Ok(0)
 }
 
@@ -220,6 +397,22 @@ pub fn fs_epoll_wait(
     events_ptr: u64,
     maxevents: i32,
     timeout: i32,
+    pid: u32,
+) -> Result<i64, FsBridgeError> {
+    let timeout_ns = if timeout < 0 {
+        None
+    } else {
+        Some((timeout as u64).saturating_mul(1_000_000))
+    };
+    fs_epoll_wait_ns(epfd, events_ptr, maxevents, timeout_ns, pid)
+}
+
+/// Nanosecond-precision `epoll_wait` / `epoll_pwait2` core.
+pub fn fs_epoll_wait_ns(
+    epfd: u32,
+    events_ptr: u64,
+    maxevents: i32,
+    timeout_ns: Option<u64>,
     pid: u32,
 ) -> Result<i64, FsBridgeError> {
     if !is_fs_ready() {
@@ -240,21 +433,20 @@ pub fn fs_epoll_wait(
         return Err(FsBridgeError::Invalid);
     }
 
-    let start_ns = crate::scheduler::timer::clock::monotonic_ns();
-    let timeout_ns = if timeout > 0 {
-        (timeout as u64).saturating_mul(1_000_000)
-    } else {
-        0
-    };
+    let deadline_ns = timeout_ns.map(|ns| {
+        crate::scheduler::timer::clock::monotonic_ns().saturating_add(ns)
+    });
 
     loop {
+        let gen = io_wait_gen();
         let snapshot: Vec<EpollWatch> = {
             let watches = EPOLL_WATCHES.lock();
             let mut out = Vec::new();
             for w in watches.iter() {
                 if w.pid == pid && w.ep_blob == ep_entry.blob_id {
-                    let _ = out.try_reserve(1);
-                    out.push(*w);
+                    if out.try_reserve(1).is_ok() {
+                        out.push(*w);
+                    }
                 }
             }
             out
@@ -262,31 +454,42 @@ pub fn fs_epoll_wait(
 
         let mut ready = 0usize;
         let max_out = (maxevents as usize).min(1024);
+        let mut has_external = false;
+        let mut updates: Vec<(u32, bool, u32, u64)> = Vec::new();
+
         for w in snapshot {
-            if ready >= max_out {
-                break;
+            if !w.armed {
+                continue;
             }
-            match fd_readiness(w.fd, pid) {
-                Ok((readable, writable)) => {
-                    let mut revents = 0u32;
-                    if readable && (w.events & 0x001) != 0 {
-                        revents |= 0x001;
-                    }
-                    if writable && (w.events & 0x004) != 0 {
-                        revents |= 0x004;
-                    }
-                    if let Ok(res) = resolve_fd(pid, w.fd) {
-                        if !is_tty_handle(res.handle) {
-                            if let Ok(entry) = OBJECT_TABLE.get(res.handle) {
-                                if is_pseudo_blob(&entry.blob_id, PSEUDO_SOCKET_TAG)
-                                    && is_socket_peer_closed(entry.blob_id)
-                                {
-                                    revents |= 0x010; // EPOLLHUP
-                                }
+            if fd_needs_external_poll_slice(w.fd, pid) {
+                has_external = true;
+            }
+            match fd_readiness_mask(w.fd, pid) {
+                Ok(mask) => {
+                    let interest =
+                        (w.events & (EPOLLIN | EPOLLOUT | EPOLLRDHUP)) | EPOLLERR | EPOLLHUP;
+                    let active = mask & interest;
+                    let is_et = (w.events & EPOLLET) != 0;
+                    let cur_edge = if is_et {
+                        fd_blob_id(w.fd, pid).map(blob_edge_gen).unwrap_or(0)
+                    } else {
+                        0
+                    };
+
+                    if is_et {
+                        // Drop bits that are no longer asserted so future 0->1 transitions trigger.
+                        let cleared_last = w.last_mask & active;
+                        let edge_fire = active != 0
+                            && ((active & !cleared_last) != 0 || cur_edge != w.last_edge_gen);
+                        if !edge_fire {
+                            if cleared_last != w.last_mask && updates.try_reserve(1).is_ok() {
+                                updates.push((w.fd, w.armed, cleared_last, w.last_edge_gen));
                             }
+                            continue;
                         }
                     }
-                    if revents != 0 {
+
+                    if active != 0 && ready < max_out {
                         let addr = events_ptr
                             .checked_add(
                                 (ready as u64).saturating_mul(size_of::<LinuxEpollEvent>() as u64),
@@ -295,12 +498,19 @@ pub fn fs_epoll_wait(
                         write_user_typed(
                             addr,
                             LinuxEpollEvent {
-                                events: revents,
+                                events: active,
                                 data: w.data,
                             },
                         )
                         .map_err(|_| FsBridgeError::Fault)?;
                         ready += 1;
+
+                        let next_armed = (w.events & EPOLLONESHOT) == 0;
+                        let next_last = if is_et { active } else { 0 };
+                        let next_edge = if is_et { cur_edge } else { 0 };
+                        if (!next_armed || is_et) && updates.try_reserve(1).is_ok() {
+                            updates.push((w.fd, next_armed, next_last, next_edge));
+                        }
                     }
                 }
                 Err(_) => {
@@ -315,17 +525,31 @@ pub fn fs_epoll_wait(
             }
         }
 
-        if ready > 0 || timeout == 0 {
-            return Ok(ready as i64);
-        }
-        if timeout > 0 {
-            let elapsed = crate::scheduler::timer::clock::monotonic_ns().saturating_sub(start_ns);
-            if elapsed >= timeout_ns {
-                return Ok(0);
+        if !updates.is_empty() {
+            let mut watches = EPOLL_WATCHES.lock();
+            for (u_fd, u_armed, u_last, u_edge) in updates {
+                if let Some(w) = watches
+                    .iter_mut()
+                    .find(|x| x.pid == pid && x.ep_blob == ep_entry.blob_id && x.fd == u_fd)
+                {
+                    w.armed = u_armed;
+                    w.last_mask = u_last;
+                    w.last_edge_gen = u_edge;
+                }
             }
         }
-        if !crate::scheduler::timer::sleep::sleep_ns(1_000_000) {
-            return Err(FsBridgeError::Interrupted);
+
+        if ready > 0 || timeout_ns == Some(0) {
+            return Ok(ready as i64);
+        }
+
+        let max_slice = if has_external {
+            2_000_000 // 2 ms for Ring 1 network_server / TTY descriptors
+        } else {
+            1_000_000_000 // 1 s — purely event-driven wakeup via notify_io_event
+        };
+        if !wait_for_io_event(gen, deadline_ns, max_slice)? {
+            return Ok(0);
         }
     }
 }
@@ -361,6 +585,21 @@ pub fn fs_inotify_init1(flags: u32, pid: u32) -> Result<i64, FsBridgeError> {
 /// `poll(fds, nfds, timeout)`.
 #[inline]
 pub fn fs_poll(fds_ptr: u64, nfds: usize, timeout: i32, pid: u32) -> Result<i64, FsBridgeError> {
+    let timeout_ns = if timeout < 0 {
+        None
+    } else {
+        Some((timeout as u64).saturating_mul(1_000_000))
+    };
+    fs_poll_ns(fds_ptr, nfds, timeout_ns, pid)
+}
+
+/// Nanosecond-precision `poll` / `ppoll` core.
+pub fn fs_poll_ns(
+    fds_ptr: u64,
+    nfds: usize,
+    timeout_ns: Option<u64>,
+    pid: u32,
+) -> Result<i64, FsBridgeError> {
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);
     }
@@ -368,35 +607,33 @@ pub fn fs_poll(fds_ptr: u64, nfds: usize, timeout: i32, pid: u32) -> Result<i64,
         return Err(FsBridgeError::Invalid);
     }
     if nfds == 0 {
-        if timeout == 0 {
-            return Ok(0);
-        }
-        if timeout > 0 {
-            let wait_ns = (timeout as u64).saturating_mul(1_000_000);
-            if !crate::scheduler::timer::sleep::sleep_ns(wait_ns) {
-                return Err(FsBridgeError::Interrupted);
+        match timeout_ns {
+            Some(0) => return Ok(0),
+            Some(ns) => {
+                if !crate::scheduler::timer::sleep::sleep_ns(ns) {
+                    return Err(FsBridgeError::Interrupted);
+                }
+                return Ok(0);
             }
-            return Ok(0);
-        }
-        loop {
-            if !crate::scheduler::timer::sleep::sleep_ns(100_000_000) {
-                return Err(FsBridgeError::Interrupted);
-            }
+            None => loop {
+                if !crate::scheduler::timer::sleep::sleep_ns(1_000_000_000) {
+                    return Err(FsBridgeError::Interrupted);
+                }
+            },
         }
     }
     if fds_ptr == 0 {
         return Err(FsBridgeError::Fault);
     }
 
-    let start_ns = crate::scheduler::timer::clock::monotonic_ns();
-    let timeout_ns = if timeout > 0 {
-        (timeout as u64).saturating_mul(1_000_000)
-    } else {
-        0
-    };
+    let deadline_ns = timeout_ns.map(|ns| {
+        crate::scheduler::timer::clock::monotonic_ns().saturating_add(ns)
+    });
 
     loop {
+        let gen = io_wait_gen();
         let mut ready = 0i64;
+        let mut has_external = false;
         let mut i = 0usize;
         while i < nfds {
             let addr = fds_ptr
@@ -405,24 +642,25 @@ pub fn fs_poll(fds_ptr: u64, nfds: usize, timeout: i32, pid: u32) -> Result<i64,
             let mut pfd = read_user_typed::<LinuxPollFd>(addr).map_err(|_| FsBridgeError::Fault)?;
             pfd.revents = 0;
             if pfd.fd >= 0 {
-                match fd_readiness(pfd.fd as u32, pid) {
-                    Ok((readable, writable)) => {
-                        if readable && (pfd.events & POLLIN) != 0 {
+                if fd_needs_external_poll_slice(pfd.fd as u32, pid) {
+                    has_external = true;
+                }
+                match fd_readiness_mask(pfd.fd as u32, pid) {
+                    Ok(mask) => {
+                        if (mask & EPOLLIN) != 0 && (pfd.events & POLLIN) != 0 {
                             pfd.revents |= POLLIN;
                         }
-                        if writable && (pfd.events & POLLOUT) != 0 {
+                        if (mask & EPOLLOUT) != 0 && (pfd.events & POLLOUT) != 0 {
                             pfd.revents |= POLLOUT;
                         }
-                        if let Ok(res) = resolve_fd(pid, pfd.fd as u32) {
-                            if !is_tty_handle(res.handle) {
-                                if let Ok(entry) = OBJECT_TABLE.get(res.handle) {
-                                    if is_pseudo_blob(&entry.blob_id, PSEUDO_SOCKET_TAG)
-                                        && is_socket_peer_closed(entry.blob_id)
-                                    {
-                                        pfd.revents |= POLLHUP;
-                                    }
-                                }
-                            }
+                        if (mask & EPOLLRDHUP) != 0 && (pfd.events & POLLRDHUP) != 0 {
+                            pfd.revents |= POLLRDHUP;
+                        }
+                        if (mask & EPOLLERR) != 0 {
+                            pfd.revents |= POLLERR;
+                        }
+                        if (mask & EPOLLHUP) != 0 {
+                            pfd.revents |= POLLHUP;
                         }
                     }
                     Err(_) => {
@@ -436,17 +674,16 @@ pub fn fs_poll(fds_ptr: u64, nfds: usize, timeout: i32, pid: u32) -> Result<i64,
             write_user_typed(addr, pfd).map_err(|_| FsBridgeError::Fault)?;
             i += 1;
         }
-        if ready > 0 || timeout == 0 {
+        if ready > 0 || timeout_ns == Some(0) {
             return Ok(ready);
         }
-        if timeout > 0 {
-            let elapsed = crate::scheduler::timer::clock::monotonic_ns().saturating_sub(start_ns);
-            if elapsed >= timeout_ns {
-                return Ok(0);
-            }
-        }
-        if !crate::scheduler::timer::sleep::sleep_ns(1_000_000) {
-            return Err(FsBridgeError::Interrupted);
+        let max_slice = if has_external {
+            2_000_000
+        } else {
+            1_000_000_000
+        };
+        if !wait_for_io_event(gen, deadline_ns, max_slice)? {
+            return Ok(0);
         }
     }
 }
@@ -461,12 +698,6 @@ pub fn fs_select(
     timeout_ptr: u64,
     pid: u32,
 ) -> Result<i64, FsBridgeError> {
-    if !is_fs_ready() {
-        return Err(FsBridgeError::NotReady);
-    }
-    if nfds > 1024 {
-        return Err(FsBridgeError::Invalid);
-    }
     let timeout_ns: Option<u64> = if timeout_ptr == 0 {
         None
     } else {
@@ -480,6 +711,24 @@ pub fn fs_select(
                 .saturating_add((tv.tv_usec as u64).saturating_mul(1_000)),
         )
     };
+    fs_select_ns(nfds, readfds_ptr, writefds_ptr, exceptfds_ptr, timeout_ns, pid)
+}
+
+/// Nanosecond-precision `select` / `pselect6` core.
+pub fn fs_select_ns(
+    nfds: usize,
+    readfds_ptr: u64,
+    writefds_ptr: u64,
+    exceptfds_ptr: u64,
+    timeout_ns: Option<u64>,
+    pid: u32,
+) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    if nfds > 1024 {
+        return Err(FsBridgeError::Invalid);
+    }
     let bytes = nfds.saturating_add(7) / 8;
     let mut orig_read = vec_with_zeroes(bytes)?;
     let mut orig_write = vec_with_zeroes(bytes)?;
@@ -498,27 +747,40 @@ pub fn fs_select(
             .map_err(|_| FsBridgeError::Fault)?;
     }
 
-    let start_ns = crate::scheduler::timer::clock::monotonic_ns();
+    let deadline_ns = timeout_ns.map(|ns| {
+        crate::scheduler::timer::clock::monotonic_ns().saturating_add(ns)
+    });
     let mut out_read = vec_with_zeroes(bytes)?;
     let mut out_write = vec_with_zeroes(bytes)?;
-    let out_except = vec_with_zeroes(bytes)?;
+    let mut out_except = vec_with_zeroes(bytes)?;
 
     let ready = loop {
+        let gen = io_wait_gen();
         out_read.fill(0);
         out_write.fill(0);
+        out_except.fill(0);
         let mut ready = 0i64;
+        let mut has_external = false;
         let mut fd = 0usize;
         while fd < nfds {
             let check_r = readfds_ptr != 0 && fdset_bit(&orig_read, fd);
             let check_w = writefds_ptr != 0 && fdset_bit(&orig_write, fd);
-            if check_r || check_w {
-                let (readable, writable) = fd_readiness(fd as u32, pid).unwrap_or((false, false));
-                if check_r && readable {
+            let check_e = exceptfds_ptr != 0 && fdset_bit(&orig_except, fd);
+            if check_r || check_w || check_e {
+                if fd_needs_external_poll_slice(fd as u32, pid) {
+                    has_external = true;
+                }
+                let mask = fd_readiness_mask(fd as u32, pid)?;
+                if check_r && (mask & (EPOLLIN | EPOLLHUP | EPOLLERR)) != 0 {
                     set_fdset_bit(&mut out_read, fd, true);
                     ready += 1;
                 }
-                if check_w && writable {
+                if check_w && (mask & (EPOLLOUT | EPOLLERR)) != 0 {
                     set_fdset_bit(&mut out_write, fd, true);
+                    ready += 1;
+                }
+                if check_e && (mask & EPOLLERR) != 0 {
+                    set_fdset_bit(&mut out_except, fd, true);
                     ready += 1;
                 }
             }
@@ -527,17 +789,13 @@ pub fn fs_select(
         if ready > 0 || timeout_ns == Some(0) {
             break ready;
         }
-        if let Some(limit) = timeout_ns {
-            let elapsed = crate::scheduler::timer::clock::monotonic_ns().saturating_sub(start_ns);
-            if elapsed >= limit {
-                break 0;
-            }
-            let remaining = limit - elapsed;
-            if !crate::scheduler::timer::sleep::sleep_ns(remaining.min(1_000_000)) {
-                return Err(FsBridgeError::Interrupted);
-            }
-        } else if !crate::scheduler::timer::sleep::sleep_ns(1_000_000) {
-            return Err(FsBridgeError::Interrupted);
+        let max_slice = if has_external {
+            2_000_000
+        } else {
+            1_000_000_000
+        };
+        if !wait_for_io_event(gen, deadline_ns, max_slice)? {
+            break 0;
         }
     };
 
@@ -555,4 +813,3 @@ pub fn fs_select(
     }
     Ok(ready)
 }
-

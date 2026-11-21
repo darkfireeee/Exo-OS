@@ -326,6 +326,38 @@ pub mod net {
         Ok(addr)
     }
 
+    fn sockaddr_un_to_socket_addr(raw: &syscall::SockAddrUn, len: usize) -> SocketAddr {
+        if len <= 2 || raw.sun_family != AF_UNIX as u16 {
+            return SocketAddr { path: None };
+        }
+        let path_len = (len - 2).min(raw.sun_path.len());
+        let bytes = &raw.sun_path[..path_len];
+        if bytes.is_empty() || bytes[0] == 0 {
+            return SocketAddr { path: None };
+        }
+        let nul = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+        if nul == 0 {
+            SocketAddr { path: None }
+        } else {
+            SocketAddr {
+                path: Some(PathBuf::from(crate::ffi::OsStr::from_bytes(&bytes[..nul]))),
+            }
+        }
+    }
+
+    fn unix_take_error(fd: RawFd) -> io::Result<Option<io::Error>> {
+        let mut buf = [0u8; 4];
+        let n = syscall::getsockopt(fd, syscall::SOL_SOCKET, syscall::SO_ERROR, &mut buf)
+            .map_err(map_exo_err)?;
+        if n >= 4 {
+            let err = i32::from_ne_bytes(buf);
+            if err != 0 {
+                return Ok(Some(io::Error::from_raw_os_error(err)));
+            }
+        }
+        Ok(None)
+    }
+
     #[derive(Clone)]
     #[stable(feature = "unix_socket", since = "1.10.0")]
     pub struct SocketAddr {
@@ -430,14 +462,18 @@ pub mod net {
 
         #[stable(feature = "unix_socket", since = "1.10.0")]
         pub fn local_addr(&self) -> io::Result<SocketAddr> {
-            Ok(SocketAddr { path: None })
+            let mut raw = syscall::SockAddrUn::default();
+            let len = syscall::getsockname_unix(self.fd.as_raw_fd(), &mut raw)
+                .map_err(map_exo_err)?;
+            Ok(sockaddr_un_to_socket_addr(&raw, len))
         }
 
         #[stable(feature = "unix_socket", since = "1.10.0")]
         pub fn peer_addr(&self) -> io::Result<SocketAddr> {
-            Ok(SocketAddr {
-                path: self.peer_path.clone(),
-            })
+            let mut raw = syscall::SockAddrUn::default();
+            let len = syscall::getpeername_unix(self.fd.as_raw_fd(), &mut raw)
+                .map_err(map_exo_err)?;
+            Ok(sockaddr_un_to_socket_addr(&raw, len))
         }
 
         #[stable(feature = "unix_socket", since = "1.10.0")]
@@ -497,19 +533,7 @@ pub mod net {
 
         #[stable(feature = "unix_socket", since = "1.10.0")]
         pub fn take_error(&self) -> io::Result<Option<io::Error>> {
-            let mut buf = [0u8; 4];
-            if let Ok(4) = syscall::getsockopt(
-                self.fd.as_raw_fd(),
-                syscall::SOL_SOCKET,
-                syscall::SO_ERROR,
-                &mut buf,
-            ) {
-                let err = i32::from_ne_bytes(buf);
-                if err != 0 {
-                    return Ok(Some(io::Error::from_raw_os_error(err)));
-                }
-            }
-            Ok(None)
+            unix_take_error(self.fd.as_raw_fd())
         }
 
         #[stable(feature = "unix_socket", since = "1.10.0")]
@@ -643,9 +667,13 @@ pub mod net {
 
         #[stable(feature = "unix_socket", since = "1.10.0")]
         pub fn accept(&self) -> io::Result<(UnixStream, SocketAddr)> {
-            let cfd = syscall::accept_unix(self.fd.as_raw_fd()).map_err(map_exo_err)?;
-            let stream = unsafe { UnixStream::from_raw_fd(cfd) };
-            Ok((stream, SocketAddr { path: None }))
+            let mut raw = syscall::SockAddrUn::default();
+            let (cfd, len) = syscall::accept_unix_addr(self.fd.as_raw_fd(), &mut raw)
+                .map_err(map_exo_err)?;
+            let addr = sockaddr_un_to_socket_addr(&raw, len);
+            let mut stream = unsafe { UnixStream::from_raw_fd(cfd) };
+            stream.peer_path = addr.path.clone();
+            Ok((stream, addr))
         }
 
         #[stable(feature = "unix_socket", since = "1.10.0")]
@@ -658,9 +686,10 @@ pub mod net {
 
         #[stable(feature = "unix_socket", since = "1.10.0")]
         pub fn local_addr(&self) -> io::Result<SocketAddr> {
-            Ok(SocketAddr {
-                path: self.path.clone(),
-            })
+            let mut raw = syscall::SockAddrUn::default();
+            let len = syscall::getsockname_unix(self.fd.as_raw_fd(), &mut raw)
+                .map_err(map_exo_err)?;
+            Ok(sockaddr_un_to_socket_addr(&raw, len))
         }
 
         #[stable(feature = "unix_socket", since = "1.10.0")]
@@ -670,7 +699,7 @@ pub mod net {
 
         #[stable(feature = "unix_socket", since = "1.10.0")]
         pub fn take_error(&self) -> io::Result<Option<io::Error>> {
-            Ok(None)
+            unix_take_error(self.fd.as_raw_fd())
         }
 
         #[stable(feature = "unix_socket", since = "1.10.0")]
@@ -787,6 +816,51 @@ pub mod net {
         #[stable(feature = "unix_socket", since = "1.10.0")]
         pub fn recv(&self, buf: &mut [u8]) -> io::Result<usize> {
             self.0.read(buf)
+        }
+
+        #[stable(feature = "unix_socket", since = "1.10.0")]
+        pub fn send_to<P: AsRef<Path>>(&self, buf: &[u8], path: P) -> io::Result<usize> {
+            let addr = sockaddr_un_from_path(path.as_ref())?;
+            syscall::sendto_unix(self.0.as_raw_fd(), buf, 0, Some(&addr)).map_err(map_exo_err)
+        }
+
+        #[stable(feature = "unix_socket", since = "1.10.0")]
+        pub fn recv_from(&self, buf: &mut [u8]) -> io::Result<(usize, SocketAddr)> {
+            let mut raw = syscall::SockAddrUn::default();
+            let (n, len) = syscall::recvfrom_unix(self.0.as_raw_fd(), buf, 0, Some(&mut raw))
+                .map_err(map_exo_err)?;
+            Ok((n, sockaddr_un_to_socket_addr(&raw, len)))
+        }
+
+        #[stable(feature = "unix_socket", since = "1.10.0")]
+        pub fn shutdown(&self, how: Shutdown) -> io::Result<()> {
+            let how = match how {
+                Shutdown::Read => 0,
+                Shutdown::Write => 1,
+                Shutdown::Both => 2,
+            };
+            syscall::shutdown(self.0.as_raw_fd(), how).map_err(map_exo_err)
+        }
+
+        #[stable(feature = "unix_socket", since = "1.10.0")]
+        pub fn local_addr(&self) -> io::Result<SocketAddr> {
+            let mut raw = syscall::SockAddrUn::default();
+            let len = syscall::getsockname_unix(self.0.as_raw_fd(), &mut raw)
+                .map_err(map_exo_err)?;
+            Ok(sockaddr_un_to_socket_addr(&raw, len))
+        }
+
+        #[stable(feature = "unix_socket", since = "1.10.0")]
+        pub fn peer_addr(&self) -> io::Result<SocketAddr> {
+            let mut raw = syscall::SockAddrUn::default();
+            let len = syscall::getpeername_unix(self.0.as_raw_fd(), &mut raw)
+                .map_err(map_exo_err)?;
+            Ok(sockaddr_un_to_socket_addr(&raw, len))
+        }
+
+        #[stable(feature = "unix_socket", since = "1.10.0")]
+        pub fn take_error(&self) -> io::Result<Option<io::Error>> {
+            unix_take_error(self.0.as_raw_fd())
         }
 
         #[stable(feature = "unix_socket", since = "1.10.0")]

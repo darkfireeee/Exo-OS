@@ -52,6 +52,7 @@ pub const SYS_EXECVE: u64 = 59;
 pub const SYS_EXIT: u64 = 60;
 pub const SYS_WAIT4: u64 = 61;
 pub const SYS_KILL: u64 = 62;
+pub const SYS_UNAME: u64 = 63;
 pub const SYS_FCNTL: u64 = 72;
 pub const SYS_FLOCK: u64 = 73;
 pub const SYS_FSYNC: u64 = 74;
@@ -459,6 +460,23 @@ pub struct SockAddrIn {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SockAddrIn6 {
+    pub sin6_family: u16,
+    pub sin6_port: u16,
+    pub sin6_flowinfo: u32,
+    pub sin6_addr: [u8; 16],
+    pub sin6_scope_id: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RawTimeval {
+    pub tv_sec: i64,
+    pub tv_usec: i64,
+}
+
+#[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct SockAddrUn {
     pub sun_family: u16,
@@ -538,6 +556,24 @@ pub fn pwrite64(fd: i32, buf: &[u8], offset: u64) -> SysResult<usize> {
 }
 
 #[inline]
+pub unsafe fn readv(fd: i32, iov_ptr: *const u8, iovcnt: usize) -> SysResult<usize> {
+    let ret = unsafe { syscall3(SYS_READV, fd as u64, iov_ptr as u64, iovcnt as u64) };
+    decode_ret(ret)
+}
+
+#[inline]
+pub unsafe fn writev(fd: i32, iov_ptr: *const u8, iovcnt: usize) -> SysResult<usize> {
+    let ret = unsafe { syscall3(SYS_WRITEV, fd as u64, iov_ptr as u64, iovcnt as u64) };
+    decode_ret(ret)
+}
+
+#[inline]
+pub fn exofs_fdatasync(fd: i32) -> SysResult<()> {
+    let ret = unsafe { syscall1(SYS_FDATASYNC, fd as u64) };
+    decode_ret(ret).map(|_| ())
+}
+
+#[inline]
 pub fn close(fd: i32) -> SysResult<()> {
     let ret = unsafe { syscall1(SYS_CLOSE, fd as u64) };
     decode_ret(ret).map(|_| ())
@@ -578,26 +614,7 @@ pub fn exofs_open(path_cstr: &[u8], flags: u32, mode: u32) -> SysResult<i32> {
     if path_cstr.is_empty() {
         return Err(SysError::ENOENT);
     }
-    let cap_rights = if (flags & (EXOFS_OPEN_WRONLY | EXOFS_OPEN_RDWR | EXOFS_OPEN_CREATE)) != 0 {
-        EXOFS_RIGHT_READ_WRITE
-    } else {
-        EXOFS_RIGHT_READ_ONLY
-    };
     let ret = unsafe {
-        syscall6(
-            SYS_EXOFS_OPEN_BY_PATH,
-            path_cstr.as_ptr() as u64,
-            flags as u64,
-            mode as u64,
-            0,
-            0,
-            cap_rights as u64,
-        )
-    };
-    if ret >= 0 {
-        return Ok(ret as i32);
-    }
-    let ret2 = unsafe {
         syscall3(
             SYS_OPEN,
             path_cstr.as_ptr() as u64,
@@ -605,7 +622,7 @@ pub fn exofs_open(path_cstr: &[u8], flags: u32, mode: u32) -> SysResult<i32> {
             mode as u64,
         )
     };
-    decode_ret(ret2).map(|fd| fd as i32)
+    decode_ret(ret).map(|fd| fd as i32)
 }
 
 #[repr(C)]
@@ -693,7 +710,7 @@ pub fn exofs_stat_with_atime(path_cstr: &[u8], follow_symlinks: bool) -> SysResu
         return Ok(linux_stat_to_exofs(&ls));
     }
     let err = decode_ret(ret).unwrap_err();
-    if !follow_symlinks {
+    if !follow_symlinks || err != SysError::ENOSYS {
         return Err(err);
     }
     let trimmed_len = path_cstr
@@ -748,15 +765,6 @@ pub fn exofs_lstat(path_cstr: &[u8]) -> SysResult<ExoFsFileStat> {
 
 #[inline]
 pub fn exofs_fstat_with_atime(fd: i32) -> SysResult<(ExoFsFileStat, u64)> {
-    let mut st = ExoFsFileStat::default();
-    let ret_obj = unsafe {
-        syscall3(
-            SYS_EXOFS_OBJECT_STAT,
-            fd as u64,
-            &mut st as *mut ExoFsFileStat as u64,
-            EXOFS_STAT_LEN as u64,
-        )
-    };
     let mut ls = LinuxStatAbi::default();
     let ret_posix = unsafe {
         syscall2(
@@ -765,22 +773,21 @@ pub fn exofs_fstat_with_atime(fd: i32) -> SysResult<(ExoFsFileStat, u64)> {
             &mut ls as *mut LinuxStatAbi as u64,
         )
     };
-    match (decode_ret(ret_obj), decode_ret(ret_posix)) {
-        (Ok(_), Ok(_)) => {
-            let (pst, atime_ns) = linux_stat_to_exofs(&ls);
-            st.mode = pst.mode;
-            st.size = pst.size;
-            if pst.mtime_ns != 0 {
-                st.mtime_ns = pst.mtime_ns;
-            }
-            if pst.ctime_ns != 0 {
-                st.ctime_ns = pst.ctime_ns;
-            }
-            Ok((st, atime_ns))
+    match decode_ret(ret_posix) {
+        Ok(_) => Ok(linux_stat_to_exofs(&ls)),
+        Err(SysError::ENOSYS) => {
+            let mut st = ExoFsFileStat::default();
+            let ret_obj = unsafe {
+                syscall3(
+                    SYS_EXOFS_OBJECT_STAT,
+                    fd as u64,
+                    &mut st as *mut ExoFsFileStat as u64,
+                    EXOFS_STAT_LEN as u64,
+                )
+            };
+            decode_ret(ret_obj).map(|_| (st, st.mtime_ns))
         }
-        (Ok(_), Err(_)) => Ok((st, st.mtime_ns)),
-        (Err(_), Ok(_)) => Ok(linux_stat_to_exofs(&ls)),
-        (Err(e), Err(_)) => Err(e),
+        Err(e) => Err(e),
     }
 }
 
@@ -903,7 +910,8 @@ pub fn exofs_readdir(fd: i32, entries: &mut [ExoDirEntry]) -> SysResult<usize> {
     let mut buf = [0u8; 4096];
     let n = match getdents64(fd, &mut buf) {
         Ok(n) => n,
-        Err(_) => exofs_readdir_raw(fd, &mut buf)?,
+        Err(SysError::ENOSYS) => exofs_readdir_raw(fd, &mut buf)?,
+        Err(e) => return Err(e),
     };
     let mut count = 0usize;
     let mut offset = 0usize;
@@ -1006,23 +1014,75 @@ pub fn exit_thread(code: i32) -> ! {
 }
 
 #[inline]
+pub fn set_tid_address(tidptr: usize) -> u32 {
+    let ret = unsafe { syscall1(SYS_SET_TID_ADDRESS, tidptr as u64) };
+    ret as u32
+}
+
+#[cfg(target_arch = "x86_64")]
+#[unsafe(naked)]
+unsafe extern "C" fn clone_thread_asm(
+    _flags: u64,
+    _child_stack_frame: usize,
+    _ptid: *mut u32,
+    _ctid: *mut u32,
+    _tls: usize,
+) -> i64 {
+    core::arch::naked_asm!(
+        "mov r10, rcx",
+        "mov eax, {sys_clone}",
+        "syscall",
+        "test rax, rax",
+        "jz 2f",
+        "ret",
+        "2:",
+        "pop rdi",
+        "pop rax",
+        "xor rbp, rbp",
+        "call rax",
+        "ud2",
+        sys_clone = const SYS_CLONE,
+    );
+}
+
+/// Spawns a thread via standard Linux 5-argument `SYS_CLONE`.
+/// `child_stack_frame` must point to `[arg: u64, entry_fn: u64]` below the 16-byte aligned stack top.
+#[inline]
+pub unsafe fn clone_thread_raw(
+    flags: u64,
+    child_stack_frame: usize,
+    ptid: *mut u32,
+    ctid: *mut u32,
+    tls: usize,
+) -> SysResult<u32> {
+    #[cfg(target_arch = "x86_64")]
+    {
+        let ret = unsafe { clone_thread_asm(flags, child_stack_frame, ptid, ctid, tls) };
+        decode_ret(ret).map(|tid| tid as u32)
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        let _ = (flags, child_stack_frame, ptid, ctid, tls);
+        Err(SysError::ENOSYS)
+    }
+}
+
+#[inline]
 pub unsafe fn clone_raw(
     flags: u64,
     child_stack: usize,
     ptid: *mut u32,
     ctid: *mut u32,
     tls: usize,
-    entry_fn: u64,
 ) -> SysResult<u32> {
     let ret = unsafe {
-        syscall6(
+        syscall5(
             SYS_CLONE,
             flags,
             child_stack as u64,
             ptid as u64,
             ctid as u64,
             tls as u64,
-            entry_fn,
         )
     };
     decode_ret(ret).map(|tid| tid as u32)
@@ -1198,6 +1258,26 @@ pub fn kill(pid: i32, sig: i32) -> SysResult<()> {
 }
 
 #[inline]
+pub fn rt_sigprocmask(
+    how: i32,
+    set: Option<&u64>,
+    oldset: Option<&mut u64>,
+) -> SysResult<()> {
+    let set_ptr = set.map(|s| s as *const u64 as u64).unwrap_or(0);
+    let old_ptr = oldset.map(|s| s as *mut u64 as u64).unwrap_or(0);
+    let ret = unsafe {
+        syscall4(
+            SYS_RT_SIGPROCMASK,
+            how as i64 as u64,
+            set_ptr,
+            old_ptr,
+            core::mem::size_of::<u64>() as u64,
+        )
+    };
+    decode_ret(ret).map(|_| ())
+}
+
+#[inline]
 pub fn clock_gettime(clock_id: u64) -> SysResult<RawTimespec> {
     let mut ts = RawTimespec::default();
     let ret = unsafe {
@@ -1318,6 +1398,100 @@ pub fn bind_unix(fd: i32, addr: &SockAddrUn) -> SysResult<()> {
 pub fn accept_unix(fd: i32) -> SysResult<i32> {
     let ret = unsafe { syscall3(SYS_ACCEPT, fd as u64, 0, 0) };
     decode_ret(ret).map(|cfd| cfd as i32)
+}
+
+#[inline]
+pub fn accept_unix_addr(fd: i32, addr_out: &mut SockAddrUn) -> SysResult<(i32, usize)> {
+    let mut addrlen = core::mem::size_of::<SockAddrUn>() as u32;
+    let ret = unsafe {
+        syscall3(
+            SYS_ACCEPT,
+            fd as u64,
+            addr_out as *mut SockAddrUn as u64,
+            &mut addrlen as *mut u32 as u64,
+        )
+    };
+    decode_ret(ret).map(|cfd| (cfd as i32, addrlen as usize))
+}
+
+#[inline]
+pub fn getsockname_unix(fd: i32, addr: &mut SockAddrUn) -> SysResult<usize> {
+    let mut addrlen = core::mem::size_of::<SockAddrUn>() as u32;
+    let ret = unsafe {
+        syscall3(
+            SYS_GETSOCKNAME,
+            fd as u64,
+            addr as *mut SockAddrUn as u64,
+            &mut addrlen as *mut u32 as u64,
+        )
+    };
+    decode_ret(ret).map(|_| addrlen as usize)
+}
+
+#[inline]
+pub fn getpeername_unix(fd: i32, addr: &mut SockAddrUn) -> SysResult<usize> {
+    let mut addrlen = core::mem::size_of::<SockAddrUn>() as u32;
+    let ret = unsafe {
+        syscall3(
+            SYS_GETPEERNAME,
+            fd as u64,
+            addr as *mut SockAddrUn as u64,
+            &mut addrlen as *mut u32 as u64,
+        )
+    };
+    decode_ret(ret).map(|_| addrlen as usize)
+}
+
+#[inline]
+pub fn sendto_unix(fd: i32, buf: &[u8], flags: u32, dest: Option<&SockAddrUn>) -> SysResult<usize> {
+    let (addr_ptr, addr_len) = match dest {
+        Some(a) => (
+            a as *const SockAddrUn as u64,
+            core::mem::size_of::<SockAddrUn>() as u64,
+        ),
+        None => (0, 0),
+    };
+    let ret = unsafe {
+        syscall6(
+            SYS_SENDTO,
+            fd as u64,
+            buf.as_ptr() as u64,
+            buf.len() as u64,
+            flags as u64,
+            addr_ptr,
+            addr_len,
+        )
+    };
+    decode_ret(ret)
+}
+
+#[inline]
+pub fn recvfrom_unix(
+    fd: i32,
+    buf: &mut [u8],
+    flags: u32,
+    src_out: Option<&mut SockAddrUn>,
+) -> SysResult<(usize, usize)> {
+    let mut addrlen = core::mem::size_of::<SockAddrUn>() as u32;
+    let (addr_ptr, len_ptr) = match src_out {
+        Some(a) => (
+            a as *mut SockAddrUn as u64,
+            &mut addrlen as *mut u32 as u64,
+        ),
+        None => (0, 0),
+    };
+    let ret = unsafe {
+        syscall6(
+            SYS_RECVFROM,
+            fd as u64,
+            buf.as_mut_ptr() as u64,
+            buf.len() as u64,
+            flags as u64,
+            addr_ptr,
+            len_ptr,
+        )
+    };
+    decode_ret(ret).map(|n| (n, addrlen as usize))
 }
 
 #[inline]

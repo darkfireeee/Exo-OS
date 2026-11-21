@@ -34,6 +34,10 @@ struct pthread {
 	/* Part 2 -- implementation details, non-ABI. */
 	int tid;
 	int errno_val;
+	void *exo_tls_end;
+	size_t exo_tls_len;
+	size_t exo_tcb_len;
+	void *exo_os_specific;
 	volatile int detach_state;
 	volatile int cancel;
 	volatile unsigned char canceldisable, cancelasync;

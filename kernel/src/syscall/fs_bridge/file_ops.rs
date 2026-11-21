@@ -197,8 +197,14 @@ pub fn fs_mmap_file(
     off: u64,
     pid: u32,
 ) -> Result<usize, crate::memory::virt::mmap::MmapError> {
-    use crate::memory::virt::mmap::{do_mmap, do_mmap_shared_frames, do_mprotect, MmapError};
+    use crate::memory::virt::mmap::{do_mmap, do_mmap_shared_frames, do_mprotect, do_munmap, MmapError};
 
+    if prot & !0x7 != 0 {
+        return Err(MmapError::InvalidAddress);
+    }
+    if (prot & 0x2) != 0 && (prot & 0x4) != 0 {
+        return Err(MmapError::PermissionDenied);
+    }
     if (off & 0xFFF) != 0 {
         return Err(MmapError::InvalidAddress);
     }
@@ -230,17 +236,25 @@ pub fn fs_mmap_file(
         return do_mmap_shared_frames(addr, len, prot, flags, &frames);
     }
 
-    // MAP_PRIVATE file-backed mapping: map anonymous pages and populate from file.
+    // MAP_PRIVATE file-backed mapping: map anonymous pages temporarily writable, populate from file,
+    // then apply strict requested protections (`PROT_NONE` / `PROT_READ` / `PROT_READ|PROT_EXEC`).
     sync_shared_frames_to_blob(&entry.blob_id);
+    let _ = ensure_blob_exists(entry.blob_id);
     let temp_prot = prot | 0x2; // Ensure writable during initial file copy
     let va = do_mmap(addr, len, temp_prot & 0x3, flags | 0x20, -1, 0)?;
     if let Ok(data) = BLOB_CACHE.read_at(&entry.blob_id, off as usize, len) {
         if !data.is_empty() {
-            let _ = copy_to_user(va as *mut u8, data.as_ptr(), data.len());
+            if copy_to_user(va as *mut u8, data.as_ptr(), data.len()).is_err() {
+                let _ = do_munmap(va as u64, len);
+                return Err(MmapError::InvalidAddress);
+            }
         }
     }
     if prot != (temp_prot & 0x3) {
-        let _ = do_mprotect(va as u64, len, prot);
+        if let Err(err) = do_mprotect(va as u64, len, prot) {
+            let _ = do_munmap(va as u64, len);
+            return Err(err);
+        }
     }
     Ok(va)
 }
@@ -368,7 +382,7 @@ pub fn fs_read(fd: u32, buf_ptr: u64, count: usize, pid: u32) -> Result<i64, FsB
     }
 
     if is_pseudo_blob(&entry.blob_id, PSEUDO_PIPE_TAG) {
-        let nonblock = (resolved.flags & O_NONBLOCK) != 0;
+        let nonblock = ((resolved.flags | entry.flags) & O_NONBLOCK) != 0;
         return read_pipe_to_user(entry.blob_id, buf_ptr, count, nonblock);
     }
 
@@ -384,8 +398,22 @@ pub fn fs_read(fd: u32, buf_ptr: u64, count: usize, pid: u32) -> Result<i64, FsB
     }
 
     if is_pseudo_blob(&entry.blob_id, PSEUDO_SOCKET_TAG) {
-        let nonblock = (resolved.flags & O_NONBLOCK) != 0;
+        let nonblock = ((resolved.flags | entry.flags) & O_NONBLOCK) != 0;
         return socket_read_to_user(entry.blob_id, buf_ptr, count, true, nonblock);
+    }
+
+    if is_pseudo_blob(&entry.blob_id, PSEUDO_NET_SOCKET_TAG) {
+        let nonblock = ((resolved.flags | entry.flags) & O_NONBLOCK) != 0;
+        let flags = if nonblock { 0x40 } else { 0 };
+        return crate::syscall::net_bridge::net_recvfrom_blob(
+            entry.blob_id,
+            buf_ptr,
+            count,
+            flags,
+            0,
+            0,
+        )
+        .map_err(errno_to_fs_error);
     }
 
     sync_shared_frames_to_blob(&entry.blob_id);
@@ -436,7 +464,7 @@ pub fn fs_write(fd: u32, buf_ptr: u64, count: usize, pid: u32) -> Result<i64, Fs
     }
 
     if is_pseudo_blob(&entry.blob_id, PSEUDO_PIPE_TAG) {
-        let nonblock = (resolved.flags & O_NONBLOCK) != 0;
+        let nonblock = ((resolved.flags | entry.flags) & O_NONBLOCK) != 0;
         let input = read_user_bytes(buf_ptr, count)?;
         return write_pipe_bytes(entry.blob_id, &input, nonblock, pid);
     }
@@ -449,12 +477,23 @@ pub fn fs_write(fd: u32, buf_ptr: u64, count: usize, pid: u32) -> Result<i64, Fs
     }
 
     if is_pseudo_blob(&entry.blob_id, PSEUDO_SOCKET_TAG) {
-        let peer = socket_peer_blob(entry.blob_id)?;
-        if peer == BlobId([0u8; 32]) {
-            return Err(FsBridgeError::NotConnected);
-        }
+        let nonblock = ((resolved.flags | entry.flags) & O_NONBLOCK) != 0;
         let input = read_user_bytes(buf_ptr, count)?;
-        return append_socket_payload(peer, &input);
+        return write_unix_socket_bytes(entry.blob_id, &input, 0, nonblock, pid);
+    }
+
+    if is_pseudo_blob(&entry.blob_id, PSEUDO_NET_SOCKET_TAG) {
+        let nonblock = ((resolved.flags | entry.flags) & O_NONBLOCK) != 0;
+        let flags = if nonblock { 0x40 } else { 0 };
+        return crate::syscall::net_bridge::net_sendto_blob(
+            entry.blob_id,
+            buf_ptr,
+            count,
+            flags,
+            0,
+            0,
+        )
+        .map_err(errno_to_fs_error);
     }
 
     let input = read_user_bytes(buf_ptr, count)?;
@@ -588,6 +627,7 @@ pub fn fs_lseek(fd: u32, offset: i64, whence: u32, pid: u32) -> Result<i64, FsBr
     let entry = OBJECT_TABLE.get(obj_fd).map_err(exofs_to_bridge_error)?;
     if is_pseudo_blob(&entry.blob_id, PSEUDO_PIPE_TAG)
         || is_pseudo_blob(&entry.blob_id, PSEUDO_SOCKET_TAG)
+        || is_pseudo_blob(&entry.blob_id, PSEUDO_NET_SOCKET_TAG)
         || is_pseudo_blob(&entry.blob_id, PSEUDO_EVENTFD_TAG)
         || is_pseudo_blob(&entry.blob_id, PSEUDO_INOTIFY_TAG)
     {
@@ -635,6 +675,7 @@ pub fn fs_ftruncate(fd: u32, length: u64, pid: u32) -> Result<i64, FsBridgeError
     }
     if is_pseudo_blob(&entry.blob_id, PSEUDO_PIPE_TAG)
         || is_pseudo_blob(&entry.blob_id, PSEUDO_SOCKET_TAG)
+        || is_pseudo_blob(&entry.blob_id, PSEUDO_NET_SOCKET_TAG)
         || is_pseudo_blob(&entry.blob_id, PSEUDO_EVENTFD_TAG)
         || is_pseudo_blob(&entry.blob_id, PSEUDO_INOTIFY_TAG)
     {
@@ -861,43 +902,126 @@ pub fn fs_ioctl(fd: u32, request: u64, arg: u64, pid: u32) -> Result<i64, FsBrid
         return Err(FsBridgeError::NotReady);
     }
     let resolved = resolve_fd(pid, fd)?;
+
+    // FIONBIO (0x5421): toggle O_NONBLOCK on any descriptor (files, pipes, sockets, TTY).
+    if request == FIONBIO {
+        if arg == 0 {
+            return Err(FsBridgeError::Fault);
+        }
+        let nonblock_flag = read_user_typed::<i32>(arg).map_err(|_| FsBridgeError::Fault)?;
+        let cur_flags = fs_fcntl(fd, F_GETFL, 0, pid)? as u32;
+        let next_flags = if nonblock_flag != 0 {
+            cur_flags | O_NONBLOCK
+        } else {
+            cur_flags & !O_NONBLOCK
+        };
+        let _ = fs_fcntl(fd, F_SETFL, next_flags as u64, pid)?;
+        return Ok(0);
+    }
+
     if is_tty_handle(resolved.handle) {
         if request == 0x5413 {
             // TIOCGWINSZ: struct winsize { u16 ws_row, ws_col, ws_xpixel, ws_ypixel }
-            if arg != 0 {
-                let (px_w, px_h) = crate::arch::x86_64::framebuffer_early::user_framebuffer_info()
-                    .map(|(_, w, h, _, _, _, _)| (w, h))
-                    .unwrap_or((1920, 1080));
-                let rows = (px_h.saturating_sub(240) / 16).clamp(24, u16::MAX as u32) as u16;
-                let cols = (px_w.saturating_sub(520) / 8).clamp(80, u16::MAX as u32) as u16;
-                let ws: [u16; 4] = [
-                    rows,
-                    cols,
-                    px_w.min(u16::MAX as u32) as u16,
-                    px_h.min(u16::MAX as u32) as u16,
-                ];
-                write_user_typed(arg, ws).map_err(|_| FsBridgeError::Fault)?;
+            if arg == 0 {
+                return Err(FsBridgeError::Fault);
             }
+            let (px_w, px_h) = crate::arch::x86_64::framebuffer_early::user_framebuffer_info()
+                .map(|(_, w, h, _, _, _, _)| (w, h))
+                .unwrap_or((1920, 1080));
+            let rows = (px_h.saturating_sub(240) / 16).clamp(24, u16::MAX as u32) as u16;
+            let cols = (px_w.saturating_sub(520) / 8).clamp(80, u16::MAX as u32) as u16;
+            let ws: [u16; 4] = [
+                rows,
+                cols,
+                px_w.min(u16::MAX as u32) as u16,
+                px_h.min(u16::MAX as u32) as u16,
+            ];
+            write_user_typed(arg, ws).map_err(|_| FsBridgeError::Fault)?;
             return Ok(0);
         }
         if request == 0x5401 {
-            // TCGETS: query termios
-            if arg != 0 {
-                let termios = [0u8; 60];
-                copy_to_user(arg as *mut u8, termios.as_ptr(), termios.len())
-                    .map_err(|_| FsBridgeError::Fault)?;
+            // TCGETS: query real line discipline state from tty_server and populate Linux termios (60 bytes).
+            if arg == 0 {
+                return Err(FsBridgeError::Fault);
             }
+            let mut req = special::TtyRequestWire::zeroed();
+            req.sender_pid = pid;
+            req.msg_type = TTY_MSG_IOCTL;
+            req.a = request;
+            req.b = 0;
+            let reply = special::tty_call(&req)?;
+            if reply.status < 0 {
+                return Err(errno_to_fs_error(reply.status));
+            }
+            let mode_bits = reply.signal; // bit 0 = echo, bit 1 = canonical
+            let mut termios = [0u8; 60];
+            let c_iflag: u32 = 0x0100; // ICRNL
+            let c_oflag: u32 = 0x0001 | 0x0004; // OPOST | ONLCR
+            let c_cflag: u32 = 0x0030 | 0x0080 | 0x000f; // CS8 | CREAD | B38400
+            let mut c_lflag: u32 = 0x0001; // ISIG
+            if (mode_bits & 1) != 0 {
+                c_lflag |= 0x0008; // ECHO
+            }
+            if (mode_bits & 2) != 0 {
+                c_lflag |= 0x0002; // ICANON
+            }
+            termios[0..4].copy_from_slice(&c_iflag.to_ne_bytes());
+            termios[4..8].copy_from_slice(&c_oflag.to_ne_bytes());
+            termios[8..12].copy_from_slice(&c_cflag.to_ne_bytes());
+            termios[12..16].copy_from_slice(&c_lflag.to_ne_bytes());
+            // c_cc starts at offset 17 in Linux x86_64 termios
+            termios[17 + 0] = 3; // VINTR = ^C
+            termios[17 + 1] = 28; // VQUIT = ^\
+            termios[17 + 2] = 127; // VERASE = DEL
+            termios[17 + 3] = 21; // VKILL = ^U
+            termios[17 + 4] = 4; // VEOF = ^D
+            termios[17 + 6] = 1; // VMIN = 1
+            copy_to_user(arg as *mut u8, termios.as_ptr(), termios.len())
+                .map_err(|_| FsBridgeError::Fault)?;
             return Ok(0);
         }
-        if request == 0x5402 || request == 0x5403 || request == 0x5404 || request == 0x5410 {
+        if request == 0x5402 || request == 0x5403 || request == 0x5404 {
+            // TCSETS/TCSETSW/TCSETSF: accept either Linux termios* (>= 0x1000) or exosh raw mode bits (<= 3).
+            let mode_bits = if arg <= 3 {
+                arg
+            } else {
+                let mut termios = [0u8; 60];
+                copy_from_user(termios.as_mut_ptr(), arg as *const u8, termios.len())
+                    .map_err(|_| FsBridgeError::Fault)?;
+                let c_lflag = u32::from_ne_bytes([
+                    termios[12],
+                    termios[13],
+                    termios[14],
+                    termios[15],
+                ]);
+                let echo = if (c_lflag & 0x0008) != 0 { 1u64 } else { 0 };
+                let canon = if (c_lflag & 0x0002) != 0 { 2u64 } else { 0 };
+                echo | canon
+            };
+            let mut req = special::TtyRequestWire::zeroed();
+            req.sender_pid = pid;
+            req.msg_type = TTY_MSG_IOCTL;
+            req.a = request;
+            req.b = mode_bits;
+            let reply = special::tty_call(&req)?;
+            if reply.status < 0 {
+                return Err(errno_to_fs_error(reply.status));
+            }
+            return Ok(reply.status);
+        }
+        if request == 0x5410 {
             let mut req = special::TtyRequestWire::zeroed();
             req.sender_pid = pid;
             req.msg_type = TTY_MSG_IOCTL;
             req.a = request;
             req.b = arg;
             let reply = special::tty_call(&req)?;
+            if reply.status < 0 {
+                return Err(errno_to_fs_error(reply.status));
+            }
             return Ok(reply.status);
         }
+        return Err(FsBridgeError::NotTty);
     }
     let entry = OBJECT_TABLE
         .get(resolved.handle)
@@ -914,14 +1038,20 @@ pub fn fs_ioctl(fd: u32, request: u64, arg: u64, pid: u32) -> Result<i64, FsBrid
             } else if is_pseudo_blob(&entry.blob_id, PSEUDO_PIPE_TAG) {
                 blob_len(&entry.blob_id)
             } else if is_pseudo_blob(&entry.blob_id, PSEUDO_SOCKET_TAG) {
-                socket_payload_len(entry.blob_id)
+                if socket_is_dgram(entry.blob_id) {
+                    dgram_next_packet_len(entry.blob_id)
+                } else {
+                    socket_payload_len(entry.blob_id)
+                }
+            } else if is_pseudo_blob(&entry.blob_id, PSEUDO_NET_SOCKET_TAG) {
+                crate::syscall::net_bridge::net_available_bytes_for_blob(entry.blob_id)
             } else {
                 blob_len(&entry.blob_id).saturating_sub(entry.cursor as usize)
             };
             write_user_typed(arg, available as i32).map_err(|_| FsBridgeError::Fault)?;
             Ok(0)
         }
-        _ => Err(FsBridgeError::Invalid),
+        _ => Err(FsBridgeError::NotTty),
     }
 }
 

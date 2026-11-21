@@ -38,6 +38,8 @@ pub enum MmapError {
     NotMapped,
     /// Permission denied.
     PermissionDenied,
+    /// Region already mapped (MAP_FIXED_NOREPLACE overlap).
+    Exists,
 }
 
 impl MmapError {
@@ -51,6 +53,7 @@ impl MmapError {
             MmapError::AllocFailed => -12,        // ENOMEM
             MmapError::NotMapped => -14,          // EFAULT
             MmapError::PermissionDenied => -13,   // EACCES
+            MmapError::Exists => -17,             // EEXIST
         }
     }
 }
@@ -128,6 +131,21 @@ const MAP_PRIVATE: u32 = 0x02;
 const MAP_FIXED: u32 = 0x10;
 /// Anonymous mapping (MAP_ANONYMOUS / MAP_ANON).
 const MAP_ANON: u32 = 0x20;
+/// Fail with EEXIST instead of replacing overlapping mappings (Linux MAP_FIXED_NOREPLACE).
+const MAP_FIXED_NOREPLACE: u32 = 0x10_0000;
+
+struct PtAllocOnly;
+impl crate::memory::virt::page_table::FrameAllocatorForWalk for PtAllocOnly {
+    fn alloc_frame(
+        &self,
+        flags: crate::memory::AllocFlags,
+    ) -> Result<crate::memory::Frame, crate::memory::AllocError> {
+        crate::memory::physical::allocator::buddy::alloc_pages(0, flags)
+    }
+    fn free_frame(&self, f: crate::memory::Frame) {
+        let _ = crate::memory::physical::allocator::buddy::free_pages(f, 0);
+    }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Flag conversion helpers
@@ -135,6 +153,9 @@ const MAP_ANON: u32 = 0x20;
 
 /// Converts POSIX protections to x86 page flags.
 fn prot_to_page_flags(prot: u32) -> PageFlags {
+    if prot & (PROT_READ | PROT_WRITE | PROT_EXEC) == 0 {
+        return PageFlags::PROT_NONE | PageFlags::USER | PageFlags::NO_EXECUTE;
+    }
     let mut f = PageFlags::PRESENT | PageFlags::USER;
     if prot & PROT_WRITE != 0 {
         f |= PageFlags::WRITABLE;
@@ -161,13 +182,75 @@ fn prot_to_vma_flags(prot: u32, map_flags: u32) -> VmaFlags {
     if map_flags & MAP_SHARED != 0 {
         f |= VmaFlags::SHARED;
     }
-    if map_flags & MAP_FIXED != 0 {
+    if map_flags & (MAP_FIXED | MAP_FIXED_NOREPLACE) != 0 {
         f |= VmaFlags::FIXED;
     }
     if map_flags & MAP_ANON != 0 {
         f |= VmaFlags::ANONYMOUS;
     }
     f
+}
+
+fn resolve_mmap_range(
+    user_as: &UserAddressSpace,
+    addr: u64,
+    len_aligned: usize,
+    flags: u32,
+) -> Result<(VirtAddr, VirtAddr), MmapError> {
+    let fixed = (flags & (MAP_FIXED | MAP_FIXED_NOREPLACE)) != 0;
+    let base = if fixed {
+        if addr == 0 || !addr.is_multiple_of(PAGE_SIZE as u64) {
+            return Err(MmapError::InvalidAddress);
+        }
+        VirtAddr::new(addr)
+    } else {
+        let hint = (addr != 0).then_some(VirtAddr::new(addr));
+        user_as
+            .find_free_gap(len_aligned, hint)
+            .ok_or(MmapError::OutOfVirtualMemory)?
+    };
+
+    let end_raw = base
+        .as_u64()
+        .checked_add(len_aligned as u64)
+        .ok_or(MmapError::OutOfVirtualMemory)?;
+    if base.as_u64() < PAGE_SIZE as u64 || end_raw > crate::memory::core::layout::USER_END.as_u64() {
+        return Err(MmapError::InvalidAddress);
+    }
+    Ok((base, VirtAddr::new(end_raw)))
+}
+
+fn insert_vma_replacing_fixed(
+    user_as: &UserAddressSpace,
+    start: VirtAddr,
+    len_aligned: usize,
+    flags: u32,
+    vma_ptr: *mut VmaDescriptor,
+) -> Result<(), MmapError> {
+    let replace_fixed = (flags & MAP_FIXED != 0) && (flags & MAP_FIXED_NOREPLACE == 0);
+    if !replace_fixed {
+        if unsafe { user_as.insert_vma(vma_ptr) } {
+            return Ok(());
+        }
+        let _ = unsafe { Box::from_raw(vma_ptr) };
+        return Err(if flags & MAP_FIXED_NOREPLACE != 0 {
+            MmapError::Exists
+        } else {
+            MmapError::InvalidAddress
+        });
+    }
+
+    for _attempt in 0..4 {
+        if let Err(err) = do_munmap_range_in_as(user_as, start.as_u64(), len_aligned) {
+            let _ = unsafe { Box::from_raw(vma_ptr) };
+            return Err(err);
+        }
+        if unsafe { user_as.insert_vma(vma_ptr) } {
+            return Ok(());
+        }
+    }
+    let _ = unsafe { Box::from_raw(vma_ptr) };
+    Err(MmapError::InvalidAddress)
 }
 
 #[inline]
@@ -223,38 +306,14 @@ pub fn do_mmap_in_as(
     validate_prot(prot)?;
 
     // Alignment to PAGE_SIZE
-    let len_aligned = (len + PAGE_SIZE - 1) & !(PAGE_SIZE - 1);
+    let len_aligned = len
+        .checked_add(PAGE_SIZE - 1)
+        .ok_or(MmapError::InvalidLength)?
+        & !(PAGE_SIZE - 1);
 
     user_as.stats.mmap_calls.fetch_add(1, Ordering::Relaxed);
 
-    // Search for a free virtual gap
-    let fixed = flags & MAP_FIXED != 0;
-    let base = if fixed {
-        if addr == 0 || !addr.is_multiple_of(PAGE_SIZE as u64) {
-            return Err(MmapError::InvalidAddress);
-        }
-        VirtAddr::new(addr)
-    } else {
-        let hint = if addr != 0 {
-            Some(VirtAddr::new(addr))
-        } else {
-            None
-        };
-        user_as
-            .find_free_gap(len_aligned, hint)
-            .ok_or(MmapError::OutOfVirtualMemory)?
-    };
-
-    let start = base;
-    let end_raw = base
-        .as_u64()
-        .checked_add(len_aligned as u64)
-        .ok_or(MmapError::OutOfVirtualMemory)?;
-    // T4-002 FIX: Strict check of user bounds (never in kernel half)
-    if base.as_u64() < PAGE_SIZE as u64 || end_raw > crate::memory::core::layout::USER_END.as_u64() {
-        return Err(MmapError::InvalidAddress);
-    }
-    let end = VirtAddr::new(end_raw);
+    let (start, end) = resolve_mmap_range(user_as, addr, len_aligned, flags)?;
 
     let is_shared = flags & MAP_SHARED != 0;
     let page_flags = if is_shared {
@@ -269,7 +328,7 @@ pub fn do_mmap_in_as(
         VmaBacking::Anonymous
     };
 
-    // Allocate and insert VMA descriptor
+    // Allocate and insert VMA descriptor (atomically replacing overlaps when MAP_FIXED).
     let vma = Box::new(VmaDescriptor::new(
         start,
         end,
@@ -278,29 +337,9 @@ pub fn do_mmap_in_as(
         backing,
     ));
     let vma_ptr = Box::into_raw(vma);
-
-    // SAFETY: vma_ptr is valid, non-null, exclusive.
-    let inserted = unsafe { user_as.insert_vma(vma_ptr) };
-    if !inserted {
-        // Free if insertion fails (e.g. overlap with MAP_FIXED)
-        // SAFETY: we are the exclusive owners.
-        let _ = unsafe { Box::from_raw(vma_ptr) };
-        return Err(MmapError::InvalidAddress);
-    }
+    insert_vma_replacing_fixed(user_as, start, len_aligned, flags, vma_ptr)?;
 
     if is_shared {
-        struct PtAllocOnly;
-        impl crate::memory::virt::page_table::FrameAllocatorForWalk for PtAllocOnly {
-            fn alloc_frame(
-                &self,
-                flags: crate::memory::AllocFlags,
-            ) -> Result<crate::memory::Frame, crate::memory::AllocError> {
-                crate::memory::physical::allocator::buddy::alloc_pages(0, flags)
-            }
-            fn free_frame(&self, f: crate::memory::Frame) {
-                let _ = crate::memory::physical::allocator::buddy::free_pages(f, 0);
-            }
-        }
         let pt_alloc = PtAllocOnly;
         let n_pages = len_aligned / PAGE_SIZE;
         for i in 0..n_pages {
@@ -349,32 +388,7 @@ pub fn do_mmap_shared_frames(
         return Err(MmapError::InvalidLength);
     }
 
-    let fixed = flags & MAP_FIXED != 0;
-    let base = if fixed {
-        if addr == 0 || !addr.is_multiple_of(PAGE_SIZE as u64) {
-            return Err(MmapError::InvalidAddress);
-        }
-        VirtAddr::new(addr)
-    } else {
-        let hint = if addr != 0 {
-            Some(VirtAddr::new(addr))
-        } else {
-            None
-        };
-        user_as
-            .find_free_gap(len_aligned, hint)
-            .ok_or(MmapError::OutOfVirtualMemory)?
-    };
-
-    let start = base;
-    let end_raw = base
-        .as_u64()
-        .checked_add(len_aligned as u64)
-        .ok_or(MmapError::OutOfVirtualMemory)?;
-    if base.as_u64() < PAGE_SIZE as u64 || end_raw > crate::memory::core::layout::USER_END.as_u64() {
-        return Err(MmapError::InvalidAddress);
-    }
-    let end = VirtAddr::new(end_raw);
+    let (start, end) = resolve_mmap_range(user_as, addr, len_aligned, flags)?;
 
     let page_flags = prot_to_page_flags(prot) | PageFlags::PINNED;
     let vma_flags = prot_to_vma_flags(prot, flags) | VmaFlags::SHARED;
@@ -387,23 +401,8 @@ pub fn do_mmap_shared_frames(
         VmaBacking::Shared,
     ));
     let vma_ptr = Box::into_raw(vma);
-    if !unsafe { user_as.insert_vma(vma_ptr) } {
-        let _ = unsafe { Box::from_raw(vma_ptr) };
-        return Err(MmapError::InvalidAddress);
-    }
+    insert_vma_replacing_fixed(user_as, start, len_aligned, flags, vma_ptr)?;
 
-    struct PtAllocOnly;
-    impl crate::memory::virt::page_table::FrameAllocatorForWalk for PtAllocOnly {
-        fn alloc_frame(
-            &self,
-            flags: crate::memory::AllocFlags,
-        ) -> Result<crate::memory::Frame, crate::memory::AllocError> {
-            crate::memory::physical::allocator::buddy::alloc_pages(0, flags)
-        }
-        fn free_frame(&self, f: crate::memory::Frame) {
-            let _ = crate::memory::physical::allocator::buddy::free_pages(f, 0);
-        }
-    }
     let pt_alloc = PtAllocOnly;
 
     for (i, &frame) in frames.iter().take(n_pages).enumerate() {
@@ -587,6 +586,26 @@ pub fn do_mprotect(addr: u64, len: usize, prot: u32) -> Result<(), MmapError> {
     do_mprotect_in_as(user_as, addr, len, prot)
 }
 
+/// Computes the leaf PTE flags for `mprotect`, preserving CoW tracking across `PROT_NONE`.
+fn resolve_mprotect_pte_flags(
+    old_entry: crate::memory::virt::page_table::PageTableEntry,
+    eff_page_flags: PageFlags,
+    is_prot_none: bool,
+    is_shared: bool,
+    is_tracked_cow: bool,
+) -> PageFlags {
+    let is_shared_cow = !is_shared && (old_entry.is_cow() || is_tracked_cow);
+    if is_prot_none && (old_entry.is_cow() || is_shared_cow) {
+        eff_page_flags.set(PageFlags::COW)
+    } else if is_shared_cow && eff_page_flags.contains(PageFlags::WRITABLE) {
+        eff_page_flags
+            .clear(PageFlags::WRITABLE)
+            .set(PageFlags::COW)
+    } else {
+        eff_page_flags
+    }
+}
+
 /// Modifies permissions of a region in an explicit address space.
 pub fn do_mprotect_in_as(
     user_as: &UserAddressSpace,
@@ -631,6 +650,7 @@ pub fn do_mprotect_in_as(
         new_perm |= VmaFlags::EXEC;
     }
 
+    let is_prot_none = prot & (PROT_READ | PROT_WRITE | PROT_EXEC) == 0;
     let cpu_count = crate::arch::x86_64::acpi::madt::madt_cpu_count();
     let mut cursor = addr;
     while cursor < range_end_raw {
@@ -644,31 +664,47 @@ pub fn do_mprotect_in_as(
         };
 
         {
+            struct MprotectPtAlloc;
+            impl crate::memory::virt::page_table::FrameAllocatorForWalk for MprotectPtAlloc {
+                fn alloc_frame(
+                    &self,
+                    flags: crate::memory::AllocFlags,
+                ) -> Result<crate::memory::Frame, crate::memory::AllocError> {
+                    crate::memory::physical::allocator::buddy::alloc_pages(0, flags)
+                }
+                fn free_frame(&self, f: crate::memory::Frame) {
+                    let _ = crate::memory::physical::allocator::buddy::free_pages(f, 0);
+                }
+            }
+            let pt_alloc = MprotectPtAlloc;
             let _pt_guard = user_as.lock_pt();
             let mut walker =
                 crate::memory::virt::page_table::PageTableWalker::new(user_as.pml4_phys());
             let mut pt_cursor = sub_start.as_u64();
             while pt_cursor < sub_end.as_u64() {
                 let va = VirtAddr::new(pt_cursor);
-                let old_entry = crate::memory::virt::page_table::PageTableEntry::from_raw(
-                    walker.read_pte_raw(va),
-                );
-                let is_shared_cow = !is_shared
-                    && (old_entry.is_cow()
-                        || old_entry.frame().is_some_and(|f| {
-                            crate::memory::cow::tracker::COW_TRACKER
-                                .tracked_ref_count(f)
-                                .is_some_and(|rc| rc > 1)
-                        }));
-                let pte_flags = if is_shared_cow && eff_page_flags.contains(PageFlags::WRITABLE) {
-                    eff_page_flags
-                        .clear(PageFlags::WRITABLE)
-                        .set(PageFlags::COW)
-                } else {
-                    eff_page_flags
-                };
-                // remap_flags → Err if page absent (demand paging) → intentionally ignored.
-                let _ = walker.remap_flags(va, pte_flags);
+                let old_raw = walker.read_pte_raw(va);
+                let old_entry =
+                    crate::memory::virt::page_table::PageTableEntry::from_raw(old_raw);
+                if old_entry.is_present() || old_entry.is_prot_none() {
+                    let is_tracked_cow = old_entry.frame_or_prot_none().is_some_and(|f| {
+                        crate::memory::cow::tracker::COW_TRACKER
+                            .tracked_ref_count(f)
+                            .is_some_and(|rc| rc > 1)
+                    });
+                    let pte_flags = resolve_mprotect_pte_flags(
+                        old_entry,
+                        eff_page_flags,
+                        is_prot_none,
+                        is_shared,
+                        is_tracked_cow,
+                    );
+                    let _ = walker.remap_flags(va, pte_flags);
+                } else if is_prot_none {
+                    let _ = walker.set_guard_pte(va, &pt_alloc);
+                } else if crate::memory::integrity::guard_pages::is_guard_pte(old_raw) {
+                    walker.clear_guard_pte(va);
+                }
                 pt_cursor += PAGE_SIZE as u64;
             }
 
@@ -757,18 +793,6 @@ pub fn do_share_range_between_as(
         return Err(MmapError::InvalidAddress);
     }
 
-    struct PtAllocOnly;
-    impl crate::memory::virt::page_table::FrameAllocatorForWalk for PtAllocOnly {
-        fn alloc_frame(
-            &self,
-            flags: crate::memory::AllocFlags,
-        ) -> Result<crate::memory::Frame, crate::memory::AllocError> {
-            crate::memory::physical::allocator::buddy::alloc_pages(0, flags)
-        }
-        fn free_frame(&self, f: crate::memory::Frame) {
-            let _ = crate::memory::physical::allocator::buddy::free_pages(f, 0);
-        }
-    }
     let pt_alloc = PtAllocOnly;
 
     let same_as = core::ptr::eq(src_as, dst_as);
@@ -1318,4 +1342,132 @@ pub fn map_shm_into_process(
         n_pages,
         mapping_idx,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::memory::core::{Frame, PhysAddr};
+    use crate::memory::integrity::guard_pages::{is_guard_pte, GUARD_PTE_VALUE};
+    use crate::memory::virt::page_table::PageTableEntry;
+
+    #[test]
+    fn prot_none_flags_omit_present_and_preserve_frame_and_cow_roundtrip() {
+        let none_flags = prot_to_page_flags(0);
+        assert!(none_flags.contains(PageFlags::PROT_NONE));
+        assert!(none_flags.contains(PageFlags::USER));
+        assert!(none_flags.contains(PageFlags::NO_EXECUTE));
+        assert!(!none_flags.contains(PageFlags::PRESENT));
+        assert!(!none_flags.contains(PageFlags::WRITABLE));
+
+        let rw_flags = prot_to_page_flags(PROT_READ | PROT_WRITE);
+        assert!(rw_flags.contains(PageFlags::PRESENT));
+        assert!(rw_flags.contains(PageFlags::USER));
+        assert!(rw_flags.contains(PageFlags::WRITABLE));
+        assert!(rw_flags.contains(PageFlags::NO_EXECUTE));
+        assert!(!rw_flags.contains(PageFlags::PROT_NONE));
+
+        let frame = Frame::containing(PhysAddr::new(0x40_000));
+        let rw_cow_entry = PageTableEntry::from_page_flags(
+            frame,
+            PageFlags::PRESENT | PageFlags::USER | PageFlags::COW | PageFlags::NO_EXECUTE,
+        );
+        let masked_flags =
+            resolve_mprotect_pte_flags(rw_cow_entry, none_flags, true, false, true);
+        assert!(masked_flags.contains(PageFlags::PROT_NONE));
+        assert!(masked_flags.contains(PageFlags::COW));
+        assert!(!masked_flags.contains(PageFlags::PRESENT));
+
+        let masked_entry = PageTableEntry::from_page_flags(frame, masked_flags);
+        assert!(!masked_entry.is_present());
+        assert!(masked_entry.is_prot_none());
+        assert!(masked_entry.is_cow());
+        assert_eq!(masked_entry.frame_or_prot_none(), Some(frame));
+
+        let restored_flags =
+            resolve_mprotect_pte_flags(masked_entry, rw_flags, false, false, true);
+        assert!(restored_flags.contains(PageFlags::PRESENT));
+        assert!(restored_flags.contains(PageFlags::COW));
+        assert!(!restored_flags.contains(PageFlags::WRITABLE));
+        assert!(!restored_flags.contains(PageFlags::PROT_NONE));
+
+        let restored_entry = PageTableEntry::from_page_flags(frame, restored_flags);
+        assert!(restored_entry.is_present());
+        assert!(restored_entry.is_cow());
+        assert!(!restored_entry.is_writable());
+        assert_eq!(restored_entry.frame_or_prot_none(), Some(frame));
+    }
+
+    #[test]
+    fn guard_pte_value_distinct_from_prot_none_entry() {
+        let frame = Frame::containing(PhysAddr::new(0x50_000));
+        let prot_none_entry = PageTableEntry::from_page_flags(frame, prot_to_page_flags(0));
+        assert!(prot_none_entry.is_prot_none());
+        assert!(!is_guard_pte(prot_none_entry.raw()));
+        assert!(is_guard_pte(GUARD_PTE_VALUE));
+        assert!(!PageTableEntry::from_raw(GUARD_PTE_VALUE).is_prot_none());
+        assert_eq!(prot_none_entry.frame_or_prot_none(), Some(frame));
+    }
+
+    #[test]
+    fn resolve_mmap_range_and_fixed_noreplace_respect_bounds() {
+        let user_as = UserAddressSpace::new(PhysAddr::new(0x1000), 0);
+        assert_eq!(
+            resolve_mmap_range(&user_as, 0, PAGE_SIZE, MAP_FIXED),
+            Err(MmapError::InvalidAddress)
+        );
+        assert_eq!(
+            resolve_mmap_range(&user_as, 0x10001, PAGE_SIZE, MAP_FIXED),
+            Err(MmapError::InvalidAddress)
+        );
+        let (s, e) =
+            resolve_mmap_range(&user_as, 0x2000_0000, PAGE_SIZE * 4, MAP_FIXED).unwrap();
+        assert_eq!(s.as_u64(), 0x2000_0000);
+        assert_eq!(e.as_u64(), 0x2000_4000);
+
+        let vma = Box::new(VmaDescriptor::new(
+            s,
+            e,
+            VmaFlags::READ | VmaFlags::WRITE | VmaFlags::ANONYMOUS,
+            PageFlags::USER_DATA,
+            VmaBacking::Anonymous,
+        ));
+        assert!(unsafe { user_as.insert_vma(Box::into_raw(vma)) });
+
+        // MAP_FIXED_NOREPLACE rejects overlap with MmapError::Exists (-EEXIST).
+        let overlap_vma = Box::into_raw(Box::new(VmaDescriptor::new(
+            VirtAddr::new(0x2000_1000),
+            VirtAddr::new(0x2000_2000),
+            VmaFlags::READ | VmaFlags::FIXED | VmaFlags::ANONYMOUS,
+            PageFlags::USER | PageFlags::PRESENT | PageFlags::NO_EXECUTE,
+            VmaBacking::Anonymous,
+        )));
+        assert_eq!(
+            insert_vma_replacing_fixed(
+                &user_as,
+                VirtAddr::new(0x2000_1000),
+                PAGE_SIZE,
+                MAP_FIXED | MAP_FIXED_NOREPLACE,
+                overlap_vma,
+            ),
+            Err(MmapError::Exists)
+        );
+        assert_eq!(MmapError::Exists.to_kernel_errno(), -17);
+
+        // VMA tree punch-hole splits [0x2000_0000, 0x2000_4000) into left + right cleanly.
+        let unmapped = user_as
+            .unmap_vma_range_next(VirtAddr::new(0x2000_1000), VirtAddr::new(0x2000_3000))
+            .unwrap();
+        assert_eq!(
+            unmapped,
+            Some((
+                VirtAddr::new(0x2000_1000),
+                VirtAddr::new(0x2000_3000),
+                VmaBacking::Anonymous
+            ))
+        );
+        assert!(user_as.verify_vma_range_covered(VirtAddr::new(0x2000_0000), VirtAddr::new(0x2000_1000)));
+        assert!(!user_as.verify_vma_range_covered(VirtAddr::new(0x2000_1000), VirtAddr::new(0x2000_3000)));
+        assert!(user_as.verify_vma_range_covered(VirtAddr::new(0x2000_3000), VirtAddr::new(0x2000_4000)));
+    }
 }

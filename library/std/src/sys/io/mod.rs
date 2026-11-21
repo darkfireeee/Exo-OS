@@ -25,6 +25,10 @@ mod io_slice {
 
 mod is_terminal {
     cfg_select! {
+        target_os = "exo" => {
+            mod exo;
+            pub use exo::*;
+        }
         any(target_family = "unix", target_os = "wasi") => {
             mod isatty;
             pub use isatty::*;
@@ -41,10 +45,6 @@ mod is_terminal {
             mod motor;
             pub use motor::*;
         }
-        target_os = "exo" => {
-            mod exo;
-            pub use exo::*;
-        }
         _ => {
             mod unsupported;
             pub use unsupported::*;
@@ -55,14 +55,18 @@ mod is_terminal {
 mod kernel_copy;
 
 #[cfg_attr(not(target_os = "linux"), allow(unused_imports))]
-#[cfg(all(
-    target_family = "unix",
-    not(any(target_os = "dragonfly", target_os = "vxworks", target_os = "rtems"))
+#[cfg(any(
+    all(
+        target_family = "unix",
+        not(any(target_os = "dragonfly", target_os = "vxworks", target_os = "rtems")),
+    ),
+    target_os = "exo",
 ))]
 pub use error::errno_location;
 #[cfg_attr(not(target_os = "linux"), allow(unused_imports))]
 #[cfg(any(
     all(target_family = "unix", not(any(target_os = "vxworks", target_os = "rtems"))),
+    target_os = "exo",
     target_os = "wasi",
 ))]
 pub use error::set_errno;

@@ -222,6 +222,31 @@ pub fn release_commit_lock() {
     COMMIT_IN_PROGRESS.store(false, Ordering::Release);
 }
 
+/// RAII guard for atomic commit serialization without holding a `SpinLock`
+/// (`PreemptGuard`) across slow disk barriers and superblock writes.
+pub struct CommitActiveGuard;
+
+impl CommitActiveGuard {
+    /// Atomically enters the active commit state, failing immediately with
+    /// `CommitInProgress` if another commit is already executing.
+    pub fn try_begin() -> ExofsResult<Self> {
+        if COMMIT_IN_PROGRESS
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            LOCK_CONTENTION_COUNT.fetch_add(1, Ordering::Relaxed);
+            return Err(ExofsError::CommitInProgress);
+        }
+        Ok(Self)
+    }
+}
+
+impl Drop for CommitActiveGuard {
+    fn drop(&mut self) {
+        COMMIT_IN_PROGRESS.store(false, Ordering::Release);
+    }
+}
+
 /// Vrai si un commit est actuellement en cours.
 ///
 /// Lecture sans lock — fiable pour le GC qui doit respecter DEAD-01.

@@ -11,12 +11,21 @@ use core::{
 #[derive(Debug)]
 #[repr(C)]
 pub struct GenericTcb<Os> {
-    /// Pointer to the end of static TLS. Must be the first member
+    /// `[%fs:0x00]` : Self-pointer to this TCB (`mov %fs:0`)
+    pub tcb_ptr: *mut Self,
+    /// `[%fs:0x08]` : Dynamic Thread Vector (`dtv[0]` = module count)
+    pub dtv: *mut usize,
+    pub prev: *mut u8,
+    pub next: *mut u8,
+    pub sysinfo: usize,
+    /// `[%fs:0x28]` : Stack protector guard
+    pub canary: usize,
+    pub tid: i32,
+    pub errno: i32,
+    /// `[%fs:0x38]` : Pointer to the end of static TLS
     pub tls_end: *mut u8,
     /// Size of the memory allocated for the static TLS in bytes (multiple of page size)
     pub tls_len: usize,
-    /// Pointer to this structure
-    pub tcb_ptr: *mut Self,
     /// Size of the memory allocated for this structure in bytes (should be same as page size)
     pub tcb_len: usize,
     pub os_specific: Os,
@@ -166,14 +175,25 @@ impl<T> ExpectTlsFree for Option<T> {
     }
 }
 
-/// Dynamic TLS symbol for ELF binaries loaded via /lib/ld-exo.so (Phase 0)
+/// Dynamic TLS symbol (`DTV` lookup) for ELF binaries loaded via `/lib/ld-exo.so`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __tls_get_addr(ti: *const [usize; 2]) -> *mut u8 {
     #[cfg(target_arch = "x86_64")]
     unsafe {
-        let tcb_ptr = GenericTcb::<()>::arch_read(0);
+        let mod_id = (*ti)[0];
         let offset = (*ti)[1];
-        (tcb_ptr + offset) as *mut u8
+        let dtv_ptr = GenericTcb::<()>::arch_read(offset_of!(GenericTcb<()>, dtv)) as *const usize;
+        if !dtv_ptr.is_null() && mod_id > 0 {
+            let count = *dtv_ptr;
+            if mod_id <= count {
+                let base = *dtv_ptr.add(mod_id);
+                if base != 0 {
+                    return base.wrapping_add(offset) as *mut u8;
+                }
+            }
+        }
+        let tcb_ptr = GenericTcb::<()>::arch_read(0);
+        tcb_ptr.wrapping_add(offset) as *mut u8
     }
     #[cfg(not(target_arch = "x86_64"))]
     {

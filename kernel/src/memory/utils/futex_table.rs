@@ -26,10 +26,14 @@
 //
 // LAYER 0 — no scheduler/process/ipc/fs dependencies.
 
+use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use spin::Mutex;
 
 use crate::memory::core::constants::FUTEX_HASH_BUCKETS;
+
+/// Bitmask matching all futex bitset waiters (POSIX/Linux default).
+pub const FUTEX_BITSET_MATCH_ANY: u32 = 0xFFFF_FFFF;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Wake callback type
@@ -67,7 +71,9 @@ pub struct FutexWaiter {
     pub next: Option<core::ptr::NonNull<FutexWaiter>>,
     /// Flag: waiter has been woken up / cancelled.
     pub woken: AtomicBool,
-    _pad: [u8; 7],
+    _pad: [u8; 3],
+    /// Bitset mask for `FUTEX_WAIT_BITSET` / `FUTEX_WAKE_BITSET`.
+    pub bitset: u32,
 }
 
 impl FutexWaiter {
@@ -81,7 +87,8 @@ impl FutexWaiter {
             wake_fn,
             next: None,
             woken: AtomicBool::new(false),
-            _pad: [0; 7],
+            _pad: [0; 3],
+            bitset: FUTEX_BITSET_MATCH_ANY,
         }
     }
 }
@@ -99,10 +106,12 @@ const _: () = assert!(
 // Hash bucket
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Bucket inner state — linked list of waiters.
+/// Bucket inner state — FIFO linked list of waiters.
 struct BucketInner {
-    /// List head (raw pointer to FutexWaiter allocated by caller).
+    /// List head (oldest waiter, raw pointer allocated by caller).
     head: Option<core::ptr::NonNull<FutexWaiter>>,
+    /// List tail (newest waiter, preserves FIFO wakeup order).
+    tail: Option<core::ptr::NonNull<FutexWaiter>>,
     /// Number of waiters in this bucket.
     count: u32,
 }
@@ -111,20 +120,31 @@ struct BucketInner {
 unsafe impl Send for BucketInner {}
 unsafe impl Sync for BucketInner {}
 
+type WakeItem = (u64, WakeFn, i32);
+
 impl BucketInner {
     const fn new() -> Self {
         Self {
             head: None,
+            tail: None,
             count: 0,
         }
     }
 
-    /// Enqueues `waiter` at head of list.
+    /// Enqueues `waiter` at tail of FIFO list.
     ///
     /// # Safety: `waiter` must remain valid until dequeued.
     unsafe fn push(&mut self, waiter: *mut FutexWaiter) {
-        (*waiter).next = self.head;
-        self.head = core::ptr::NonNull::new(waiter);
+        let Some(nn) = core::ptr::NonNull::new(waiter) else {
+            return;
+        };
+        (*waiter).next = None;
+        if let Some(tail) = self.tail {
+            (*tail.as_ptr()).next = Some(nn);
+        } else {
+            self.head = Some(nn);
+        }
+        self.tail = Some(nn);
         self.count += 1;
     }
 
@@ -132,59 +152,81 @@ impl BucketInner {
     ///
     /// # Safety: `waiter` must be in this list.
     unsafe fn remove(&mut self, waiter: *mut FutexWaiter) -> bool {
-        let mut prev: *mut Option<core::ptr::NonNull<FutexWaiter>> = &mut self.head;
+        let mut prev_node: Option<core::ptr::NonNull<FutexWaiter>> = None;
         let mut cur = self.head;
         while let Some(node) = cur {
+            let next = (*node.as_ptr()).next;
             if node.as_ptr() == waiter {
-                *prev = (*node.as_ptr()).next;
+                match prev_node {
+                    Some(prev) => (*prev.as_ptr()).next = next,
+                    None => self.head = next,
+                }
+                if self.tail == Some(node) {
+                    self.tail = prev_node;
+                }
+                (*node.as_ptr()).next = None;
                 self.count = self.count.saturating_sub(1);
                 return true;
             }
-            prev = &mut (*node.as_ptr()).next;
-            cur = (*node.as_ptr()).next;
+            prev_node = Some(node);
+            cur = next;
         }
         false
     }
 
-    /// Wakes up to `max` waiters for `(space_id, virt_addr)`. Returns number of woken waiters.
+    /// Pops up to `out.len().min(max as usize)` matching FIFO waiters and writes wake descriptors into `out`
+    /// so callers wake them *after* dropping the bucket spinlock.
     ///
-    /// # Safety: pointed FutexWaiters must remain valid during call.
-    unsafe fn wake(&mut self, space_id: u64, virt_addr: u64, max: u32, wake_code: i32) -> u32 {
-        let mut woken = 0u32;
-        let mut prev: *mut Option<core::ptr::NonNull<FutexWaiter>> = &mut self.head;
+    /// Returns `(collected_count, hit_max_limit)`.
+    unsafe fn collect_wake(
+        &mut self,
+        space_id: u64,
+        virt_addr: u64,
+        bitset_mask: u32,
+        max: u32,
+        wake_code: i32,
+        out: &mut Vec<WakeItem>,
+    ) -> u32 {
+        let mut collected = 0u32;
+        let mut prev_node: Option<core::ptr::NonNull<FutexWaiter>> = None;
         let mut cur = self.head;
 
-        while let Some(node) = cur {
+        while collected < max {
+            let Some(node) = cur else {
+                break;
+            };
             let w = node.as_ptr();
             let next = (*w).next;
 
             if (*w).space_id.load(Ordering::Acquire) == space_id
                 && (*w).virt_addr.load(Ordering::Acquire) == virt_addr
                 && !(*w).woken.load(Ordering::Acquire)
+                && ((*w).bitset & bitset_mask) != 0
             {
-                // Remove from list.
-                *prev = next;
+                match prev_node {
+                    Some(prev) => (*prev.as_ptr()).next = next,
+                    None => self.head = next,
+                }
+                if self.tail == Some(node) {
+                    self.tail = prev_node;
+                }
+                (*w).next = None;
                 self.count = self.count.saturating_sub(1);
 
-                // Mark woken and call wake_fn.
                 (*w).wake_code = wake_code;
                 (*w).woken.store(true, Ordering::Release);
-                ((*w).wake_fn)((*w).tid, wake_code);
-
-                woken += 1;
-                if woken >= max {
-                    break;
-                }
+                out.push(((*w).tid, (*w).wake_fn, wake_code));
+                collected += 1;
                 cur = next;
             } else {
-                prev = &mut (*node.as_ptr()).next;
+                prev_node = Some(node);
                 cur = next;
             }
         }
-        woken
+        collected
     }
 
-    /// Requeues up to `max_requeue` waiters from `(src_space, src_addr)` to `(dst_space, dst_addr)`
+    /// Requeues up to `max_requeue` FIFO waiters from `(src_space, src_addr)` to `(dst_space, dst_addr)`
     /// in another bucket `dst_inner`. Returns number re-queued.
     ///
     /// # Safety: valid pointers during operation.
@@ -198,10 +240,13 @@ impl BucketInner {
         max_requeue: u32,
     ) -> u32 {
         let mut requeued = 0u32;
-        let mut prev: *mut Option<core::ptr::NonNull<FutexWaiter>> = &mut self.head;
+        let mut prev_node: Option<core::ptr::NonNull<FutexWaiter>> = None;
         let mut cur = self.head;
 
-        while let Some(node) = cur {
+        while requeued < max_requeue {
+            let Some(node) = cur else {
+                break;
+            };
             let w = node.as_ptr();
             let next = (*w).next;
 
@@ -209,22 +254,25 @@ impl BucketInner {
                 && (*w).virt_addr.load(Ordering::Acquire) == src_addr
                 && !(*w).woken.load(Ordering::Acquire)
             {
-                // Remove from this bucket.
-                *prev = next;
+                match prev_node {
+                    Some(prev) => (*prev.as_ptr()).next = next,
+                    None => self.head = next,
+                }
+                if self.tail == Some(node) {
+                    self.tail = prev_node;
+                }
+                (*w).next = None;
                 self.count = self.count.saturating_sub(1);
 
-                // Update key and push to dst while both buckets are locked.
+                // Update key and append FIFO to dst while both buckets are locked.
                 (*w).space_id.store(dst_space, Ordering::Release);
                 (*w).virt_addr.store(dst_addr, Ordering::Release);
                 dst_inner.push(w);
 
                 requeued += 1;
-                if requeued >= max_requeue {
-                    break;
-                }
                 cur = next;
             } else {
-                prev = &mut (*node.as_ptr()).next;
+                prev_node = Some(node);
                 cur = next;
             }
         }
@@ -488,12 +536,13 @@ pub enum FutexWaitResult {
 // Public API
 // ─────────────────────────────────────────────────────────────────────────────
 
-unsafe fn futex_wait_in_space(
+unsafe fn futex_wait_in_space_bitset(
     space_id: u64,
     key_addr: u64,
     value_addr: u64,
     is_user: bool,
     expected: u32,
+    bitset: u32,
     waiter: *mut FutexWaiter,
     wake_fn: WakeFn,
 ) -> Result<FutexWaitResult, FutexError> {
@@ -512,6 +561,7 @@ unsafe fn futex_wait_in_space(
     (*waiter).space_id.store(space_id, Ordering::Release);
     (*waiter).virt_addr.store(key_addr, Ordering::Release);
     (*waiter).expected_val = expected;
+    (*waiter).bitset = bitset;
     (*waiter).wake_fn = wake_fn;
     (*waiter).woken.store(false, Ordering::Release);
     (*waiter).next = None;
@@ -528,6 +578,43 @@ unsafe fn futex_wait_in_space(
     Ok(FutexWaitResult::Waiting)
 }
 
+#[allow(dead_code)]
+unsafe fn futex_wait_in_space(
+    space_id: u64,
+    key_addr: u64,
+    value_addr: u64,
+    is_user: bool,
+    expected: u32,
+    waiter: *mut FutexWaiter,
+    wake_fn: WakeFn,
+) -> Result<FutexWaitResult, FutexError> {
+    futex_wait_in_space_bitset(
+        space_id,
+        key_addr,
+        value_addr,
+        is_user,
+        expected,
+        FUTEX_BITSET_MATCH_ANY,
+        waiter,
+        wake_fn,
+    )
+}
+
+/// Checks if a non-blocking zero-timeout wait immediately observes value match (`Timeout`) or mismatch (`ValueMismatch`).
+fn check_expired_wait(value_addr: u64, is_user: bool, expected: u32) -> FutexError {
+    match unsafe { read_futex_word(value_addr, is_user) } {
+        Ok((cur, _)) if cur != expected => {
+            FUTEX_STATS.value_mismatches.fetch_add(1, Ordering::Relaxed);
+            FutexError::ValueMismatch
+        }
+        Ok(_) => {
+            FUTEX_STATS.timeouts.fetch_add(1, Ordering::Relaxed);
+            FutexError::Timeout
+        }
+        Err(e) => e,
+    }
+}
+
 /// Enqueues a waiter on kernel-space key `virt_addr` if `*virt_addr == expected`.
 ///
 /// # Safety
@@ -539,8 +626,17 @@ pub unsafe fn futex_wait(
     waiter: *mut FutexWaiter,
     wake_fn: WakeFn,
 ) -> FutexWaitResult {
-    futex_wait_in_space(KERNEL_SPACE_ID, virt_addr, virt_addr, false, expected, waiter, wake_fn)
-        .unwrap_or(FutexWaitResult::ValueMismatch)
+    futex_wait_in_space_bitset(
+        KERNEL_SPACE_ID,
+        virt_addr,
+        virt_addr,
+        false,
+        expected,
+        FUTEX_BITSET_MATCH_ANY,
+        waiter,
+        wake_fn,
+    )
+    .unwrap_or(FutexWaitResult::ValueMismatch)
 }
 
 /// Removes a waiter from whichever bucket it currently occupies (cancelling wait, e.g. timeout).
@@ -580,6 +676,41 @@ pub unsafe fn futex_cancel(waiter: *mut FutexWaiter) {
     }
 }
 
+/// Wakes up to `max` threads waiting on `(space_id, key_addr)` matching `bitset_mask`,
+/// invoking `wake_fn` strictly *after* dropping the bucket lock.
+pub unsafe fn futex_wake_in_space_bitset(
+    space_id: u64,
+    key_addr: u64,
+    bitset_mask: u32,
+    max: u32,
+    wake_code: i32,
+) -> u32 {
+    FUTEX_STATS.wake_calls.fetch_add(1, Ordering::Relaxed);
+    if max == 0 || bitset_mask == 0 {
+        return 0;
+    }
+    let idx = bucket_index(space_id, key_addr);
+    let mut wake_batch = Vec::new();
+    let woken = {
+        let mut bucket = FUTEX_TABLE.buckets[idx].inner.lock();
+        bucket.collect_wake(
+            space_id,
+            key_addr,
+            bitset_mask,
+            max,
+            wake_code,
+            &mut wake_batch,
+        )
+    };
+    for (tid, wake_fn, code) in wake_batch {
+        wake_fn(tid, code);
+    }
+    FUTEX_STATS
+        .total_woken
+        .fetch_add(woken as u64, Ordering::Relaxed);
+    woken
+}
+
 /// Wakes up to `max` threads waiting on `(space_id, key_addr)`.
 ///
 /// # Safety
@@ -590,14 +721,7 @@ pub unsafe fn futex_wake_in_space(
     max: u32,
     wake_code: i32,
 ) -> u32 {
-    FUTEX_STATS.wake_calls.fetch_add(1, Ordering::Relaxed);
-    let idx = bucket_index(space_id, key_addr);
-    let mut bucket = FUTEX_TABLE.buckets[idx].inner.lock();
-    let woken = bucket.wake(space_id, key_addr, max, wake_code);
-    FUTEX_STATS
-        .total_woken
-        .fetch_add(woken as u64, Ordering::Relaxed);
-    woken
+    futex_wake_in_space_bitset(space_id, key_addr, FUTEX_BITSET_MATCH_ANY, max, wake_code)
 }
 
 /// Wakes threads waiting on `clear_child_tid` (`pthread_join`) in either private or shared namespace.
@@ -645,8 +769,9 @@ unsafe fn futex_requeue_in_space(
 
     let src_idx = bucket_index(src_space, src_key);
     let dst_idx = bucket_index(dst_space, dst_key);
+    let mut wake_batch = Vec::new();
 
-    if src_idx == dst_idx {
+    let (woken, requeued) = if src_idx == dst_idx {
         let mut bucket = FUTEX_TABLE.buckets[src_idx].inner.lock();
         if let Some((uaddr, expected_val, is_user)) = cmp_expected {
             let (cur_val, _) = read_futex_word(uaddr, is_user)?;
@@ -654,47 +779,75 @@ unsafe fn futex_requeue_in_space(
                 return Err(FutexError::ValueMismatch);
             }
         }
-        let woken = bucket.wake(src_space, src_key, max_wake, wake_code);
-        let requeued = if (src_space, src_key) != (dst_space, dst_key) {
+        let woken = if max_wake > 0 {
+            bucket.collect_wake(
+                src_space,
+                src_key,
+                FUTEX_BITSET_MATCH_ANY,
+                max_wake,
+                wake_code,
+                &mut wake_batch,
+            )
+        } else {
+            0
+        };
+        let requeued = if max_requeue > 0 && (src_space, src_key) != (dst_space, dst_key) {
             bucket.requeue_inplace(src_space, src_key, dst_space, dst_key, max_requeue)
         } else {
             0
         };
-        FUTEX_STATS
-            .total_woken
-            .fetch_add(woken as u64, Ordering::Relaxed);
-        return Ok((woken, requeued));
-    }
-
-    // Two different buckets — always lock in index order to avoid deadlocks.
-    let (lo, hi) = if src_idx < dst_idx {
-        (src_idx, dst_idx)
+        (woken, requeued)
     } else {
-        (dst_idx, src_idx)
-    };
+        // Two different buckets — always lock in index order to avoid deadlocks.
+        let (lo, hi) = if src_idx < dst_idx {
+            (src_idx, dst_idx)
+        } else {
+            (dst_idx, src_idx)
+        };
 
-    let lo_guard = FUTEX_TABLE.buckets[lo].inner.lock();
-    let hi_guard = FUTEX_TABLE.buckets[hi].inner.lock();
+        let lo_guard = FUTEX_TABLE.buckets[lo].inner.lock();
+        let hi_guard = FUTEX_TABLE.buckets[hi].inner.lock();
 
-    // Obtain mutable pointers — addr_of!(*guard) avoids &T->*mut T (UB lint).
-    // Both guards protect distinct buckets (lo < hi), no aliasing.
-    let lo_ptr = core::ptr::addr_of!(*lo_guard) as *mut BucketInner;
-    let hi_ptr = core::ptr::addr_of!(*hi_guard) as *mut BucketInner;
-    let (src_inner, dst_inner) = if src_idx < dst_idx {
-        (&mut *lo_ptr, &mut *hi_ptr)
-    } else {
-        (&mut *hi_ptr, &mut *lo_ptr)
-    };
+        // Obtain mutable pointers — addr_of!(*guard) avoids &T->*mut T (UB lint).
+        // Both guards protect distinct buckets (lo < hi), no aliasing.
+        let lo_ptr = core::ptr::addr_of!(*lo_guard) as *mut BucketInner;
+        let hi_ptr = core::ptr::addr_of!(*hi_guard) as *mut BucketInner;
+        let (src_inner, dst_inner) = if src_idx < dst_idx {
+            (&mut *lo_ptr, &mut *hi_ptr)
+        } else {
+            (&mut *hi_ptr, &mut *lo_ptr)
+        };
 
-    if let Some((uaddr, expected_val, is_user)) = cmp_expected {
-        let (cur_val, _) = read_futex_word(uaddr, is_user)?;
-        if cur_val != expected_val {
-            return Err(FutexError::ValueMismatch);
+        if let Some((uaddr, expected_val, is_user)) = cmp_expected {
+            let (cur_val, _) = read_futex_word(uaddr, is_user)?;
+            if cur_val != expected_val {
+                return Err(FutexError::ValueMismatch);
+            }
         }
-    }
 
-    let woken = src_inner.wake(src_space, src_key, max_wake, wake_code);
-    let requeued = src_inner.requeue_to(src_space, src_key, dst_space, dst_key, dst_inner, max_requeue);
+        let woken = if max_wake > 0 {
+            src_inner.collect_wake(
+                src_space,
+                src_key,
+                FUTEX_BITSET_MATCH_ANY,
+                max_wake,
+                wake_code,
+                &mut wake_batch,
+            )
+        } else {
+            0
+        };
+        let requeued = if max_requeue > 0 && (src_space, src_key) != (dst_space, dst_key) {
+            src_inner.requeue_to(src_space, src_key, dst_space, dst_key, dst_inner, max_requeue)
+        } else {
+            0
+        };
+        (woken, requeued)
+    };
+
+    for (tid, wake_fn, code) in wake_batch {
+        wake_fn(tid, code);
+    }
 
     FUTEX_STATS
         .total_woken
@@ -887,21 +1040,17 @@ fn resolve_user_futex_key(uaddr: u64, is_private: bool) -> Result<(u64, u64), Fu
     }
 }
 
-/// Entry point of syscall `futex(uaddr, op, val, timeout, uaddr2, val3)`.
+/// Entry point of syscall `futex(uaddr, op, val, timeout, uaddr2, val3)` with normalized timeout.
 ///
-/// - `uaddr`: futex address (user, 4-byte aligned, canonical < USER_ADDR_MAX).
-/// - `op`: operation (FUTEX_WAIT/WAKE/REQUEUE + optionally PRIVATE/CLOCK_REALTIME).
-/// - `val`: expected value (FUTEX_WAIT) or thread count (FUTEX_WAKE).
-/// - `timeout`: timeout in ns (FUTEX_WAIT), or max_requeue (FUTEX_REQUEUE/CMP_REQUEUE).
-/// - `uaddr2`: destination address (FUTEX_REQUEUE/CMP_REQUEUE).
-/// - `val3`: bitset mask (WAIT/WAKE_BITSET) or expected value (FUTEX_CMP_REQUEUE).
-///
-/// Returns number of woken threads (FUTEX_WAKE/REQUEUE) or 0 (FUTEX_WAIT).
-pub fn sys_futex(
+/// - `timeout_ns`: `None` for infinite wait, `Some(0)` for already-expired check,
+///   `Some(ns)` for bounded relative timeout.
+/// - `val2_requeue`: maximum requeue count for `FUTEX_REQUEUE` / `FUTEX_CMP_REQUEUE`.
+pub fn sys_futex_with_timeout(
     uaddr: u64,
     op: u32,
     val: u32,
-    timeout: u64,
+    timeout_ns: Option<u64>,
+    val2_requeue: u32,
     uaddr2: u64,
     val3: u32,
 ) -> Result<i64, FutexError> {
@@ -914,7 +1063,18 @@ pub fn sys_futex(
             if cmd == FUTEX_WAIT_BITSET && val3 == 0 {
                 return Err(FutexError::InvalidOp);
             }
+            if cmd == FUTEX_WAIT && (op & FUTEX_CLOCK_REALTIME) != 0 {
+                return Err(FutexError::InvalidOp);
+            }
             let (space_id, key_addr) = resolve_user_futex_key(uaddr, is_private)?;
+            if timeout_ns == Some(0) {
+                return Err(check_expired_wait(uaddr, true, val));
+            }
+            let bitset = if cmd == FUTEX_WAIT_BITSET {
+                val3
+            } else {
+                FUTEX_BITSET_MATCH_ANY
+            };
             let tid = get_tid_hook().map(|f| f()).unwrap_or(0);
             let wake_fn = get_wake_hook().unwrap_or(nop_wake_sys);
             // Allocate waiter on current thread stack.
@@ -922,39 +1082,46 @@ pub fn sys_futex(
 
             // SAFETY: uaddr is validated; waiter lives on stack until cancelled or woken.
             let result = unsafe {
-                futex_wait_in_space(space_id, key_addr, uaddr, true, val, &mut waiter, wake_fn)
+                futex_wait_in_space_bitset(
+                    space_id,
+                    key_addr,
+                    uaddr,
+                    true,
+                    val,
+                    bitset,
+                    &mut waiter,
+                    wake_fn,
+                )
             }?;
 
             match result {
                 FutexWaitResult::ValueMismatch => Err(FutexError::ValueMismatch),
-                FutexWaitResult::Waiting => {
-                    match get_sleep_hook() {
-                        Some(sleep) => {
-                            let rc = sleep(&mut waiter, timeout);
-                            if rc == -4 {
-                                // SAFETY: waiter must be unlinked before stack frame unwinds.
-                                unsafe { futex_cancel(&mut waiter) };
-                                Err(FutexError::Interrupted)
-                            } else if rc == -110 {
-                                // SAFETY: waiter must be unlinked before stack frame unwinds.
-                                unsafe { futex_cancel(&mut waiter) };
-                                Err(FutexError::Timeout)
-                            } else if !waiter.woken.load(Ordering::Acquire) {
-                                // Defense against unexpected sleep return without wake: never leave
-                                // stack `waiter` linked inside `FUTEX_TABLE`.
-                                unsafe { futex_cancel(&mut waiter) };
-                                Err(FutexError::Interrupted)
-                            } else {
-                                Ok(0)
-                            }
-                        }
-                        None => {
-                            // No scheduler: cancel and return EINTR.
+                FutexWaitResult::Waiting => match get_sleep_hook() {
+                    Some(sleep) => {
+                        let rc = sleep(&mut waiter, timeout_ns.unwrap_or(0));
+                        if rc == -4 {
+                            // SAFETY: waiter must be unlinked before stack frame unwinds.
                             unsafe { futex_cancel(&mut waiter) };
                             Err(FutexError::Interrupted)
+                        } else if rc == -110 {
+                            // SAFETY: waiter must be unlinked before stack frame unwinds.
+                            unsafe { futex_cancel(&mut waiter) };
+                            Err(FutexError::Timeout)
+                        } else if !waiter.woken.load(Ordering::Acquire) {
+                            // Defense against unexpected sleep return without wake: never leave
+                            // stack `waiter` linked inside `FUTEX_TABLE`.
+                            unsafe { futex_cancel(&mut waiter) };
+                            Err(FutexError::Interrupted)
+                        } else {
+                            Ok(0)
                         }
                     }
-                }
+                    None => {
+                        // No scheduler: cancel and return EINTR.
+                        unsafe { futex_cancel(&mut waiter) };
+                        Err(FutexError::Interrupted)
+                    }
+                },
             }
         }
 
@@ -963,9 +1130,14 @@ pub fn sys_futex(
             if cmd == FUTEX_WAKE_BITSET && val3 == 0 {
                 return Err(FutexError::InvalidOp);
             }
+            let bitset = if cmd == FUTEX_WAKE_BITSET {
+                val3
+            } else {
+                FUTEX_BITSET_MATCH_ANY
+            };
             let (space_id, key_addr) = resolve_user_futex_key(uaddr, is_private)?;
             // SAFETY: key_addr belongs to a validated user mapping in `space_id`.
-            let woken = unsafe { futex_wake_in_space(space_id, key_addr, val, 0) };
+            let woken = unsafe { futex_wake_in_space_bitset(space_id, key_addr, bitset, val, 0) };
             Ok(woken as i64)
         }
 
@@ -979,9 +1151,9 @@ pub fn sys_futex(
                 None
             };
             let max_wake = val;
-            let max_requeue = timeout as u32;
+            let max_requeue = val2_requeue;
             // SAFETY: keys belong to validated mappings in their respective spaces.
-            let (woken, _requeued) = unsafe {
+            let (woken, requeued) = unsafe {
                 futex_requeue_in_space(
                     src_space,
                     src_key,
@@ -993,9 +1165,149 @@ pub fn sys_futex(
                     0,
                 )
             }?;
-            Ok(woken as i64)
+            let total = if cmd == FUTEX_CMP_REQUEUE {
+                woken.saturating_add(requeued)
+            } else {
+                woken
+            };
+            Ok(total as i64)
         }
 
         _ => Err(FutexError::InvalidOp),
+    }
+}
+
+/// Entry point of syscall `futex(uaddr, op, val, timeout, uaddr2, val3)`.
+pub fn sys_futex(
+    uaddr: u64,
+    op: u32,
+    val: u32,
+    timeout: u64,
+    uaddr2: u64,
+    val3: u32,
+) -> Result<i64, FutexError> {
+    let timeout_ns = if timeout == 0 { None } else { Some(timeout) };
+    sys_futex_with_timeout(uaddr, op, val, timeout_ns, timeout as u32, uaddr2, val3)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use spin::Mutex;
+
+    static WAKE_LOG: Mutex<Vec<u64>> = Mutex::new(Vec::new());
+
+    fn record_wake(tid: u64, _code: i32) {
+        WAKE_LOG.lock().push(tid);
+    }
+
+    #[test]
+    fn futex_fifo_order_and_bitset_filtering_work() {
+        let word: u32 = 42;
+        let addr = core::ptr::addr_of!(word) as u64;
+        WAKE_LOG.lock().clear();
+
+        let mut w1 = FutexWaiter::new(addr, 42, 101, record_wake);
+        let mut w2 = FutexWaiter::new(addr, 42, 102, record_wake);
+        let mut w3 = FutexWaiter::new(addr, 42, 103, record_wake);
+
+        unsafe {
+            assert_eq!(
+                futex_wait_in_space_bitset(
+                    KERNEL_SPACE_ID,
+                    addr,
+                    addr,
+                    false,
+                    42,
+                    0b0001,
+                    &mut w1,
+                    record_wake,
+                ),
+                Ok(FutexWaitResult::Waiting)
+            );
+            assert_eq!(
+                futex_wait_in_space_bitset(
+                    KERNEL_SPACE_ID,
+                    addr,
+                    addr,
+                    false,
+                    42,
+                    0b0010,
+                    &mut w2,
+                    record_wake,
+                ),
+                Ok(FutexWaitResult::Waiting)
+            );
+            assert_eq!(
+                futex_wait_in_space_bitset(
+                    KERNEL_SPACE_ID,
+                    addr,
+                    addr,
+                    false,
+                    42,
+                    0b0001,
+                    &mut w3,
+                    record_wake,
+                ),
+                Ok(FutexWaitResult::Waiting)
+            );
+
+            // Mask 0b0010 must wake only w2 (tid 102).
+            let n = futex_wake_in_space_bitset(KERNEL_SPACE_ID, addr, 0b0010, 10, 0);
+            assert_eq!(n, 1);
+            // FIFO over matching 0b0001 waiters must wake w1 (101) before w3 (103).
+            let n2 = futex_wake_in_space_bitset(KERNEL_SPACE_ID, addr, 0b0001, 1, 0);
+            assert_eq!(n2, 1);
+            let n3 = futex_wake_in_space_bitset(KERNEL_SPACE_ID, addr, 0b0001, 1, 0);
+            assert_eq!(n3, 1);
+        }
+
+        assert_eq!(*WAKE_LOG.lock(), alloc::vec![102, 101, 103]);
+    }
+
+    #[test]
+    fn futex_requeue_moves_excess_waiters_and_reports_combined_count() {
+        let src_word: u32 = 7;
+        let dst_word: u32 = 9;
+        let src = core::ptr::addr_of!(src_word) as u64;
+        let dst = core::ptr::addr_of!(dst_word) as u64;
+        WAKE_LOG.lock().clear();
+
+        let mut w1 = FutexWaiter::new(src, 7, 201, record_wake);
+        let mut w2 = FutexWaiter::new(src, 7, 202, record_wake);
+        let mut w3 = FutexWaiter::new(src, 7, 203, record_wake);
+
+        unsafe {
+            assert_eq!(futex_wait(src, 7, &mut w1, record_wake), FutexWaitResult::Waiting);
+            assert_eq!(futex_wait(src, 7, &mut w2, record_wake), FutexWaitResult::Waiting);
+            assert_eq!(futex_wait(src, 7, &mut w3, record_wake), FutexWaitResult::Waiting);
+
+            let (woken, requeued) = futex_requeue_in_space(
+                KERNEL_SPACE_ID,
+                src,
+                KERNEL_SPACE_ID,
+                dst,
+                Some((src, 7, false)),
+                1,
+                2,
+                0,
+            )
+            .expect("requeue");
+            assert_eq!(woken, 1);
+            assert_eq!(requeued, 2);
+            assert_eq!(*WAKE_LOG.lock(), alloc::vec![201]);
+
+            let rem = futex_wake(dst, 10, 0);
+            assert_eq!(rem, 2);
+            assert_eq!(*WAKE_LOG.lock(), alloc::vec![201, 202, 203]);
+        }
+    }
+
+    #[test]
+    fn expired_wait_check_distinguishes_timeout_and_mismatch() {
+        let val: u32 = 55;
+        let addr = core::ptr::addr_of!(val) as u64;
+        assert_eq!(check_expired_wait(addr, false, 55), FutexError::Timeout);
+        assert_eq!(check_expired_wait(addr, false, 99), FutexError::ValueMismatch);
     }
 }

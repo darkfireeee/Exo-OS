@@ -11,7 +11,13 @@ use crate::scheduler::timer::{clock::monotonic_ns, hrtimer};
 use core::ptr::NonNull;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
-const MAX_SLEEP_TIMERS: usize = 1024;
+use alloc::boxed::Box;
+use spin::Mutex;
+
+const STATIC_SLEEP_SLOTS: usize = 1024;
+const OVERFLOW_CHUNK_SIZE: usize = 256;
+const MAX_OVERFLOW_CHUNKS: usize = 64;
+const TOTAL_SLEEP_SLOTS: usize = STATIC_SLEEP_SLOTS + MAX_OVERFLOW_CHUNKS * OVERFLOW_CHUNK_SIZE;
 
 struct SleepTimerSlot {
     tcb: AtomicU64,
@@ -38,8 +44,52 @@ struct SleepTimerCookie {
     tcb: u64,
 }
 
-static SLEEP_TIMER_SLOTS: [SleepTimerSlot; MAX_SLEEP_TIMERS] =
-    [const { SleepTimerSlot::new() }; MAX_SLEEP_TIMERS];
+static SLEEP_TIMER_SLOTS: [SleepTimerSlot; STATIC_SLEEP_SLOTS] =
+    [const { SleepTimerSlot::new() }; STATIC_SLEEP_SLOTS];
+static OVERFLOW_CHUNKS: [core::sync::atomic::AtomicPtr<[SleepTimerSlot; OVERFLOW_CHUNK_SIZE]>;
+    MAX_OVERFLOW_CHUNKS] = [const { core::sync::atomic::AtomicPtr::new(core::ptr::null_mut()) };
+    MAX_OVERFLOW_CHUNKS];
+static OVERFLOW_CHUNK_COUNT: core::sync::atomic::AtomicUsize =
+    core::sync::atomic::AtomicUsize::new(0);
+static OVERFLOW_ALLOC_LOCK: Mutex<()> = Mutex::new(());
+
+#[inline]
+fn slot_at(index: usize) -> Option<&'static SleepTimerSlot> {
+    if index < STATIC_SLEEP_SLOTS {
+        return Some(&SLEEP_TIMER_SLOTS[index]);
+    }
+    let off = index - STATIC_SLEEP_SLOTS;
+    let chunk_idx = off / OVERFLOW_CHUNK_SIZE;
+    let elem_idx = off % OVERFLOW_CHUNK_SIZE;
+    if chunk_idx >= MAX_OVERFLOW_CHUNKS {
+        return None;
+    }
+    let ptr = OVERFLOW_CHUNKS[chunk_idx].load(Ordering::Acquire);
+    if ptr.is_null() {
+        None
+    } else {
+        Some(unsafe { &(&*ptr)[elem_idx] })
+    }
+}
+
+fn ensure_overflow_chunk(chunk_idx: usize) -> Option<&'static [SleepTimerSlot; OVERFLOW_CHUNK_SIZE]> {
+    if chunk_idx >= MAX_OVERFLOW_CHUNKS {
+        return None;
+    }
+    let existing = OVERFLOW_CHUNKS[chunk_idx].load(Ordering::Acquire);
+    if !existing.is_null() {
+        return Some(unsafe { &*existing });
+    }
+    let _guard = OVERFLOW_ALLOC_LOCK.lock();
+    let double_check = OVERFLOW_CHUNKS[chunk_idx].load(Ordering::Acquire);
+    if !double_check.is_null() {
+        return Some(unsafe { &*double_check });
+    }
+    let raw = Box::into_raw(Box::new([const { SleepTimerSlot::new() }; OVERFLOW_CHUNK_SIZE]));
+    OVERFLOW_CHUNKS[chunk_idx].store(raw, Ordering::Release);
+    let _ = OVERFLOW_CHUNK_COUNT.fetch_max(chunk_idx + 1, Ordering::AcqRel);
+    Some(unsafe { &*raw })
+}
 
 #[inline]
 fn encode_cookie(cookie: SleepTimerCookie) -> u64 {
@@ -49,38 +99,65 @@ fn encode_cookie(cookie: SleepTimerCookie) -> u64 {
 #[inline]
 fn decode_cookie(data: u64) -> Option<(usize, u32)> {
     let index = (data & 0xffff_ffff) as usize;
-    (index < MAX_SLEEP_TIMERS).then_some((index, (data >> 32) as u32))
+    (index < TOTAL_SLEEP_SLOTS).then_some((index, (data >> 32) as u32))
+}
+
+#[inline]
+fn try_claim_slot(slot: &SleepTimerSlot, index: usize, raw: u64, cpu: u32) -> Option<SleepTimerCookie> {
+    if slot
+        .tcb
+        .compare_exchange(0, raw, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+    {
+        slot.cpu.store(cpu, Ordering::Release);
+        slot.timer_id.store(0, Ordering::Release);
+        let generation = slot
+            .generation
+            .fetch_add(1, Ordering::AcqRel)
+            .wrapping_add(1);
+        Some(SleepTimerCookie {
+            index,
+            generation,
+            tcb: raw,
+        })
+    } else {
+        None
+    }
 }
 
 fn reserve_sleep_timer(tcb: *mut ThreadControlBlock, cpu: u32) -> Option<SleepTimerCookie> {
     let raw = tcb as u64;
-    let mut index = 0usize;
-    while index < MAX_SLEEP_TIMERS {
-        let slot = &SLEEP_TIMER_SLOTS[index];
-        if slot
-            .tcb
-            .compare_exchange(0, raw, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
-        {
-            slot.cpu.store(cpu, Ordering::Release);
-            slot.timer_id.store(0, Ordering::Release);
-            let generation = slot
-                .generation
-                .fetch_add(1, Ordering::AcqRel)
-                .wrapping_add(1);
-            return Some(SleepTimerCookie {
-                index,
-                generation,
-                tcb: raw,
-            });
+    for (index, slot) in SLEEP_TIMER_SLOTS.iter().enumerate() {
+        if let Some(cookie) = try_claim_slot(slot, index, raw, cpu) {
+            return Some(cookie);
         }
-        index = index.wrapping_add(1);
+    }
+    let active_chunks = OVERFLOW_CHUNK_COUNT.load(Ordering::Acquire);
+    for chunk_idx in 0..MAX_OVERFLOW_CHUNKS {
+        let chunk = if chunk_idx < active_chunks {
+            let ptr = OVERFLOW_CHUNKS[chunk_idx].load(Ordering::Acquire);
+            if ptr.is_null() {
+                ensure_overflow_chunk(chunk_idx)?
+            } else {
+                unsafe { &*ptr }
+            }
+        } else {
+            ensure_overflow_chunk(chunk_idx)?
+        };
+        let base_idx = STATIC_SLEEP_SLOTS + chunk_idx * OVERFLOW_CHUNK_SIZE;
+        for (elem_idx, slot) in chunk.iter().enumerate() {
+            if let Some(cookie) = try_claim_slot(slot, base_idx + elem_idx, raw, cpu) {
+                return Some(cookie);
+            }
+        }
     }
     None
 }
 
 fn publish_sleep_timer(cookie: SleepTimerCookie, timer_id: u32) -> bool {
-    let slot = &SLEEP_TIMER_SLOTS[cookie.index];
+    let Some(slot) = slot_at(cookie.index) else {
+        return false;
+    };
     if slot.generation.load(Ordering::Acquire) != cookie.generation {
         return false;
     }
@@ -92,7 +169,9 @@ fn publish_sleep_timer(cookie: SleepTimerCookie, timer_id: u32) -> bool {
 }
 
 fn clear_sleep_timer(cookie: SleepTimerCookie) {
-    let slot = &SLEEP_TIMER_SLOTS[cookie.index];
+    let Some(slot) = slot_at(cookie.index) else {
+        return;
+    };
     if slot.generation.load(Ordering::Acquire) != cookie.generation {
         return;
     }
@@ -105,29 +184,40 @@ fn clear_sleep_timer(cookie: SleepTimerCookie) {
     }
 }
 
+#[inline]
+fn cancel_slot_for_raw(slot: &SleepTimerSlot, raw: u64) {
+    if slot
+        .tcb
+        .compare_exchange(raw, 0, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+    {
+        let timer_id = slot.timer_id.swap(0, Ordering::AcqRel);
+        let cpu = slot.cpu.load(Ordering::Acquire) as usize;
+        if timer_id != 0 && cpu < crate::scheduler::core::preempt::MAX_CPUS {
+            unsafe {
+                let _ = hrtimer::cancel(cpu, timer_id);
+            }
+        }
+    }
+}
+
 /// Cancels any sleep timer still bound to this TCB.
 ///
 /// Called upon return from a sleep woken other than by its timer and from
 /// `do_exit()` before reaper can observe the thread as dead.
 pub fn cancel_sleep_timer_for_tcb(tcb: &ThreadControlBlock) {
     let raw = tcb as *const ThreadControlBlock as u64;
-    let mut index = 0usize;
-    while index < MAX_SLEEP_TIMERS {
-        let slot = &SLEEP_TIMER_SLOTS[index];
-        if slot
-            .tcb
-            .compare_exchange(raw, 0, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
-        {
-            let timer_id = slot.timer_id.swap(0, Ordering::AcqRel);
-            let cpu = slot.cpu.load(Ordering::Acquire) as usize;
-            if timer_id != 0 && cpu < crate::scheduler::core::preempt::MAX_CPUS {
-                unsafe {
-                    let _ = hrtimer::cancel(cpu, timer_id);
-                }
+    for slot in &SLEEP_TIMER_SLOTS {
+        cancel_slot_for_raw(slot, raw);
+    }
+    let chunks = OVERFLOW_CHUNK_COUNT.load(Ordering::Acquire);
+    for chunk_ptr in &OVERFLOW_CHUNKS[..chunks.min(MAX_OVERFLOW_CHUNKS)] {
+        let ptr = chunk_ptr.load(Ordering::Acquire);
+        if !ptr.is_null() {
+            for slot in unsafe { &*ptr } {
+                cancel_slot_for_raw(slot, raw);
             }
         }
-        index = index.wrapping_add(1);
     }
 }
 
@@ -136,7 +226,9 @@ unsafe fn sleep_timer_wake(_id: u32, data: u64) {
     let Some((index, generation)) = decode_cookie(data) else {
         return;
     };
-    let slot = &SLEEP_TIMER_SLOTS[index];
+    let Some(slot) = slot_at(index) else {
+        return;
+    };
     if slot.generation.load(Ordering::Acquire) != generation {
         return;
     }
@@ -255,6 +347,12 @@ pub fn sleep_ns(duration_ns: u64) -> bool {
     sleep_until_ns(monotonic_ns().saturating_add(duration_ns))
 }
 
+/// Wakes a thread previously put to sleep via `sleep_until_ns_if` (or `block_current_thread`),
+/// cancelling any pending sleep timer first. Safe to call from any thread context.
+pub fn wake_sleeping_tcb(tcb_raw: u64) {
+    futex_wake_hook(tcb_raw, 0);
+}
+
 fn futex_tid_hook() -> u64 {
     current_thread_raw() as u64
 }
@@ -328,7 +426,7 @@ fn futex_sleep_hook(
             }
 
             let step_ns = match deadline_ns {
-                Some(dl) => dl.saturating_sub(now).clamp(50_000, 10_000_000),
+                Some(dl) => dl.saturating_sub(now).clamp(1, 1_000_000_000),
                 None => 10_000_000,
             };
 

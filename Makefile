@@ -7,7 +7,7 @@
 #   make qemu    → lance QEMU depuis l'ISO (x86_64, 4Go RAM, sortie série stdio)
 #   make run     → alias de qemu
 
-.PHONY: all build build-rootfs-binaries rootfs-image release iso iso-phoenix-resurrection iso-release-phoenix-resurrection qemu qemu-e1000 qemu-virtio-net qemu-nographic-virtio-net qemu-headless-safe-virtio-net run clean check fmt test test-exofs test-userspace test-drivers test-loader qemu-shell-smoke info help qemu-headless-safe qemu-phoenix-resurrection qemu-release-phoenix-resurrection keygen-kernel sign-kernel verify-kernel _sign_kernel
+.PHONY: all build build-rootfs-binaries build-musl-exo rootfs-image release iso iso-phoenix-resurrection iso-release-phoenix-resurrection qemu qemu-e1000 qemu-virtio-net qemu-nographic-virtio-net qemu-headless-safe-virtio-net run clean check fmt test test-exofs test-userspace test-drivers test-loader qemu-shell-smoke qemu-compliance info help qemu-headless-safe qemu-phoenix-resurrection qemu-release-phoenix-resurrection keygen-kernel sign-kernel verify-kernel _sign_kernel
 
 # ── Outils ───────────────────────────────────────────────────────────────────
 CARGO          = cargo
@@ -21,19 +21,21 @@ USERSPACE_TARGET_JSON ?= $(abspath x86_64-exo-userspace.json)
 USERSPACE_TARGET_DIR  ?= x86_64-exo-userspace
 EXO_STD_TARGET_JSON   ?= $(abspath x86_64-unknown-exo.json)
 EXO_STD_TARGET_DIR    ?= x86_64-unknown-exo
+EXO_STD_PIE_TARGET_JSON ?= $(abspath targets/x86_64-unknown-exo-pie.json)
+EXO_STD_PIE_TARGET_DIR  ?= x86_64-unknown-exo-pie
 LOADER_TARGET_JSON    ?= $(abspath x86_64-exo-loader.json)
 LOADER_TARGET_DIR     ?= x86_64-exo-loader
 CARGO_TEST_FLAGS = -Z panic-abort-tests
-CARGO_BAREMETAL_FLAGS = -Z build-std=core,alloc,compiler_builtins -Z build-std-features=compiler-builtins-mem
-CARGO_USERSPACE_FLAGS = -Z build-std=core,alloc,compiler_builtins -Z build-std-features=compiler-builtins-mem -Z json-target-spec
-CARGO_EXO_STD_FLAGS = -Z build-std=core,alloc,std,panic_abort -Z build-std-features=compiler-builtins-mem -Z json-target-spec
+CARGO_BAREMETAL_FLAGS = --offline -Z build-std=core,alloc,compiler_builtins -Z build-std-features=compiler-builtins-mem
+CARGO_USERSPACE_FLAGS = --offline -Z build-std=core,alloc,compiler_builtins -Z build-std-features=compiler-builtins-mem -Z json-target-spec
+CARGO_EXO_STD_FLAGS = --offline -Z build-std=core,alloc,std,panic_abort -Z build-std-features=compiler-builtins-mem -Z json-target-spec --config 'patch.crates-io.libc.path="$(abspath libs/vendors/libc)"'
 HOST_TEST_TARGET ?= x86_64-unknown-linux-gnu
 HOST_TEST_OVERRIDES = --target $(HOST_TEST_TARGET)
 
 # Signature kernel (verified boot exo-verity / exo-boot). La clé privée vit dans
 # .secrets/ (gitignored) ; la publique est embarquée dans le bootloader.
 KERNEL_SIGNER_SEED ?= .secrets/kernel_signing.seed
-KERNEL_SIGNER      = $(CARGO) run -q -p exo-kernel-signer --
+KERNEL_SIGNER      = $(CARGO) run --locked -q -p exo-kernel-signer --
 
 # Kernel buildé par cargo (dans le workspace target/)
 KERNEL_BIN_DBG  = target/x86_64-unknown-none/debug/exo-os-kernel
@@ -42,9 +44,11 @@ KERNEL_A_DBG    = target/exophoenix/kernel-a-debug.elf
 KERNEL_A_REL    = target/exophoenix/kernel-a-release.elf
 ROOTFS_RAW_DIR = target/$(USERSPACE_TARGET_DIR)/debug
 ROOTFS_STD_RAW_DIR = target/$(EXO_STD_TARGET_DIR)/debug
+ROOTFS_STD_PIE_RAW_DIR = target/$(EXO_STD_PIE_TARGET_DIR)/debug
 ROOTFS_LOADER_RAW_DIR = target/$(LOADER_TARGET_DIR)/debug
 ROOTFS_STAGING_DIR = target/exofs-rootfs
 COREUTILS_MANIFEST = userspace/apps/coreutils/Cargo.toml
+COMPLIANCE_MANIFEST = tests/exo-compliance/Cargo.toml
 STRIP_TOOL ?= $(shell command -v llvm-strip 2>/dev/null || command -v strip 2>/dev/null || echo :)
 ROOTFS_SERVER_PACKAGES = \
 	-p exo-init-server \
@@ -230,14 +234,13 @@ all: iso
 ## 1a. Build des binaires Ring1 installes dans l'image ExoFS racine
 build-rootfs-binaries:
 	@echo "$(BLUE)[rootfs] Compilation serveurs Ring1 pour /sbin, /bin et /lib...$(NC)"
-	@rsync -a --delete library/std/ "$$(rustc --print sysroot)/lib/rustlib/src/rust/library/std/"
-	@$(CARGO) build $(ROOTFS_SERVER_PACKAGES) $(ROOTFS_SERVER_FEATURES) --target $(USERSPACE_TARGET_JSON) $(CARGO_USERSPACE_FLAGS)
-	@$(CARGO) build -p exo-exosh --target $(EXO_STD_TARGET_JSON) $(CARGO_EXO_STD_FLAGS)
-	@$(CARGO) build --manifest-path $(COREUTILS_MANIFEST) --bins --target-dir target --target $(EXO_STD_TARGET_JSON) $(CARGO_EXO_STD_FLAGS)
-	@$(CARGO) build -p exo-loader --features dynamic_linking --target $(LOADER_TARGET_JSON) $(CARGO_USERSPACE_FLAGS)
+	@bash scripts/prepare_exo_rust_src.sh "$(CURDIR)/target/exo-rust-src/library"
+	@$(CARGO) build --locked $(ROOTFS_SERVER_PACKAGES) $(ROOTFS_SERVER_FEATURES) --target $(USERSPACE_TARGET_JSON) $(CARGO_USERSPACE_FLAGS)
+	@__CARGO_TESTS_ONLY_SRC_ROOT="$(CURDIR)/target/exo-rust-src/library" $(CARGO) build --locked -p exo-exosh --target $(EXO_STD_TARGET_JSON) $(CARGO_EXO_STD_FLAGS)
+	@__CARGO_TESTS_ONLY_SRC_ROOT="$(CURDIR)/target/exo-rust-src/library" $(CARGO) build --locked --manifest-path $(COREUTILS_MANIFEST) --bins --target-dir target --target $(EXO_STD_TARGET_JSON) $(CARGO_EXO_STD_FLAGS)
+	@$(CARGO) build --locked -p exo-loader --features dynamic_linking --target $(LOADER_TARGET_JSON) $(CARGO_USERSPACE_FLAGS)
 	@rm -rf "$(ROOTFS_STAGING_DIR)" 2>/dev/null || (sleep 1 && rm -rf "$(ROOTFS_STAGING_DIR)") || true
 	@mkdir -p "$(ROOTFS_STAGING_DIR)/sbin" "$(ROOTFS_STAGING_DIR)/bin" "$(ROOTFS_STAGING_DIR)/lib" "$(ROOTFS_STAGING_DIR)/mnt/usb" "$(ROOTFS_STAGING_DIR)/tmp" "$(ROOTFS_STAGING_DIR)/apps" "$(ROOTFS_STAGING_DIR)/run" "$(ROOTFS_STAGING_DIR)/etc/exo-desktop" "$(ROOTFS_STAGING_DIR)/usr/share/themes/exo-strata" "$(ROOTFS_STAGING_DIR)/usr/share/icons/exo-strata"
-	@printf "WAYLAND_DISPLAY=wayland-0\nEXO_COMPOSITOR_ENDPOINT=20\nPROTOCOL=wl_display,wl_registry,wl_compositor,wl_shm,xdg_wm_base,wl_seat\n" > "$(ROOTFS_STAGING_DIR)/run/wayland-0"
 	@printf "[compositor]\nbackend = \"virtio-gpu+vesa-shadow\"\nsocket = \"/run/wayland-0\"\ntheme = \"exo-strata\"\ncursor_size = 64\n" > "$(ROOTFS_STAGING_DIR)/etc/exo-desktop/wayland.conf"
 	@printf "[theme]\nname = \"Exo-Strata Aurora\"\nwallpaper_top = \"#0d2642\"\nwallpaper_mid = \"#113256\"\nwallpaper_bottom = \"#0a1e36\"\naccent = \"#00c5ff\"\nwindow_border = \"#2e77b0\"\n" > "$(ROOTFS_STAGING_DIR)/usr/share/themes/exo-strata/theme.toml"
 	@printf "cursor_pointer_64x64_argb8888\nicon_terminal_32x32\nicon_exodoctor_32x32\nicon_calendar_32x32\nicon_exofs_32x32\n" > "$(ROOTFS_STAGING_DIR)/usr/share/icons/exo-strata/icons.manifest"
@@ -245,34 +248,63 @@ build-rootfs-binaries:
 		cp "$(ROOTFS_RAW_DIR)/$$bin" "$(ROOTFS_STAGING_DIR)/sbin/$$bin"; \
 		if [ "$(STRIP_TOOL)" != ":" ]; then "$(STRIP_TOOL)" --strip-all "$(ROOTFS_STAGING_DIR)/sbin/$$bin" 2>/dev/null || true; fi; \
 	done
-	@cp "$(ROOTFS_STD_RAW_DIR)/exosh" "$(ROOTFS_STAGING_DIR)/bin/exosh"
-	@if [ "$(STRIP_TOOL)" != ":" ]; then "$(STRIP_TOOL)" --strip-all "$(ROOTFS_STAGING_DIR)/bin/exosh" 2>/dev/null || true; fi
 	@# std binaries use the large code model: lld keeps one .ltext.<symbol> section per
 	@# function, so .shstrtab alone weighs > 1 MiB. The ELF loader only needs program
-	@# headers, so section headers are dropped (GNU strip >= 2.41) to shrink the blob.
-	@strip --strip-section-headers "$(ROOTFS_STAGING_DIR)/bin/exosh" 2>/dev/null || true
-	@for bin in $(ROOTFS_BIN_BINS); do \
+	@# headers, so section headers are dropped (llvm-strip / GNU strip >= 2.41) to shrink the blob.
+	@for bin in exosh $(ROOTFS_BIN_BINS); do \
 		cp "$(ROOTFS_STD_RAW_DIR)/$$bin" "$(ROOTFS_STAGING_DIR)/bin/$$bin"; \
-		if [ "$(STRIP_TOOL)" != ":" ]; then "$(STRIP_TOOL)" --strip-all "$(ROOTFS_STAGING_DIR)/bin/$$bin" 2>/dev/null || true; fi; \
-		strip --strip-section-headers "$(ROOTFS_STAGING_DIR)/bin/$$bin" 2>/dev/null || true; \
+		if [ "$(STRIP_TOOL)" != ":" ]; then "$(STRIP_TOOL)" --strip-all "$(ROOTFS_STAGING_DIR)/bin/$$bin"; fi; \
+		if command -v llvm-strip >/dev/null 2>&1; then \
+			llvm-strip --strip-sections "$(ROOTFS_STAGING_DIR)/bin/$$bin"; \
+		elif strip --help 2>/dev/null | grep -q -- '--strip-section-headers'; then \
+			strip --strip-section-headers "$(ROOTFS_STAGING_DIR)/bin/$$bin"; \
+		else \
+			echo "ERROR: neither llvm-strip nor GNU strip >= 2.41 is installed" >&2; \
+			exit 1; \
+		fi; \
 	done
 	@cp "$(ROOTFS_LOADER_RAW_DIR)/exo-loader" "$(ROOTFS_STAGING_DIR)/lib/ld-exo.so"
 	@if [ "$(STRIP_TOOL)" != ":" ]; then "$(STRIP_TOOL)" --strip-all "$(ROOTFS_STAGING_DIR)/lib/ld-exo.so" 2>/dev/null || true; fi
+	@if [ -n "$(P3_PROBE)$(COMPLIANCE_PROBE)" ]; then \
+		echo "$(BLUE)[rootfs] P3_PROBE=1 : sondes Phase 3 (ld-exo.so + musl-exo) dans /bin et /lib$(NC)"; \
+		bash scripts/build_musl_exo.sh && bash scripts/build_p3_probe.sh && \
+		cp target/p3-probe/p3dyn target/p3-probe/p3musl "$(ROOTFS_STAGING_DIR)/bin/" && \
+		cp target/p3-probe/libp3a.so target/p3-probe/libp3b.so target/p3-probe/libp3c.so "$(ROOTFS_STAGING_DIR)/lib/"; \
+	fi
+	@if [ -n "$(COMPLIANCE_PROBE)" ]; then \
+		echo "$(BLUE)[rootfs] COMPLIANCE_PROBE=1 : compilation /bin/exo-compliance-runner + /bin/exo-compliance-pie$(NC)"; \
+		__CARGO_TESTS_ONLY_SRC_ROOT="$(CURDIR)/target/exo-rust-src/library" $(CARGO) build --locked --manifest-path $(COMPLIANCE_MANIFEST) --bins --target-dir target --target $(EXO_STD_TARGET_JSON) $(CARGO_EXO_STD_FLAGS) && \
+		cp "$(ROOTFS_STD_RAW_DIR)/exo-compliance-runner" "$(ROOTFS_STAGING_DIR)/bin/exo-compliance-runner" && \
+		__CARGO_TESTS_ONLY_SRC_ROOT="$(CURDIR)/target/exo-rust-src/library" $(CARGO) build --locked --manifest-path $(COMPLIANCE_MANIFEST) --bins --target-dir target --target $(EXO_STD_PIE_TARGET_JSON) $(CARGO_EXO_STD_FLAGS) && \
+		cp "$(ROOTFS_STD_PIE_RAW_DIR)/exo-compliance-runner" "$(ROOTFS_STAGING_DIR)/bin/exo-compliance-pie" && \
+		for cbin in exo-compliance-runner exo-compliance-pie; do \
+			if [ "$(STRIP_TOOL)" != ":" ]; then "$(STRIP_TOOL)" --strip-all "$(ROOTFS_STAGING_DIR)/bin/$$cbin"; fi && \
+			if command -v llvm-strip >/dev/null 2>&1; then \
+				llvm-strip --strip-sections "$(ROOTFS_STAGING_DIR)/bin/$$cbin"; \
+			elif strip --help 2>/dev/null | grep -q -- '--strip-section-headers'; then \
+				strip --strip-section-headers "$(ROOTFS_STAGING_DIR)/bin/$$cbin"; \
+			fi; \
+		done; \
+	fi
 	@echo "$(GREEN)[OK] Rootfs staging pret : $(ROOTFS_STAGING_DIR)$(NC)"
+
+build-musl-exo:
+	@echo "$(BLUE)[musl-exo] Compilation sysroot C (libc.a + crt1/Scrt1/rcrt1)...$(NC)"
+	@bash scripts/build_musl_exo.sh
 
 rootfs-image: build-rootfs-binaries
 	@echo "$(BLUE)[rootfs] Creation image ExoFS : $(QEMU_EXOFS_DISK) ($(QEMU_EXOFS_DISK_SIZE))$(NC)"
 	@mkdir -p $(dir $(QEMU_EXOFS_DISK))
-	@$(CARGO) run -p exofs-mkroot -- --image "$(QEMU_EXOFS_DISK)" --size "$(QEMU_EXOFS_DISK_SIZE)" --root "$(ROOTFS_STAGING_DIR)"
+	@$(CARGO) run --locked -p exofs-mkroot -- --image "$(QEMU_EXOFS_DISK)" --size "$(QEMU_EXOFS_DISK_SIZE)" --root "$(ROOTFS_STAGING_DIR)"
 
 ## 1. Build debug du kernel (rapide, symboles complets)
 build:
 	@echo "$(BLUE)[1/2] Compilation Kernel A propre ExoPhoenix (release, image de résurrection)...$(NC)"
 	@mkdir -p target/exophoenix
-	@cd $(KERNEL_DIR) && EXOPHOENIX_BUILD_ROLE=A $(CARGO) build --release --target $(BAREMETAL_TARGET) $(CARGO_BAREMETAL_FLAGS)
-	@cp $(KERNEL_BIN_REL) $(KERNEL_A_DBG)
+	@cd $(KERNEL_DIR) && EXOPHOENIX_BUILD_ROLE=A $(CARGO) build --locked --release --target $(BAREMETAL_TARGET) $(CARGO_BAREMETAL_FLAGS)
+	@cmp -s $(KERNEL_BIN_REL) $(KERNEL_A_DBG) || cp $(KERNEL_BIN_REL) $(KERNEL_A_DBG)
 	@echo "$(BLUE)[2/2] Compilation Kernel B avec image Kernel A injectée (debug)...$(NC)"
-	@cd $(KERNEL_DIR) && KERNEL_A_IMAGE_PATH="$(abspath $(KERNEL_A_DBG))" EXOPHOENIX_RESCUE_TEST="$(EXOPHOENIX_RESCUE_TEST)" $(CARGO) build --target $(BAREMETAL_TARGET) $(CARGO_BAREMETAL_FLAGS)
+	@cd $(KERNEL_DIR) && KERNEL_A_IMAGE_PATH="$(abspath $(KERNEL_A_DBG))" EXOPHOENIX_RESCUE_TEST="$(EXOPHOENIX_RESCUE_TEST)" $(CARGO) build --locked --target $(BAREMETAL_TARGET) $(CARGO_BAREMETAL_FLAGS)
 	@echo "$(GREEN)[OK] Kernel compilé : $(KERNEL_BIN_DBG)$(NC)"
 	@$(MAKE) --no-print-directory _sign_kernel KERNEL_BIN=$(KERNEL_BIN_DBG)
 
@@ -280,10 +312,10 @@ build:
 release:
 	@echo "$(BLUE)[1/2] Compilation Kernel A propre ExoPhoenix (release)...$(NC)"
 	@mkdir -p target/exophoenix
-	@cd $(KERNEL_DIR) && EXOPHOENIX_BUILD_ROLE=A $(CARGO) build --release --target $(BAREMETAL_TARGET) $(CARGO_BAREMETAL_FLAGS)
+	@cd $(KERNEL_DIR) && EXOPHOENIX_BUILD_ROLE=A $(CARGO) build --locked --release --target $(BAREMETAL_TARGET) $(CARGO_BAREMETAL_FLAGS)
 	@cp $(KERNEL_BIN_REL) $(KERNEL_A_REL)
 	@echo "$(BLUE)[2/2] Compilation Kernel B avec image Kernel A injectée (release)...$(NC)"
-	@cd $(KERNEL_DIR) && KERNEL_A_IMAGE_PATH="$(abspath $(KERNEL_A_REL))" EXOPHOENIX_RESCUE_TEST="$(EXOPHOENIX_RESCUE_TEST)" $(CARGO) build --release --target $(BAREMETAL_TARGET) $(CARGO_BAREMETAL_FLAGS)
+	@cd $(KERNEL_DIR) && KERNEL_A_IMAGE_PATH="$(abspath $(KERNEL_A_REL))" EXOPHOENIX_RESCUE_TEST="$(EXOPHOENIX_RESCUE_TEST)" $(CARGO) build --locked --release --target $(BAREMETAL_TARGET) $(CARGO_BAREMETAL_FLAGS)
 	@echo "$(GREEN)[OK] Kernel compilé : $(KERNEL_BIN_REL)$(NC)"
 	@$(MAKE) --no-print-directory _sign_kernel KERNEL_BIN=$(KERNEL_BIN_REL)
 
@@ -349,7 +381,7 @@ _make_iso:
 	@cp bootloader/grub.cfg $(ISO_WORKDIR)/boot/grub/grub.cfg
 	@echo "$(BLUE)[rootfs] Creation image ExoFS ramdisk pour ISO : $(ISO_EXOFS_DISK) ($(ISO_EXOFS_DISK_SIZE))$(NC)"
 	@mkdir -p target/iso
-	@$(CARGO) run -p exofs-mkroot -- --image "$(ISO_EXOFS_DISK)" --size "$(ISO_EXOFS_DISK_SIZE)" --root "$(ROOTFS_STAGING_DIR)"
+	@$(CARGO) run --locked -p exofs-mkroot -- --image "$(ISO_EXOFS_DISK)" --size "$(ISO_EXOFS_DISK_SIZE)" --root "$(ROOTFS_STAGING_DIR)"
 	@cp "$(ISO_EXOFS_DISK)" "$(ISO_WORKDIR)/boot/exofs-root.img"
 	@grub-mkrescue -o $(ISO_OUTPUT) $(ISO_WORKDIR) \
 	    --compress=xz 2>&1 | grep -v "^$$" || true
@@ -413,7 +445,7 @@ run: qemu
 ## Vérifier (clippy)
 check:
 	@echo "$(BLUE)Vérification clippy...$(NC)"
-	@cd $(KERNEL_DIR) && EXOPHOENIX_BUILD_ROLE=A $(CARGO) clippy --target $(BAREMETAL_TARGET) $(CARGO_BAREMETAL_FLAGS)
+	@cd $(KERNEL_DIR) && EXOPHOENIX_BUILD_ROLE=A $(CARGO) clippy --locked --target $(BAREMETAL_TARGET) $(CARGO_BAREMETAL_FLAGS)
 	@echo "$(GREEN)[OK]$(NC)"
 
 ## Formatter le code
@@ -425,31 +457,36 @@ fmt:
 ## Tests unitaires (host, pas bare-metal)
 test:
 	@echo "$(BLUE)Tests unitaires...$(NC)"
-	@cd $(KERNEL_DIR) && EXOPHOENIX_BUILD_ROLE=A $(CARGO) test --lib $(CARGO_TEST_FLAGS) $(HOST_TEST_OVERRIDES)
+	@cd $(KERNEL_DIR) && EXOPHOENIX_BUILD_ROLE=A $(CARGO) test --locked --lib $(CARGO_TEST_FLAGS) $(HOST_TEST_OVERRIDES)
 
 ## Tests ExoFS ciblés (corrige duplicate-core via panic-abort-tests)
 test-exofs:
 	@echo "$(BLUE)Tests ExoFS (filtre fs::exofs::)...$(NC)"
-	@cd $(KERNEL_DIR) && EXOPHOENIX_BUILD_ROLE=A $(CARGO) test --lib $(CARGO_TEST_FLAGS) $(HOST_TEST_OVERRIDES) fs::exofs::
+	@cd $(KERNEL_DIR) && EXOPHOENIX_BUILD_ROLE=A $(CARGO) test --locked --lib $(CARGO_TEST_FLAGS) $(HOST_TEST_OVERRIDES) fs::exofs::
 
 test-drivers:
 	@echo "$(BLUE)Tests drivers shell/QEMU...$(NC)"
-	@$(CARGO) test --manifest-path drivers/input/ps2/Cargo.toml
-	@$(CARGO) test --manifest-path drivers/tty/Cargo.toml
-	@$(CARGO) test --manifest-path drivers/display/vga/Cargo.toml
-	@$(CARGO) test --manifest-path drivers/storage/virtio_blk/Cargo.toml
+	@$(CARGO) test --locked --manifest-path drivers/input/ps2/Cargo.toml
+	@$(CARGO) test --locked --manifest-path drivers/tty/Cargo.toml
+	@$(CARGO) test --locked --manifest-path drivers/display/vga/Cargo.toml
+	@$(CARGO) test --locked --manifest-path drivers/storage/virtio_blk/Cargo.toml
 
 test-loader:
 	@echo "$(BLUE)Tests loader ELF...$(NC)"
-	@$(CARGO) test --manifest-path loader/Cargo.toml
+	@$(CARGO) test --locked --manifest-path loader/Cargo.toml
 
 test-userspace:
 	@echo "$(BLUE)Tests userspace shell/coreutils...$(NC)"
-	@cd userspace && $(CARGO) test --workspace
+	@cd userspace && $(CARGO) test --locked --workspace
 
 qemu-shell-smoke: iso $(QEMU_EXOFS_DISK)
 	@echo "$(CYAN)Smoke QEMU shell avec disque virtio persistant$(NC)"
 	@bash scripts/qemu/shell_smoke_qmp.sh "$(QEMU_EXOFS_DISK)"
+
+qemu-compliance:
+	@echo "$(CYAN)Matrice de conformite QEMU automatisee (T0 -> T6)$(NC)"
+	@$(MAKE) --no-print-directory iso COMPLIANCE_PROBE=1 P3_PROBE=1
+	@python3 scripts/qemu/run_compliance_matrix.py "$(QEMU_EXOFS_DISK)"
 
 # ── Nettoyage ─────────────────────────────────────────────────────────────────
 clean:

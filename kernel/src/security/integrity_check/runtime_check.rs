@@ -154,7 +154,7 @@ pub fn init_runtime_integrity() {
 /// between chunks if the scheduler is active, in order to never block
 /// interactive threads during the hashing of the ~15 MiB `.text`/`.rodata`.
 fn hash_section_cooperative(section: &[u8]) -> [u8; 32] {
-    const CHUNK_SIZE: usize = 256 * 1024;
+    const CHUNK_SIZE: usize = 32 * 1024;
     let mut hasher = super::super::crypto::blake3::Blake3Hasher::new();
     for chunk in section.chunks(CHUNK_SIZE) {
         hasher.update(chunk);

@@ -11,17 +11,31 @@ use crate::sys::pal::alloc_dlmalloc::{
 use crate::sys::pal::runtime;
 use crate::sys::pal::syscall::{
     self, CLONE_CHILD_CLEARTID, CLONE_FILES, CLONE_FS, CLONE_PARENT_SETTID, CLONE_SETTLS,
-    CLONE_SIGHAND, CLONE_SYSVSEM, CLONE_THREAD, CLONE_VM, PR_SET_NAME, RawTimespec,
+    CLONE_SIGHAND, CLONE_SYSVSEM, CLONE_THREAD, CLONE_VM, PR_SET_NAME, RawTimespec, SYS_EXIT,
+    SYS_MUNMAP,
 };
 use crate::thread::ThreadInit;
 use crate::time::Duration;
 
 pub const DEFAULT_MIN_STACK_SIZE: usize = 256 * 1024;
 
+const STATE_ATTACHED: u32 = 0;
+const STATE_DETACHED: u32 = 1;
+const STATE_EXITED_ATTACHED: u32 = 2;
+
+#[repr(C)]
+struct ThreadShared {
+    ctid: AtomicU32,
+    state: AtomicU32,
+    stack_base: usize,
+    stack_alloc_size: usize,
+    tls_alloc_base: usize,
+    tls_alloc_len: usize,
+}
+
 struct ThreadStartCtx {
     init: Box<ThreadInit>,
-    tls_alloc_base: *mut u8,
-    tls_alloc_len: usize,
+    shared: *mut ThreadShared,
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -41,22 +55,116 @@ unsafe extern "C" fn thread_start_trampoline(arg: usize) -> ! {
     unsafe { thread_start_inner(arg) }
 }
 
-unsafe extern "C" fn thread_start_inner(arg: usize) -> ! {
-    let ctx = unsafe { Box::from_raw(arg as *mut ThreadStartCtx) };
-    let tls_base = ctx.tls_alloc_base;
-    let tls_len = ctx.tls_alloc_len;
-    let rust_start = ctx.init.init();
-    rust_start();
+#[cfg(target_arch = "x86_64")]
+#[unsafe(naked)]
+unsafe extern "C" fn unmap_tls_stack_and_exit(
+    _tls_base: usize,
+    _tls_len: usize,
+    _stack_base: usize,
+    _stack_len: usize,
+) -> ! {
+    core::arch::naked_asm!(
+        "mov r12, rdx",
+        "mov r13, rcx",
+        "test rdi, rdi",
+        "jz 2f",
+        "test rsi, rsi",
+        "jz 2f",
+        "mov eax, {sys_munmap}",
+        "syscall",
+        "2:",
+        "test r12, r12",
+        "jz 3f",
+        "test r13, r13",
+        "jz 3f",
+        "mov rdi, r12",
+        "mov rsi, r13",
+        "mov eax, {sys_munmap}",
+        "syscall",
+        "3:",
+        "xor edi, edi",
+        "mov eax, {sys_exit}",
+        "syscall",
+        "ud2",
+        sys_munmap = const SYS_MUNMAP,
+        sys_exit = const SYS_EXIT,
+    );
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+unsafe extern "C" fn unmap_tls_stack_and_exit(
+    tls_base: usize,
+    tls_len: usize,
+    _stack_base: usize,
+    _stack_len: usize,
+) -> ! {
     unsafe {
-        runtime::free_thread_tls(tls_base, tls_len);
+        runtime::free_thread_tls(tls_base as *mut u8, tls_len);
     }
     syscall::exit_thread(0)
 }
 
+unsafe extern "C" fn thread_start_inner(arg: usize) -> ! {
+    runtime::sync_thread_tcb_tid();
+    let ctx = unsafe { Box::from_raw(arg as *mut ThreadStartCtx) };
+    let shared_ptr = ctx.shared;
+    let rust_start = ctx.init.init();
+    rust_start();
+    unsafe {
+        crate::sys::thread_local::destructors::run();
+    }
+    crate::rt::thread_cleanup();
+    unsafe {
+        runtime::free_current_thread_dyn_tls();
+    }
+
+    let shared = unsafe { &*shared_ptr };
+    match shared.state.compare_exchange(
+        STATE_ATTACHED,
+        STATE_EXITED_ATTACHED,
+        Ordering::AcqRel,
+        Ordering::Acquire,
+    ) {
+        Ok(_) => syscall::exit_thread(0),
+        Err(_) => {
+            let stack_base = shared.stack_base;
+            let stack_len = shared.stack_alloc_size;
+            let tls_base = shared.tls_alloc_base;
+            let tls_len = shared.tls_alloc_len;
+            // Disarm clear_child_tid before dropping `shared_ptr` so kernel exit never
+            // writes `0` or futex-wakes freed heap memory.
+            let _ = syscall::set_tid_address(0);
+            unsafe {
+                drop(Box::from_raw(shared_ptr));
+                unmap_tls_stack_and_exit(tls_base, tls_len, stack_base, stack_len);
+            }
+        }
+    }
+}
+
+unsafe fn wait_and_free_shared(shared_ptr: *mut ThreadShared) {
+    if shared_ptr.is_null() {
+        return;
+    }
+    let shared = unsafe { &*shared_ptr };
+    loop {
+        let cur = shared.ctid.load(Ordering::Acquire);
+        if cur == 0 {
+            break;
+        }
+        let _ = syscall::futex_wait_raw(&shared.ctid as *const AtomicU32 as *const u32, cur, None);
+    }
+    unsafe {
+        runtime::free_thread_tls(shared.tls_alloc_base as *mut u8, shared.tls_alloc_len);
+        if shared.stack_base != 0 && shared.stack_alloc_size != 0 {
+            let _ = sys_munmap(shared.stack_base, shared.stack_alloc_size);
+        }
+        drop(Box::from_raw(shared_ptr));
+    }
+}
+
 pub struct Thread {
-    ctid_box: *mut AtomicU32,
-    stack_base: usize,
-    stack_alloc_size: usize,
+    shared: *mut ThreadShared,
 }
 
 unsafe impl Send for Thread {}
@@ -91,17 +199,22 @@ impl Thread {
             }
         };
 
-        let ctid_box = Box::into_raw(Box::new(AtomicU32::new(1)));
-        let start_ctx = Box::into_raw(Box::new(ThreadStartCtx {
-            init,
-            tls_alloc_base,
+        let shared = Box::into_raw(Box::new(ThreadShared {
+            ctid: AtomicU32::new(1),
+            state: AtomicU32::new(STATE_ATTACHED),
+            stack_base,
+            stack_alloc_size: total_alloc_size,
+            tls_alloc_base: tls_alloc_base as usize,
             tls_alloc_len,
         }));
+        let start_ctx = Box::into_raw(Box::new(ThreadStartCtx { init, shared }));
 
         let stack_top = (stack_base + total_alloc_size) & !15usize;
-        let child_stack = stack_top - 16;
+        let child_stack_frame = stack_top - 16;
         unsafe {
-            (child_stack as *mut u64).write(start_ctx as usize as u64);
+            (child_stack_frame as *mut u64).write(start_ctx as usize as u64);
+            ((child_stack_frame + 8) as *mut u64)
+                .write(thread_start_trampoline as *const () as usize as u64);
         }
 
         let clone_flags = CLONE_VM
@@ -114,28 +227,23 @@ impl Thread {
             | CLONE_PARENT_SETTID
             | CLONE_CHILD_CLEARTID;
 
-        let ctid_ptr = ctid_box as *mut u32;
+        let ctid_ptr = unsafe { &mut (*shared).ctid as *mut AtomicU32 as *mut u32 };
         let res = unsafe {
-            syscall::clone_raw(
+            syscall::clone_thread_raw(
                 clone_flags,
-                child_stack,
+                child_stack_frame,
                 ctid_ptr,
                 ctid_ptr,
                 tls_fs_base as usize,
-                thread_start_trampoline as *const () as usize as u64,
             )
         };
 
         match res {
-            Ok(_) => Ok(Thread {
-                ctid_box,
-                stack_base,
-                stack_alloc_size: total_alloc_size,
-            }),
+            Ok(_) => Ok(Thread { shared }),
             Err(err) => {
                 unsafe {
                     drop(Box::from_raw(start_ctx));
-                    drop(Box::from_raw(ctid_box));
+                    drop(Box::from_raw(shared));
                     runtime::free_thread_tls(tls_alloc_base, tls_alloc_len);
                     let _ = sys_munmap(stack_base, total_alloc_size);
                 }
@@ -145,23 +253,35 @@ impl Thread {
     }
 
     pub fn join(mut self) {
-        if !self.ctid_box.is_null() {
-            loop {
-                let cur = unsafe { (*self.ctid_box).load(Ordering::Acquire) };
-                if cur == 0 {
-                    break;
-                }
-                let _ = syscall::futex_wait_raw(self.ctid_box as *const u32, cur, None);
-            }
+        let shared_ptr = self.shared;
+        self.shared = null_mut();
+        unsafe {
+            wait_and_free_shared(shared_ptr);
+        }
+    }
+}
+
+impl Drop for Thread {
+    fn drop(&mut self) {
+        let shared_ptr = self.shared;
+        if shared_ptr.is_null() {
+            return;
+        }
+        self.shared = null_mut();
+        let shared = unsafe { &*shared_ptr };
+        if shared
+            .state
+            .compare_exchange(
+                STATE_ATTACHED,
+                STATE_DETACHED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_err()
+        {
             unsafe {
-                drop(Box::from_raw(self.ctid_box));
-                if self.stack_base != 0 && self.stack_alloc_size != 0 {
-                    let _ = sys_munmap(self.stack_base, self.stack_alloc_size);
-                }
+                wait_and_free_shared(shared_ptr);
             }
-            self.ctid_box = null_mut();
-            self.stack_base = 0;
-            self.stack_alloc_size = 0;
         }
     }
 }

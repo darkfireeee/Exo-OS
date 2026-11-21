@@ -102,19 +102,120 @@ fn print_exo_info() {
     write_all(b"Driver Model: Out-of-Kernel Isolated Ring 1 Servers (IOMMU Whitelisted)\n");
 }
 
+fn ipc_service_online(name: &[u8]) -> bool {
+    let rc = unsafe {
+        syscall::syscall3(
+            syscall::SYS_IPC_LOOKUP,
+            name.as_ptr() as u64,
+            name.len() as u64,
+            0,
+        )
+    };
+    rc > 0
+}
+
+fn path_exists_probe(path_cstr: &[u8]) -> bool {
+    let mut st = LinuxStat::default();
+    let rc = unsafe {
+        syscall::syscall2(
+            syscall::SYS_STAT,
+            path_cstr.as_ptr() as u64,
+            &mut st as *mut LinuxStat as u64,
+        )
+    };
+    rc == 0
+}
+
 fn run_exo_doctor() {
-    write_all(b"=== Exo-OS Doctor : System Diagnostics ===\n\n");
+    write_all(b"=== Exo-OS Doctor : Live System Diagnostics ===\n\n");
+    let mut passed = 0u64;
+    let total = 8u64;
 
-    write_all(b"[PASS] 1. Kernel Arch & SMP       : x86_64 Core 0 BSP, x2APIC ready, TSC invariant\n");
-    write_all(b"[PASS] 2. Address Space & KPTI    : KPTI Shadow PML4 active, SMAP/SMEP hardware enforced\n");
-    write_all(b"[PASS] 3. ExoPhoenix Engine       : A/B Resurrection active, Kernel A standby sealed\n");
-    write_all(b"[PASS] 4. ExoShield IPC Cordon    : Zero-Trust 67-edge topology active, IOMMU NIC locked\n");
-    write_all(b"[PASS] 5. Storage Subsystem       : ExoFS root mounted, VirtIO-Blk / AHCI / NVMe ready\n");
-    write_all(b"[PASS] 6. Network Stack (ExoNet)  : V5 NetGrant ring buffers active, e1000/virtio-net online\n");
-    write_all(b"[PASS] 7. Audio Subsystem         : Intel HDA / VirtIO Sound ready, 44.1kHz PCM synth active\n");
-    write_all(b"[PASS] 8. USB Subsystem           : xHCI Host Controller & HID Boot Protocol active\n\n");
+    // 1. Kernel Syscall / Perf Telemetry
+    let total_calls = unsafe {
+        syscall::syscall2(syscall::SYS_EXO_PERF_READ, syscall::EXO_PERF_DISPATCH_TOTAL, 0)
+    };
+    if total_calls > 0 {
+        passed += 1;
+        write_all(b"[PASS] 1. Kernel Syscall/Perf     : live (dispatch_total=");
+        write_u64(total_calls as u64);
+        write_all(b")\n");
+    } else {
+        write_all(b"[FAIL] 1. Kernel Syscall/Perf     : SYS_EXO_PERF_READ failed (rc=");
+        write_i64(total_calls);
+        write_all(b")\n");
+    }
 
-    write_all(b"System Health: 100% OK (8/8 organs operational, Zero-Trust verified)\n");
+    // 2. ExoPhoenix Engine
+    let phoenix = unsafe { syscall::syscall0(syscall::SYS_EXO_PHOENIX_STATE_GET) };
+    if phoenix >= 1 {
+        passed += 1;
+        write_all(b"[PASS] 2. ExoPhoenix Engine       : live (state=");
+        write_i64(phoenix);
+        write_all(b")\n");
+    } else {
+        write_all(b"[WARN] 2. ExoPhoenix Engine       : unavailable (rc=");
+        write_i64(phoenix);
+        write_all(b")\n");
+    }
+
+    // 3. ExoShield Security Service
+    if ipc_service_online(b"exo_shield") {
+        passed += 1;
+        write_all(b"[PASS] 3. ExoShield Service       : IPC endpoint online\n");
+    } else {
+        write_all(b"[WARN] 3. ExoShield Service       : IPC endpoint offline\n");
+    }
+
+    // 4. ExoFS Root & Dynamic Linker
+    if path_exists_probe(b"/lib/ld-exo.so\0") && path_exists_probe(b"/bin/exosh\0") {
+        passed += 1;
+        write_all(b"[PASS] 4. ExoFS & Dynamic Linker  : /bin/exosh and /lib/ld-exo.so present\n");
+    } else {
+        write_all(b"[FAIL] 4. ExoFS & Dynamic Linker  : rootfs artifacts missing\n");
+    }
+
+    // 5. Wayland Compositor Socket
+    if path_exists_probe(b"/run/wayland-0\0") && ipc_service_online(b"fb_server") {
+        passed += 1;
+        write_all(b"[PASS] 5. Wayland / fb_server     : /run/wayland-0 ready\n");
+    } else {
+        write_all(b"[WARN] 5. Wayland / fb_server     : compositor socket not ready\n");
+    }
+
+    // 6. ExoNet Network Stack
+    let net_sock = unsafe { syscall::syscall3(syscall::SYS_SOCKET, AF_INET as u64, 2, 0) };
+    if net_sock >= 0 {
+        let _ = close_fd(net_sock);
+        passed += 1;
+        write_all(b"[PASS] 6. Network Stack (ExoNet)  : network_server live (AF_INET OK)\n");
+    } else {
+        write_all(b"[WARN] 6. Network Stack (ExoNet)  : socket(AF_INET) returned errno ");
+        write_i64(net_sock);
+        write_all(b"\n");
+    }
+
+    // 7. Audio Service
+    if ipc_service_online(b"audio_server") {
+        passed += 1;
+        write_all(b"[PASS] 7. Audio Service           : audio_server IPC endpoint online\n");
+    } else {
+        write_all(b"[WARN] 7. Audio Service           : audio_server offline\n");
+    }
+
+    // 8. USB Service
+    if ipc_service_online(b"usb_server") {
+        passed += 1;
+        write_all(b"[PASS] 8. USB Service             : usb_server IPC endpoint online\n");
+    } else {
+        write_all(b"[WARN] 8. USB Service             : usb_server offline\n");
+    }
+
+    write_all(b"\nSystem Health: ");
+    write_u64(passed);
+    write_all(b"/");
+    write_u64(total);
+    write_all(b" checks passed\n");
 }
 
 fn print_exo_metrics() {
@@ -288,20 +389,73 @@ fn handle_exo_phoenix(args: &[u8]) {
 }
 
 fn print_exo_caps() {
-    write_all(b"Process Capabilities (Current Shell):\n");
-    write_all(b"  [CAP_FS_READ]      Permitted (read ExoFS storage)\n");
-    write_all(b"  [CAP_FS_WRITE]     Permitted (write ExoFS storage)\n");
-    write_all(b"  [CAP_NET_CLIENT]   Permitted (TCP/UDP socket bridge)\n");
-    write_all(b"  [CAP_IPC_ROUTER]   Permitted (Ring 1 fastpath IPC)\n");
-    write_all(b"  [CAP_SYS_INFO]     Permitted (system telemetry & diagnostics)\n");
+    let pid = unsafe { syscall::syscall0(syscall::SYS_GETPID) };
+    let uid = unsafe { syscall::syscall0(syscall::SYS_GETUID) };
+    let gid = unsafe { syscall::syscall0(syscall::SYS_GETGID) };
+    write_all(b"Process Identity & Capabilities (exosh):\n");
+    write_all(b"  PID / UID / GID : ");
+    write_i64(pid);
+    write_all(b" / ");
+    write_i64(uid);
+    write_all(b" / ");
+    write_i64(gid);
+    write_all(b"\n");
+    write_all(b"  ExoShield IPC   : ");
+    if ipc_service_online(b"exo_shield") {
+        write_all(b"online\n");
+    } else {
+        write_all(b"offline\n");
+    }
+    write_all(b"  Token listing   : kernel capability introspection syscall not exposed yet (ENOSYS)\n");
 }
 
 fn print_exo_net(_args: &[u8]) {
-    write_all(b"ExoNet V5 Stack:\n");
-    write_all(b"  Engine: smoltcp-iface + NetGrant ring buffers\n");
-    write_all(b"  Protocols: IPv4, TCP, UDP, ICMP Echo, DHCP Client\n");
-    write_all(b"  Socket Buffer Size: 16384 bytes (16 KiB)\n");
-    write_all(b"  Route: 0.0.0.0/0 via 10.0.2.2 (Gateway)\n");
+    write_all(b"ExoNet Stack Status:\n");
+    write_all(b"  network_server  : ");
+    if ipc_service_online(b"network_server") {
+        write_all(b"online\n");
+    } else {
+        write_all(b"offline\n");
+    }
+    let sock = unsafe { syscall::syscall3(syscall::SYS_SOCKET, AF_INET as u64, 2, 0) };
+    if sock >= 0 {
+        let _ = close_fd(sock);
+        write_all(b"  AF_INET probe   : OK\n");
+    } else {
+        write_all(b"  AF_INET probe   : errno ");
+        write_i64(sock);
+        write_all(b"\n");
+    }
+    let conf_fd = unsafe {
+        syscall::syscall4(
+            syscall::SYS_OPENAT,
+            AT_FDCWD,
+            b"/etc/network.conf\0".as_ptr() as u64,
+            syscall::O_RDONLY,
+            0,
+        )
+    };
+    if conf_fd >= 0 {
+        let mut buf = [0u8; 256];
+        let n = unsafe {
+            syscall::syscall3(
+                syscall::SYS_READ,
+                conf_fd as u64,
+                buf.as_mut_ptr() as u64,
+                buf.len() as u64,
+            )
+        };
+        let _ = close_fd(conf_fd);
+        if n > 0 {
+            write_all(b"  /etc/network.conf:\n");
+            write_bytes(&buf[..n as usize]);
+            if buf[n as usize - 1] != b'\n' {
+                write_all(b"\n");
+            }
+        }
+    } else {
+        write_all(b"  /etc/network.conf: not present (using server default)\n");
+    }
 }
 
 fn handle_exo_compat(args: &[u8]) {
@@ -314,11 +468,7 @@ fn handle_exo_compat(args: &[u8]) {
             write_all(b"Usage: exo compat run <package> [args]\n");
             return;
         }
-        write_all(b"Launching compat application '/compat/");
-        write_bytes(pkg);
-        write_all(b"/bin/");
-        write_bytes(pkg);
-        write_all(b"' in confined ExoShield sandbox...\n");
+        write_all(b"exo compat run: sandbox package launcher not implemented (ENOSYS)\n");
     } else {
         write_all(b"Usage: exo compat [install|run] <pkg>\n");
     }
@@ -334,36 +484,9 @@ fn handle_exo_install(args: &[u8], is_compat: bool) {
         }
         return;
     }
-
-    if is_compat {
-        write_all(b"[1/4] Resolving POSIX compat bundle for '");
-        write_bytes(pkg_name);
-        write_all(b"'...\n");
-        write_all(b"[2/4] Verifying package signature via crypto_server (Ed25519) : OK\n");
-        write_all(b"[3/4] Configuring ExoShield sandbox (pledge: STDIO | RPATH | WPATH)\n");
-        write_all(b"[4/4] Deploying to /compat/");
-        write_bytes(pkg_name);
-        write_all(b"/bin/");
-        write_bytes(pkg_name);
-        write_all(b" : OK\n\n");
-        write_all(b"Application '");
-        write_bytes(pkg_name);
-        write_all(b"' installed successfully in confined sandbox.\n");
-    } else {
-        write_all(b"[1/4] Resolving native Exo-OS package '");
-        write_bytes(pkg_name);
-        write_all(b"'...\n");
-        write_all(b"[2/4] Verifying package signature via crypto_server (Ed25519) : OK\n");
-        write_all(b"[3/4] Granting declared capabilities (ExoFS RW, IPC Notification)\n");
-        write_all(b"[4/4] Deploying to /apps/");
-        write_bytes(pkg_name);
-        write_all(b"/bin/");
-        write_bytes(pkg_name);
-        write_all(b" : OK\n\n");
-        write_all(b"Native application '");
-        write_bytes(pkg_name);
-        write_all(b"' installed successfully.\n");
-    }
+    write_all(b"exo install: package manager backend not implemented for '");
+    write_bytes(pkg_name);
+    write_all(b"' (ENOSYS)\n");
 }
 
 fn handle_exo_remove(args: &[u8]) {
@@ -372,101 +495,100 @@ fn handle_exo_remove(args: &[u8]) {
         write_all(b"Usage: exo remove <package>\n");
         return;
     }
+    write_all(b"exo remove: package manager backend not implemented for '");
+    write_bytes(pkg_name);
+    write_all(b"' (ENOSYS)\n");
+}
 
-    write_all(b"[1/3] Revoking security capabilities for '");
-    write_bytes(pkg_name);
-    write_all(b"'...\n");
-    write_all(b"[2/3] Removing application files from ExoFS...\n");
-    write_all(b"[3/3] Updating package index...\n");
-    write_all(b"Package '");
-    write_bytes(pkg_name);
-    write_all(b"' removed cleanly.\n");
+fn list_dir_entries_brief(dir_cstr: &[u8], label: &[u8]) {
+    write_bytes(label);
+    write_all(b":\n");
+    let fd = unsafe {
+        syscall::syscall4(
+            syscall::SYS_OPENAT,
+            AT_FDCWD,
+            dir_cstr.as_ptr() as u64,
+            syscall::O_RDONLY,
+            0,
+        )
+    };
+    if fd < 0 {
+        write_all(b"  (unavailable)\n");
+        return;
+    }
+    let mut buf = [0u8; IO_BUF];
+    loop {
+        let n = unsafe {
+            syscall::syscall3(
+                syscall::SYS_GETDENTS64,
+                fd as u64,
+                buf.as_mut_ptr() as u64,
+                buf.len() as u64,
+            )
+        };
+        if n <= 0 {
+            break;
+        }
+        let slice = &buf[..n as usize];
+        let mut off = 0usize;
+        while off + DIRENT64_HEADER_SIZE <= slice.len() {
+            let reclen = u16::from_le_bytes([slice[off + 16], slice[off + 17]]) as usize;
+            if reclen == 0 || off + reclen > slice.len() {
+                break;
+            }
+            let start = off + DIRENT64_HEADER_SIZE;
+            let mut end = start;
+            while end < off + reclen && slice[end] != 0 {
+                end += 1;
+            }
+            let name = &slice[start..end];
+            if !name.is_empty() && !bytes_eq(name, b".") && !bytes_eq(name, b"..") {
+                write_all(b"  ");
+                write_bytes(name);
+                write_all(b"\n");
+            }
+            off += reclen;
+        }
+    }
+    let _ = close_fd(fd);
 }
 
 fn list_installed_packages() {
-    write_all(b"Installed Applications (Native & POSIX Compat):\n\n");
-    write_all(b"  NAME             TYPE       VERSION    STATUS     SANDBOX\n");
-    write_all(b"  ---------------------------------------------------------\n");
-    write_all(b"  exo-calendar     Native     1.0.0      Active     ExoCage\n");
-    write_all(b"  exo-monitor      Native     0.2.1      Active     Permissive\n");
-    write_all(b"  calendar         Compat     2.11.1     Active     Pledge (stdio,rpath)\n");
-    write_all(b"  curl             Compat     8.7.0      Active     Pledge (stdio,inet)\n");
-    write_all(b"  vim              Compat     9.1.0      Active     Pledge (stdio,rpath,wpath)\n");
-    write_all(b"  htop             Compat     3.3.0      Active     Pledge (stdio,rpath)\n");
+    write_all(b"Installed Executables on ExoFS:\n");
+    list_dir_entries_brief(b"/bin\0", b"/bin");
+    list_dir_entries_brief(b"/sbin\0", b"/sbin");
 }
 
 fn search_packages(args: &[u8]) {
     let (term, _) = first_token(args);
-    write_all(b"Searching registry for '");
+    write_all(b"exo search: remote package registry not configured for '");
     write_bytes(term);
-    write_all(b"'...\n\n");
-    write_all(b"  NAME             TYPE       AVAILABLE    DESCRIPTION\n");
-    write_all(b"  --------------------------------------------------------------------\n");
-    write_all(b"  calendar         compat     2.11.1       POSIX command line calendar\n");
-    write_all(b"  curl             compat     8.7.0        Command line URL transfer tool\n");
-    write_all(b"  exo-calendar     native     1.0.0        Exo-OS native calendar application\n");
-    write_all(b"  exo-texteditor   native     0.1.0        Zero-Trust native text editor\n");
-    write_all(b"  htop             compat     3.3.0        Interactive process viewer\n");
-    write_all(b"  python3          compat     3.12.0       Python runtime environment\n");
-    write_all(b"  vim              compat     9.1.0        Vi IMproved text editor\n");
+    write_all(b"' (ENOSYS)\n");
 }
 
-fn handle_exo_audit(args: &[u8]) {
-    let (flag, _) = first_token(args);
-    write_all(b"=== ExoLedger Cryptographic Audit Trail ===\n\n");
-    write_all(b"Log file      : /var/log/exoledger.sealed\n");
-    write_all(b"Ledger status : Sealed, immutable (epoch 0001)\n\n");
-
-    if bytes_eq(flag, b"--verify-chain") || bytes_eq(flag, b"verify") {
-        write_all(b"Verifying cryptographic hash chain (BLAKE3)...\n");
-        write_all(b"  Genesis block 0000 : Valid (Ed25519 root trust verified)\n");
-        write_all(b"  Chain depth        : 42 sealed audit events\n");
-        write_all(b"  Integrity status   : 0 chain ruptures detected (100% verified)\n");
-    } else {
-        write_all(b"Recent audit entries:\n");
-        write_all(b"  [0040] BOOT_COMPLETE      author: init_server      status: OK\n");
-        write_all(b"  [0041] SHIELD_BASELINE    author: exo_shield       status: OK\n");
-        write_all(b"  [0042] USER_SESSION_START author: exosh            status: OK\n\n");
-        write_all(b"Run 'exo audit --verify-chain' to verify cryptographic integrity.\n");
-    }
-}
-
-fn print_exo_logs(args: &[u8]) {
-    let (flag, tag) = first_token(args);
-    let filter = if bytes_eq(flag, b"--filter") {
-        tag
-    } else {
-        flag
+fn handle_exo_audit(_args: &[u8]) {
+    write_all(b"=== ExoLedger Audit Trail ===\n");
+    let mut st = LinuxStat::default();
+    let rc = unsafe {
+        syscall::syscall2(
+            syscall::SYS_STAT,
+            b"/var/log/exoledger.sealed\0".as_ptr() as u64,
+            &mut st as *mut LinuxStat as u64,
+        )
     };
-
-    write_all(b"=== Recent System Monitor Logs (monitor_server / Ring 1) ===\n\n");
-    if filter.is_empty() || bytes_eq(filter, b"all") {
-        write_all(b"[boot] Kernel initialization complete (Stage::Ready)\n");
-        write_all(b"[init] Service tree synchronized (19/19 services online)\n");
-        write_all(b"[shield] ExoShield NGAV enforcement active (0 violations)\n");
-        write_all(b"[audio] Intel HDA audio controller ready (output stream 0 active)\n");
-        write_all(b"[usb] xHCI controller initialized, HID keyboard/mouse connected\n");
-        write_all(b"[net] ExoNet V5 NetGrant ring buffers established\n");
-        write_all(b"[exosh] Interactive console session ready on tty0\n");
-    } else if bytes_eq(filter, b"shield") {
-        write_all(b"[shield] ExoShield NGAV enforcement active (0 violations)\n");
-        write_all(b"[shield] Authorized 67-edge topology verified (Cordon active)\n");
-        write_all(b"[shield] Signature database loaded: 0 threats detected\n");
-    } else if bytes_eq(filter, b"net") {
-        write_all(b"[net] ExoNet V5 NetGrant ring buffers established\n");
-        write_all(b"[net] Interfaces: e1000, virtio_net, loopback active\n");
-        write_all(b"[net] DHCP lease bound: gateway 10.0.2.2\n");
-    } else if bytes_eq(filter, b"usb") {
-        write_all(b"[usb] xHCI host controller probed and operational\n");
-        write_all(b"[usb] HID keyboard / mouse Boot Protocol active\n");
-    } else if bytes_eq(filter, b"audio") {
-        write_all(b"[audio] Intel HDA audio controller ready\n");
-        write_all(b"[audio] 44.1kHz PCM synthesizer ready for system sounds\n");
+    if rc == 0 {
+        write_all(b"Log file : /var/log/exoledger.sealed (");
+        write_i64(st.st_size);
+        write_all(b" bytes)\n");
     } else {
-        write_all(b"[log] No entries matching filter '");
-        write_bytes(filter);
-        write_all(b"'\n");
+        write_all(b"Log file : /var/log/exoledger.sealed not present (errno ");
+        write_i64(rc);
+        write_all(b")\n");
     }
+}
+
+fn print_exo_logs(_args: &[u8]) {
+    write_all(b"exo log: ring-buffer log reader not wired to kernel/monitor_server yet (ENOSYS)\n");
 }
 
 fn handle_exo_mount(args: &[u8]) {
@@ -474,33 +596,22 @@ fn handle_exo_mount(args: &[u8]) {
     let (mnt, _) = next_arg(tail);
     let dev_name = if dev.is_empty() { b"/dev/usb0" as &[u8] } else { dev };
     let mnt_name = if mnt.is_empty() { b"/mnt/usb" as &[u8] } else { mnt };
-
-    write_all(b"[usb] Mounting ");
+    write_all(b"exo mount: cannot mount ");
     write_bytes(dev_name);
     write_all(b" on ");
     write_bytes(mnt_name);
-    write_all(b" (FAT32/ExoFS, 32.0 MiB)...\n");
-    write_all(b"[shield] Triggering ExoShield security scan on ");
-    write_bytes(mnt_name);
-    write_all(b"... [OK: 0 threats detected]\n");
-    write_all(b"[usb] Ready: ");
-    write_bytes(mnt_name);
-    write_all(b" accessible\n");
+    write_all(b" (dynamic filesystem mount syscall not implemented: ENOSYS)\n");
 }
 
 fn handle_exo_umount(args: &[u8]) {
     let (mnt, _) = next_arg(args);
     let mnt_name = if mnt.is_empty() { b"/mnt/usb" as &[u8] } else { mnt };
-
-    write_all(b"[usb] Flushing caches and unmounting ");
+    let rc = unsafe { syscall::syscall0(syscall::SYS_SYNC) };
+    write_all(b"exo umount: synced rootfs (rc=");
+    write_i64(rc);
+    write_all(b"), dynamic unmount of ");
     write_bytes(mnt_name);
-    write_all(b"...\n");
-    unsafe {
-        let _ = syscall::syscall0(syscall::SYS_SYNC);
-    }
-    write_all(b"[usb] Safely unmounted: ");
-    write_bytes(mnt_name);
-    write_all(b"\n");
+    write_all(b" not implemented (ENOSYS)\n");
 }
 
 fn handle_exo_cp(args: &[u8], state: &ShellState) {
@@ -510,11 +621,6 @@ fn handle_exo_cp(args: &[u8], state: &ShellState) {
         write_all(b"exo cp: usage: exo cp <src> <dst>\n");
         return;
     }
-    write_all(b"[audit] USB_TRANSFER initiating: ");
-    write_bytes(src_arg);
-    write_all(b" -> ");
-    write_bytes(dst_arg);
-    write_all(b"\n");
 
     let mut src_path = [0u8; PATH_MAX];
     let Some(src_len) = absolute_path(state.cwd(), src_arg, &mut src_path) else {
@@ -560,6 +666,7 @@ fn handle_exo_cp(args: &[u8], state: &ShellState) {
 
     let mut buf = [0u8; 1024];
     let mut total_copied = 0usize;
+    let mut had_err = false;
     loop {
         let n = unsafe {
             syscall::syscall3(
@@ -574,11 +681,13 @@ fn handle_exo_cp(args: &[u8], state: &ShellState) {
         }
         if n < 0 {
             print_errno(b"exo cp read", n);
+            had_err = true;
             break;
         }
         let rc = write_fd_all(out_fd, &buf[..n as usize]);
         if rc < 0 {
             print_errno(b"exo cp write", rc);
+            had_err = true;
             break;
         }
         total_copied += n as usize;
@@ -586,20 +695,25 @@ fn handle_exo_cp(args: &[u8], state: &ShellState) {
     let _ = close_fd(out_fd);
     let _ = close_fd(in_fd);
 
-    write_all(b"[audit] USB_TRANSFER completed: ");
-    write_u64(total_copied as u64);
-    write_all(b" bytes copied. ExoLedger hash verified.\n");
+    if !had_err {
+        write_all(b"exo cp: copied ");
+        write_u64(total_copied as u64);
+        write_all(b" bytes\n");
+    }
 }
 
 fn handle_exo_usb() {
-    write_all(b"=== USB Subsystem Status (usb_server / PID 10) ===\n\n");
-    write_all(b"Controller: xHCI Host Controller (PCI 0x0C:0x03, ProgIF 0x30)\n");
-    write_all(b"Status    : Active, Operational Registers Mapped\n");
-    write_all(b"Ports     : Root Hub Active (USB 2.0 / USB 3.0)\n");
-    write_all(b"Devices   :\n");
-    write_all(b"  - Port 1 : USB Mass Storage BBB (QEMU USB Drive, /dev/usb0 -> /mnt/usb)\n");
-    write_all(b"  - Port 2 : USB HID Keyboard (Boot Protocol)\n");
-    write_all(b"  - Port 3 : USB HID Mouse (Boot Protocol)\n");
+    write_all(b"=== USB Subsystem Status ===\n");
+    if ipc_service_online(b"usb_server") {
+        write_all(b"usb_server : online (device enumeration RPC not exposed yet)\n");
+    } else {
+        write_all(b"usb_server : offline\n");
+    }
+    if path_exists_probe(b"/dev/usb0\0") {
+        write_all(b"/dev/usb0  : present\n");
+    } else {
+        write_all(b"/dev/usb0  : not present\n");
+    }
 }
 
 pub fn cmd_beep(rest: &[u8]) {
@@ -675,280 +789,20 @@ fn handle_exo_chime() {
     }
 }
 
-struct ExoWaylandServerState {
-    surfaces_created: u32,
-    shm_pools_created: u32,
-    buffers_created: u32,
-    commits_received: u32,
-    shm_pixel_sample: u32,
-    toplevel_configured: bool,
-}
-
 #[derive(Clone, Copy)]
 struct ExoWaylandData;
-
-struct DummyClientData;
-impl wayland_server::backend::ClientData for DummyClientData {}
-
-impl
-    wayland_server::GlobalDispatch<
-        wayland_server::protocol::wl_compositor::WlCompositor,
-        ExoWaylandServerState,
-    > for ExoWaylandData
-{
-    fn bind(
-        &self,
-        _state: &mut ExoWaylandServerState,
-        _handle: &wayland_server::DisplayHandle,
-        _client: &wayland_server::Client,
-        resource: wayland_server::New<wayland_server::protocol::wl_compositor::WlCompositor>,
-        data_init: &mut wayland_server::DataInit<'_, ExoWaylandServerState>,
-    ) {
-        data_init.init(resource, ExoWaylandData);
-    }
-}
-
-impl
-    wayland_server::Dispatch<
-        wayland_server::protocol::wl_compositor::WlCompositor,
-        ExoWaylandServerState,
-    > for ExoWaylandData
-{
-    fn request(
-        &self,
-        state: &mut ExoWaylandServerState,
-        _client: &wayland_server::Client,
-        _resource: &wayland_server::protocol::wl_compositor::WlCompositor,
-        request: wayland_server::protocol::wl_compositor::Request,
-        _dhandle: &wayland_server::DisplayHandle,
-        data_init: &mut wayland_server::DataInit<'_, ExoWaylandServerState>,
-    ) {
-        if let wayland_server::protocol::wl_compositor::Request::CreateSurface { id } = request {
-            data_init.init(id, ExoWaylandData);
-            state.surfaces_created += 1;
-        }
-    }
-}
-
-impl
-    wayland_server::Dispatch<
-        wayland_server::protocol::wl_surface::WlSurface,
-        ExoWaylandServerState,
-    > for ExoWaylandData
-{
-    fn request(
-        &self,
-        state: &mut ExoWaylandServerState,
-        _client: &wayland_server::Client,
-        _resource: &wayland_server::protocol::wl_surface::WlSurface,
-        request: wayland_server::protocol::wl_surface::Request,
-        _dhandle: &wayland_server::DisplayHandle,
-        _data_init: &mut wayland_server::DataInit<'_, ExoWaylandServerState>,
-    ) {
-        if let wayland_server::protocol::wl_surface::Request::Commit = request {
-            state.commits_received += 1;
-        }
-    }
-}
-
-impl
-    wayland_server::GlobalDispatch<
-        wayland_server::protocol::wl_shm::WlShm,
-        ExoWaylandServerState,
-    > for ExoWaylandData
-{
-    fn bind(
-        &self,
-        _state: &mut ExoWaylandServerState,
-        _handle: &wayland_server::DisplayHandle,
-        _client: &wayland_server::Client,
-        resource: wayland_server::New<wayland_server::protocol::wl_shm::WlShm>,
-        data_init: &mut wayland_server::DataInit<'_, ExoWaylandServerState>,
-    ) {
-        let shm = data_init.init(resource, ExoWaylandData);
-        shm.format(wayland_server::protocol::wl_shm::Format::Argb8888);
-    }
-}
-
-impl
-    wayland_server::Dispatch<
-        wayland_server::protocol::wl_shm::WlShm,
-        ExoWaylandServerState,
-    > for ExoWaylandData
-{
-    fn request(
-        &self,
-        state: &mut ExoWaylandServerState,
-        _client: &wayland_server::Client,
-        _resource: &wayland_server::protocol::wl_shm::WlShm,
-        request: wayland_server::protocol::wl_shm::Request,
-        _dhandle: &wayland_server::DisplayHandle,
-        data_init: &mut wayland_server::DataInit<'_, ExoWaylandServerState>,
-    ) {
-        use std::os::fd::AsRawFd;
-        if let wayland_server::protocol::wl_shm::Request::CreatePool { id, fd, size } = request {
-            data_init.init(id, ExoWaylandData);
-            state.shm_pools_created += 1;
-            let raw_fd = fd.as_raw_fd();
-            let map_len = (size as usize).max(4096) as u64;
-            let ptr = unsafe {
-                syscall::syscall6(
-                    syscall::SYS_MMAP,
-                    0,
-                    map_len,
-                    syscall::PROT_READ,
-                    syscall::MAP_SHARED,
-                    raw_fd as u64,
-                    0,
-                )
-            };
-            if ptr > 0 {
-                state.shm_pixel_sample = unsafe { *(ptr as usize as *const u32) };
-                let _ = unsafe { syscall::syscall2(syscall::SYS_MUNMAP, ptr as u64, map_len) };
-            }
-        }
-    }
-}
-
-impl
-    wayland_server::Dispatch<
-        wayland_server::protocol::wl_shm_pool::WlShmPool,
-        ExoWaylandServerState,
-    > for ExoWaylandData
-{
-    fn request(
-        &self,
-        state: &mut ExoWaylandServerState,
-        _client: &wayland_server::Client,
-        _resource: &wayland_server::protocol::wl_shm_pool::WlShmPool,
-        request: wayland_server::protocol::wl_shm_pool::Request,
-        _dhandle: &wayland_server::DisplayHandle,
-        data_init: &mut wayland_server::DataInit<'_, ExoWaylandServerState>,
-    ) {
-        if let wayland_server::protocol::wl_shm_pool::Request::CreateBuffer { id, .. } = request {
-            data_init.init(id, ExoWaylandData);
-            state.buffers_created += 1;
-        }
-    }
-}
-
-impl
-    wayland_server::Dispatch<
-        wayland_server::protocol::wl_buffer::WlBuffer,
-        ExoWaylandServerState,
-    > for ExoWaylandData
-{
-    fn request(
-        &self,
-        _state: &mut ExoWaylandServerState,
-        _client: &wayland_server::Client,
-        _resource: &wayland_server::protocol::wl_buffer::WlBuffer,
-        _request: wayland_server::protocol::wl_buffer::Request,
-        _dhandle: &wayland_server::DisplayHandle,
-        _data_init: &mut wayland_server::DataInit<'_, ExoWaylandServerState>,
-    ) {
-    }
-}
-
-impl
-    wayland_server::GlobalDispatch<
-        wayland_protocols::xdg::shell::server::xdg_wm_base::XdgWmBase,
-        ExoWaylandServerState,
-    > for ExoWaylandData
-{
-    fn bind(
-        &self,
-        _state: &mut ExoWaylandServerState,
-        _handle: &wayland_server::DisplayHandle,
-        _client: &wayland_server::Client,
-        resource: wayland_server::New<
-            wayland_protocols::xdg::shell::server::xdg_wm_base::XdgWmBase,
-        >,
-        data_init: &mut wayland_server::DataInit<'_, ExoWaylandServerState>,
-    ) {
-        data_init.init(resource, ExoWaylandData);
-    }
-}
-
-impl
-    wayland_server::Dispatch<
-        wayland_protocols::xdg::shell::server::xdg_wm_base::XdgWmBase,
-        ExoWaylandServerState,
-    > for ExoWaylandData
-{
-    fn request(
-        &self,
-        _state: &mut ExoWaylandServerState,
-        _client: &wayland_server::Client,
-        _resource: &wayland_protocols::xdg::shell::server::xdg_wm_base::XdgWmBase,
-        request: wayland_protocols::xdg::shell::server::xdg_wm_base::Request,
-        _dhandle: &wayland_server::DisplayHandle,
-        data_init: &mut wayland_server::DataInit<'_, ExoWaylandServerState>,
-    ) {
-        if let wayland_protocols::xdg::shell::server::xdg_wm_base::Request::GetXdgSurface {
-            id,
-            ..
-        } = request
-        {
-            let xdg_surface = data_init.init(id, ExoWaylandData);
-            xdg_surface.configure(1);
-        }
-    }
-}
-
-impl
-    wayland_server::Dispatch<
-        wayland_protocols::xdg::shell::server::xdg_surface::XdgSurface,
-        ExoWaylandServerState,
-    > for ExoWaylandData
-{
-    fn request(
-        &self,
-        state: &mut ExoWaylandServerState,
-        _client: &wayland_server::Client,
-        _resource: &wayland_protocols::xdg::shell::server::xdg_surface::XdgSurface,
-        request: wayland_protocols::xdg::shell::server::xdg_surface::Request,
-        _dhandle: &wayland_server::DisplayHandle,
-        data_init: &mut wayland_server::DataInit<'_, ExoWaylandServerState>,
-    ) {
-        match request {
-            wayland_protocols::xdg::shell::server::xdg_surface::Request::GetToplevel { id } => {
-                data_init.init(id, ExoWaylandData);
-            }
-            wayland_protocols::xdg::shell::server::xdg_surface::Request::AckConfigure { .. } => {
-                state.toplevel_configured = true;
-            }
-            _ => {}
-        }
-    }
-}
-
-impl
-    wayland_server::Dispatch<
-        wayland_protocols::xdg::shell::server::xdg_toplevel::XdgToplevel,
-        ExoWaylandServerState,
-    > for ExoWaylandData
-{
-    fn request(
-        &self,
-        _state: &mut ExoWaylandServerState,
-        _client: &wayland_server::Client,
-        _resource: &wayland_protocols::xdg::shell::server::xdg_toplevel::XdgToplevel,
-        _request: wayland_protocols::xdg::shell::server::xdg_toplevel::Request,
-        _dhandle: &wayland_server::DisplayHandle,
-        _data_init: &mut wayland_server::DataInit<'_, ExoWaylandServerState>,
-    ) {
-    }
-}
 
 struct ExoWaylandClientState {
     globals_count: u32,
     surface_id: u32,
     shm_fd: i32,
+    shm_formats: u32,
+    pool: Option<wayland_client::protocol::wl_shm_pool::WlShmPool>,
     surface: Option<wayland_client::protocol::wl_surface::WlSurface>,
     buffer: Option<wayland_client::protocol::wl_buffer::WlBuffer>,
     xdg_wm_base: Option<wayland_protocols::xdg::shell::client::xdg_wm_base::XdgWmBase>,
     configured_serial: u32,
+    buffer_released: bool,
 }
 
 impl
@@ -985,16 +839,17 @@ impl
                     registry.bind(name, version.min(1), qh, ExoWaylandData);
                 if state.shm_fd >= 0 {
                     let borrowed = unsafe { BorrowedFd::borrow_raw(state.shm_fd) };
-                    let pool = shm.create_pool(borrowed, 4096, qh, ExoWaylandData);
+                    let pool = shm.create_pool(borrowed, 64 * 64 * 4, qh, ExoWaylandData);
                     let buffer = pool.create_buffer(
                         0,
-                        32,
-                        32,
-                        128,
+                        64,
+                        64,
+                        64 * 4,
                         wayland_client::protocol::wl_shm::Format::Argb8888,
                         qh,
                         ExoWaylandData,
                     );
+                    state.pool = Some(pool);
                     state.buffer = Some(buffer);
                 }
             } else if interface == "xdg_wm_base" {
@@ -1048,12 +903,15 @@ impl
 {
     fn event(
         &self,
-        _state: &mut ExoWaylandClientState,
+        state: &mut ExoWaylandClientState,
         _proxy: &wayland_client::protocol::wl_shm::WlShm,
-        _event: wayland_client::protocol::wl_shm::Event,
+        event: wayland_client::protocol::wl_shm::Event,
         _conn: &wayland_client::Connection,
         _qh: &wayland_client::QueueHandle<ExoWaylandClientState>,
     ) {
+        if matches!(event, wayland_client::protocol::wl_shm::Event::Format { .. }) {
+            state.shm_formats += 1;
+        }
     }
 }
 
@@ -1082,12 +940,15 @@ impl
 {
     fn event(
         &self,
-        _state: &mut ExoWaylandClientState,
+        state: &mut ExoWaylandClientState,
         _proxy: &wayland_client::protocol::wl_buffer::WlBuffer,
-        _event: wayland_client::protocol::wl_buffer::Event,
+        event: wayland_client::protocol::wl_buffer::Event,
         _conn: &wayland_client::Connection,
         _qh: &wayland_client::QueueHandle<ExoWaylandClientState>,
     ) {
+        if matches!(event, wayland_client::protocol::wl_buffer::Event::Release) {
+            state.buffer_released = true;
+        }
     }
 }
 
@@ -1100,11 +961,14 @@ impl
     fn event(
         &self,
         _state: &mut ExoWaylandClientState,
-        _proxy: &wayland_protocols::xdg::shell::client::xdg_wm_base::XdgWmBase,
-        _event: wayland_protocols::xdg::shell::client::xdg_wm_base::Event,
+        proxy: &wayland_protocols::xdg::shell::client::xdg_wm_base::XdgWmBase,
+        event: wayland_protocols::xdg::shell::client::xdg_wm_base::Event,
         _conn: &wayland_client::Connection,
         _qh: &wayland_client::QueueHandle<ExoWaylandClientState>,
     ) {
+        if let wayland_protocols::xdg::shell::client::xdg_wm_base::Event::Ping { serial } = event {
+            proxy.pong(serial);
+        }
     }
 }
 
@@ -1200,144 +1064,131 @@ fn run_std_runtime_verification() -> Option<(u32, u32)> {
     Some((r1 + r2, total))
 }
 
-/// Runs a full Wayland client-compositor roundtrip using `AF_UNIX`, `SCM_RIGHTS`,
-/// `SYS_MEMFD_CREATE`, shared physical page `mmap(MAP_SHARED)`, `wl_shm`, and `xdg_wm_base`.
-fn run_wayland_rs_roundtrip() -> Option<(u32, u32, u32, u32)> {
-    let shm_fd = std::os::exo::memfd_create(b"wayland-shm-0\0", 0).ok()?;
-    let _ = unsafe { syscall::syscall2(syscall::SYS_FTRUNCATE, shm_fd as u64, 4096) };
+struct LiveWaylandSummary {
+    globals: u32,
+    surface_id: u32,
+    configured_serial: u32,
+    shm_formats: u32,
+    buffer_released: bool,
+}
+
+/// Connects to the real `/run/wayland-0` `fb_server` compositor via `wayland_client::Connection::connect_to_env`,
+/// performs registry discovery, transfers a `memfd` pool via `SCM_RIGHTS`, completes XDG configure handshake,
+/// commits an ARGB8888 surface buffer, and verifies buffer release over the live compositor socket.
+fn run_wayland_rs_roundtrip() -> Result<LiveWaylandSummary, &'static str> {
+    let shm_size: usize = 64 * 64 * 4;
+    let shm_fd = std::os::exo::memfd_create(b"wayland-shm-0\0", 0)
+        .map_err(|_| "memfd_create failed")?;
+    let trunc_rc = unsafe { syscall::syscall2(syscall::SYS_FTRUNCATE, shm_fd as u64, shm_size as u64) };
+    if trunc_rc < 0 {
+        let _ = close_fd(shm_fd as i64);
+        return Err("ftruncate shm failed");
+    }
     let client_map = unsafe {
         syscall::syscall6(
             syscall::SYS_MMAP,
             0,
-            4096,
+            shm_size as u64,
             syscall::PROT_READ | syscall::PROT_WRITE,
             syscall::MAP_SHARED,
             shm_fd as u64,
             0,
         )
     };
-    if client_map > 0 {
-        unsafe {
-            *(client_map as usize as *mut u32) = 0xFF33_6699;
-            let _ = syscall::syscall2(syscall::SYS_MUNMAP, client_map as u64, 4096);
+    if client_map <= 0 {
+        let _ = close_fd(shm_fd as i64);
+        return Err("mmap shm failed");
+    }
+    unsafe {
+        let pixels = core::slice::from_raw_parts_mut(client_map as usize as *mut u32, 64 * 64);
+        for y in 0..64 {
+            for x in 0..64 {
+                let px = if x < 2 || y < 2 || x >= 62 || y >= 62 {
+                    0xFF55_99DD
+                } else {
+                    0xFF33_6699
+                };
+                pixels[y * 64 + x] = px;
+            }
         }
+        let _ = syscall::syscall2(syscall::SYS_MUNMAP, client_map as u64, shm_size as u64);
     }
 
-    let (client_stream, server_stream) = std::os::unix::net::UnixStream::pair().ok()?;
-    let mut display = wayland_server::Display::<ExoWaylandServerState>::new().ok()?;
-    let mut dh = display.handle();
-    dh.create_global::<ExoWaylandServerState, wayland_server::protocol::wl_compositor::WlCompositor, _>(6, ExoWaylandData);
-    dh.create_global::<ExoWaylandServerState, wayland_server::protocol::wl_shm::WlShm, _>(1, ExoWaylandData);
-    dh.create_global::<ExoWaylandServerState, wayland_protocols::xdg::shell::server::xdg_wm_base::XdgWmBase, _>(6, ExoWaylandData);
-    let _client = dh
-        .insert_client(server_stream, std::sync::Arc::new(DummyClientData))
-        .ok()?;
-
-    let conn = wayland_client::Connection::from_socket(client_stream).ok()?;
+    let conn = unsafe { wayland_client::Connection::connect_to_env() }
+        .map_err(|_| "connect_to_env(/run/wayland-0) failed")?;
     let mut event_queue = conn.new_event_queue::<ExoWaylandClientState>();
     let qh = event_queue.handle();
-    let _registry = conn.display().get_registry(&qh, ExoWaylandData);
-    let _ = conn.flush();
-
-    let mut server_state = ExoWaylandServerState {
-        surfaces_created: 0,
-        shm_pools_created: 0,
-        buffers_created: 0,
-        commits_received: 0,
-        shm_pixel_sample: 0,
-        toplevel_configured: false,
-    };
-    let _ = display.dispatch_clients(&mut server_state);
-    let _ = display.flush_clients();
 
     let mut client_state = ExoWaylandClientState {
         globals_count: 0,
         surface_id: 0,
         shm_fd,
+        shm_formats: 0,
+        pool: None,
         surface: None,
         buffer: None,
         xdg_wm_base: None,
         configured_serial: 0,
+        buffer_released: false,
     };
-    if let Some(guard) = event_queue.prepare_read() {
-        let _ = guard.read();
-    }
-    let _ = event_queue.dispatch_pending(&mut client_state);
 
-    // Create xdg_surface + xdg_toplevel, attach the shared wl_buffer, damage, and commit.
-    if let (Some(surface), Some(xdg)) = (&client_state.surface, &client_state.xdg_wm_base) {
-        let xdg_surface = xdg.get_xdg_surface(surface, &qh, ExoWaylandData);
-        let toplevel = xdg_surface.get_toplevel(&qh, ExoWaylandData);
-        toplevel.set_title(&std::string::String::from("Exo-OS Wayland Desktop"));
-        if let Some(buffer) = &client_state.buffer {
-            surface.attach(Some(buffer), 0, 0);
-            surface.damage(0, 0, 32, 32);
-        }
+    let _registry = conn.display().get_registry(&qh, ExoWaylandData);
+    event_queue
+        .roundtrip(&mut client_state)
+        .map_err(|_| "registry roundtrip failed")?;
+
+    let (Some(surface), Some(xdg)) = (client_state.surface.take(), client_state.xdg_wm_base.take()) else {
+        let _ = close_fd(shm_fd as i64);
+        return Err("compositor missing wl_surface or xdg_wm_base global");
+    };
+    let xdg_surface = xdg.get_xdg_surface(&surface, &qh, ExoWaylandData);
+    let toplevel = xdg_surface.get_toplevel(&qh, ExoWaylandData);
+    toplevel.set_title(&std::string::String::from("ExoCompositor Wayland Client"));
+    toplevel.set_app_id(&std::string::String::from("exo-wayland"));
+    surface.commit();
+
+    event_queue
+        .roundtrip(&mut client_state)
+        .map_err(|_| "xdg configure roundtrip failed")?;
+
+    if let Some(buffer) = &client_state.buffer {
+        surface.attach(Some(buffer), 0, 0);
+        surface.damage(0, 0, 64, 64);
         surface.commit();
+        event_queue
+            .roundtrip(&mut client_state)
+            .map_err(|_| "surface buffer commit roundtrip failed")?;
     }
-    let _ = conn.flush();
 
-    // Server processes create_pool (SCM_RIGHTS fd), create_buffer, get_xdg_surface, and commit.
-    let _ = display.dispatch_clients(&mut server_state);
-    let _ = display.flush_clients();
-
-    // Client receives xdg_surface.configure(1) and sends ack_configure(1).
-    if let Some(guard) = event_queue.prepare_read() {
-        let _ = guard.read();
+    if let Some(buf) = client_state.buffer.take() {
+        buf.destroy();
     }
-    let _ = event_queue.dispatch_pending(&mut client_state);
-    let _ = conn.flush();
-
-    let _ = display.dispatch_clients(&mut server_state);
-    let _ = display.flush_clients();
-
+    if let Some(pool) = client_state.pool.take() {
+        pool.destroy();
+    }
+    toplevel.destroy();
+    xdg_surface.destroy();
+    surface.destroy();
+    let _ = event_queue.roundtrip(&mut client_state);
     let _ = close_fd(shm_fd as i64);
 
-    Some((
-        client_state.globals_count,
-        server_state.surfaces_created,
-        server_state.commits_received,
-        server_state.shm_pixel_sample,
-    ))
+    if client_state.configured_serial == 0 {
+        return Err("compositor did not emit xdg_surface.configure");
+    }
+
+    Ok(LiveWaylandSummary {
+        globals: client_state.globals_count,
+        surface_id: client_state.surface_id,
+        configured_serial: client_state.configured_serial,
+        shm_formats: client_state.shm_formats,
+        buffer_released: client_state.buffer_released,
+    })
 }
 
 fn handle_exo_wayland(_args: &[u8]) {
-    // Send a Wayland wire train (wl_display.get_registry + wl_registry.bind + wl_compositor.create_surface)
-    // to fb_server (endpoint 20) via DISPLAY_OP_WAYLAND_WIRE (0x5010).
-    let mut req = syscall::FbRequest::zeroed();
-    req.msg_type = syscall::DISPLAY_OP_WAYLAND_WIRE;
-    // Message 1: object_id=1 (wl_display), size=12, opcode=1 (get_registry), new_id=2
-    let wire: [u32; 9] = [
-        1, (12 << 16) | 1, 2,
-        // Message 2: object_id=2 (wl_registry), size=16, opcode=0 (bind), name=1 (wl_compositor), new_id=3
-        2, (16 << 16) | 0, 1, 3,
-        // Message 3: object_id=3 (wl_compositor), size=12, opcode=0 (create_surface), new_id=4
-        3, (12 << 16) | 0,
-    ];
-    let mut i = 0usize;
-    while i < wire.len() {
-        let bytes = wire[i].to_le_bytes();
-        req.data[i * 4..i * 4 + 4].copy_from_slice(&bytes);
-        i += 1;
-    }
-    let last_id = 4u32.to_le_bytes();
-    req.data[36..40].copy_from_slice(&last_id);
-    req.a = 40;
-    let _ = unsafe {
-        syscall::syscall6(
-            syscall::SYS_IPC_SEND,
-            syscall::FB_SERVER_ENDPOINT,
-            &req as *const syscall::FbRequest as u64,
-            core::mem::size_of::<syscall::FbRequest>() as u64,
-            syscall::IPC_FLAG_TIMEOUT | 4,
-            0,
-            0,
-        )
-    };
-
     write_all(b"=== ExoCompositor : Wayland & VirtIO-GPU Stack ===\n\n");
-    write_all(b"  Protocol Engine : Wayland Wire Protocol (libs/wayland-rs + #![no_std] Ring 1)\n");
-    write_all(b"  Global Objects  : wl_display#1, wl_registry#2, wl_compositor#3, wl_shm, xdg_wm_base, wl_seat\n");
+    write_all(b"  Protocol Engine : Wayland Wire Protocol (/run/wayland-0 + #![no_std] fb_server)\n");
+    write_all(b"  Global Objects  : wl_compositor#6, wl_shm#1, xdg_wm_base#6, wl_seat#7\n");
     if let Some((threads_ok, tls_sum)) = run_std_runtime_verification() {
         write_all(b"  Rust std PAL    : LIVE OK (threads=");
         write_u64(threads_ok as u64);
@@ -1345,18 +1196,25 @@ fn handle_exo_wayland(_args: &[u8]) {
         write_u64(tls_sum as u64);
         write_all(b")\n");
     }
-    if let Some((globals, server_surfaces, commits, shm_pixel)) = run_wayland_rs_roundtrip() {
-        write_all(b"  wayland-rs std  : LIVE OK (globals=");
-        write_u64(globals as u64);
-        write_all(b", surfaces=");
-        write_u64(server_surfaces as u64);
-        write_all(b", commits=");
-        write_u64(commits as u64);
-        write_all(b", shm_pixel_ok=");
-        write_u64(u64::from(shm_pixel == 0xFF33_6699));
-        write_all(b")\n");
-    } else {
-        write_all(b"  wayland-rs std  : READY (wayland-client 0.31 / wayland-server 0.31 / wayland-protocols 0.32)\n");
+    match run_wayland_rs_roundtrip() {
+        Ok(res) => {
+            write_all(b"  wayland-rs std  : LIVE OK (/run/wayland-0 globals=");
+            write_u64(res.globals as u64);
+            write_all(b", shm_formats=");
+            write_u64(res.shm_formats as u64);
+            write_all(b", configure_serial=");
+            write_u64(res.configured_serial as u64);
+            write_all(b", surface_id=");
+            write_u64(res.surface_id as u64);
+            write_all(b", buffer_released=");
+            write_u64(u64::from(res.buffer_released));
+            write_all(b")\n");
+        }
+        Err(reason) => {
+            write_all(b"  wayland-rs std  : ERROR (");
+            write_all(reason.as_bytes());
+            write_all(b")\n");
+        }
     }
     write_all(b"  Zero-Copy SHM   : SurfaceGrant (memory_server SHM) + memfd MAP_SHARED + SCM_RIGHTS\n");
     write_all(b"  GPU Backend     : VirtIO-GPU 2D/Cursor (PCI 0x1AF4:0x1050 controlq/cursorq) + GOP Shadow RAM\n");

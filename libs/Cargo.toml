@@ -53,3 +53,6 @@ panic = "abort"
 [profile.dev]
 opt-level = 2
 debug = true
+
+[patch.crates-io]
+libc = { path = "vendors/libc" }

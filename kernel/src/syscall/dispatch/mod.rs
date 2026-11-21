@@ -26,7 +26,9 @@ pub mod process_ops;
 pub mod signals;
 pub mod stats;
 
-pub use process_ops::{copy_userspace_argv, handle_execve_inplace, handle_fork_like_inplace};
+pub use process_ops::{
+    copy_userspace_argv, handle_clone_inplace, handle_execve_inplace, handle_fork_like_inplace,
+};
 pub use signals::{check_and_deliver_signals, handle_sigreturn_inplace};
 pub use stats::{dispatch_stats, reset_dispatch_stats, DispatchStats};
 
@@ -243,23 +245,8 @@ pub fn dispatch(frame: &mut SyscallFrame) {
         return;
     }
 
-    if effective_nr == crate::syscall::numbers::SYS_CLONE && (arg1 & 0x0001_0000) == 0 {
-        let mut fork_flags = crate::process::lifecycle::fork::ForkFlags::default();
-        if (arg1 & 0x0000_0400) != 0 {
-            fork_flags = fork_flags.set(crate::process::lifecycle::fork::ForkFlags::CLONE_FILES);
-        }
-        if (arg1 & 0x0000_0800) != 0 {
-            fork_flags = fork_flags.set(crate::process::lifecycle::fork::ForkFlags::CLONE_SIGHAND);
-        }
-        if (arg1 & 0x0000_4000) != 0 {
-            fork_flags = fork_flags.set(crate::process::lifecycle::fork::ForkFlags::VFORK);
-        }
-        let saved_rsp = frame.rsp;
-        if arg2 != 0 {
-            frame.rsp = arg2;
-        }
-        let result = handle_fork_like_inplace(frame, fork_flags);
-        frame.rsp = saved_rsp;
+    if effective_nr == crate::syscall::numbers::SYS_CLONE {
+        let result = handle_clone_inplace(frame);
         frame.rax = result as u64;
         finish_audited_syscall(effective_nr, caller_pid, caller_tid, caller_uid, result);
         post_dispatch_defer_resched(frame, tsc_start);

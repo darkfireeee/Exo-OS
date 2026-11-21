@@ -161,13 +161,25 @@ pub fn sys_arch_prctl(code: u64, addr: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u
             if !crate::memory::core::address::is_user_canonical(addr) {
                 return EINVAL;
             }
-            // Update TCB of current thread
+            // Update TCB and ProcessThread of current thread
             let tcb_ptr: u64;
             unsafe {
                 core::arch::asm!("mov {}, gs:[0x20]", out(reg) tcb_ptr, options(nostack, nomem));
                 if tcb_ptr != 0 {
                     let tcb = &mut *(tcb_ptr as *mut crate::scheduler::ThreadControlBlock);
                     tcb.fs_base = addr;
+                    let pid = crate::process::core::pid::Pid(tcb.pid.0);
+                    let tid = crate::process::core::pid::Tid(tcb.tid as u32);
+                    if let Some(pcb) = crate::process::core::registry::PROCESS_REGISTRY.find_by_pid(pid) {
+                        let thread_ptr = pcb.find_thread_by_tid(tid);
+                        if !thread_ptr.is_null() {
+                            let thread = &mut *thread_ptr;
+                            thread.addresses.tls_base = addr;
+                            thread
+                                .tls_gs_base
+                                .store(addr, core::sync::atomic::Ordering::Release);
+                        }
+                    }
                 }
             }
             // Write IA32_FS_BASE MSR — initializes Ring3 TLS.

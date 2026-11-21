@@ -142,7 +142,10 @@ pub fn sys_futex(uaddr: u64, op: u64, val: u64, timeout: u64, uaddr2: u64, val3:
     }
     let op32 = op as u32;
     let cmd = op32 & !(128 | 256);
-    let timeout_arg = if (cmd == 0 || cmd == 9) && timeout != 0 {
+    if cmd == 0 && (op32 & 256) != 0 {
+        return EINVAL;
+    }
+    let timeout_opt: Option<u64> = if (cmd == 0 || cmd == 9) && timeout != 0 {
         let ts = match read_user_typed::<Timespec>(timeout) {
             Ok(t) => t,
             Err(e) => return e.to_errno(),
@@ -160,20 +163,23 @@ pub fn sys_futex(uaddr: u64, op: u64, val: u64, timeout: u64, uaddr2: u64, val3:
             } else {
                 crate::scheduler::timer::monotonic_ns()
             };
-            raw_ns.saturating_sub(now_ns).max(1)
+            Some(raw_ns.saturating_sub(now_ns))
         } else {
-            raw_ns.max(1)
+            Some(raw_ns)
         }
+    } else if cmd == 0 || cmd == 9 {
+        None
     } else {
-        timeout
+        Some(timeout)
     };
 
     // futex is in memory/utils/futex_table.rs (RULE SCHED-03 DOC3).
-    match crate::memory::utils::futex_table::sys_futex(
+    match crate::memory::utils::futex_table::sys_futex_with_timeout(
         uaddr,
         op32,
         val as u32,
-        timeout_arg,
+        timeout_opt,
+        timeout as u32,
         uaddr2,
         val3 as u32,
     ) {

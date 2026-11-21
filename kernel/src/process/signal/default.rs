@@ -194,7 +194,7 @@ impl SigAction {
     pub const SA_RESTART: u32 = 1 << 28;
     pub const SA_NODEFER: u32 = 1 << 30;
     pub const SA_SIGINFO: u32 = 1 << 2;
-    pub const SA_ONSTACK: u32 = 1 << 3;
+    pub const SA_ONSTACK: u32 = 1 << 27; // 0x0800_0000 (matches Linux x86_64 & SignalTcb)
     pub const SA_RESETHAND: u32 = 1 << 31;
 
     pub fn is_user_handler(&self) -> bool {

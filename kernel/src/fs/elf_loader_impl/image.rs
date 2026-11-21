@@ -18,7 +18,7 @@ pub fn install_elf_image(
     child_as: &UserAddressSpace,
     load_bias: u64,
 ) -> Result<LoadedElfImage, ElfLoadError> {
-    let entry_point = elf_u64(elf_data, 24).saturating_add(load_bias);
+    let entry_point = elf_u64(elf_data, 24).wrapping_add(load_bias);
     let phent = elf_u16(elf_data, 54) as u64;
     let (e_phoff, e_phnum, e_phentsize) = phdr_span(elf_data)?;
     let mut brk_end = 0u64;
@@ -29,7 +29,7 @@ pub fn install_elf_image(
     let mut tls_offset = 0u64;
     let mut tls_filesz = 0u64;
     let mut tls_memsz = 0u64;
-    let mut tls_align = 8u64;
+    let mut tls_align = 1u64;
 
     let mut i = 0usize;
     while i < e_phnum {
@@ -37,7 +37,7 @@ pub fn install_elf_image(
         let p_type = elf_u32(ph, 0);
         let p_flags = elf_u32(ph, 4);
         let p_offset = elf_u64(ph, 8) as usize;
-        let p_vaddr = elf_u64(ph, 16).saturating_add(load_bias);
+        let p_vaddr = elf_u64(ph, 16).wrapping_add(load_bias);
         let p_filesz = elf_u64(ph, 32) as usize;
         let p_memsz = elf_u64(ph, 40) as usize;
         let p_align = elf_u64(ph, 48);
@@ -55,7 +55,7 @@ pub fn install_elf_image(
             tls_offset = p_offset as u64;
             tls_filesz = p_filesz as u64;
             tls_memsz = p_memsz as u64;
-            tls_align = p_align.max(8);
+            tls_align = if p_align <= 1 { 1 } else { p_align.next_power_of_two() };
         }
 
         if p_type != PT_LOAD {
@@ -94,7 +94,7 @@ pub fn install_elf_image(
     }
 
     if phdr_vaddr == 0 {
-        phdr_vaddr = load_bias.saturating_add(e_phoff as u64);
+        phdr_vaddr = load_bias.wrapping_add(e_phoff as u64);
     }
 
     Ok(LoadedElfImage {

@@ -6,7 +6,7 @@ rust-version = "1.86"
 publish = false
 
 [dependencies]
-rustix = "1.1.4"
+rustix = { version = "1.0.2", path = "../exo-rustix" }
 wayland-client = { path = "../wayland-client" }
 wayland-server = { path = "../wayland-server" }
 

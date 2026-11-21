@@ -208,6 +208,18 @@ pub fn sys_irq_register(
         Ok(reg_id) => {
             if vector.as_u8() == ps2_keyboard_vector() && caller_is_ps2_driver(caller_pid) {
                 crate::arch::x86_64::terminal::handoff_keyboard_to_ring1();
+                // Promote PS/2 hardware IRQ driver to interactive RT RoundRobin so
+                // 16-byte controller FIFOs never overflow behind heavy CFS/GUI draws.
+                let tcb_ptr = crate::scheduler::core::switch::current_thread_raw();
+                if !tcb_ptr.is_null() {
+                    let _irq = crate::scheduler::core::preempt::IrqGuard::new();
+                    // SAFETY: `tcb_ptr` is the currently executing thread (`!is_queued()`).
+                    let tcb = unsafe { &mut *tcb_ptr };
+                    if !tcb.is_queued() {
+                        tcb.policy = crate::scheduler::core::task::SchedPolicy::RoundRobin;
+                        tcb.priority = crate::scheduler::core::task::Priority(40);
+                    }
+                }
             }
             reg_id as i64
         }

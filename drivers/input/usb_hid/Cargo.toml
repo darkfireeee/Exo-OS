@@ -3,6 +3,7 @@ name = "exo-usb-hid"
 version = "0.1.0"
 edition = "2021"
 license.workspace = true
+publish = false
 
 [lib]
 name = "exo_usb_hid"

@@ -18,6 +18,7 @@ pub const AT_PAGESZ: usize = 6;
 pub const AT_BASE: usize = 7;
 pub const AT_ENTRY: usize = 9;
 pub const AT_RANDOM: usize = 25;
+pub const AT_EXECFN: usize = 31;
 pub const AT_SYSINFO_EHDR: usize = 33;
 pub const AT_SIGNAL_TCB: usize = 51;
 pub const AT_CAP_TOKEN: usize = 52;
@@ -33,12 +34,35 @@ pub const SIG_SETMASK: i32 = 2;
 
 #[repr(C)]
 pub struct GenericTcb<Os> {
+    pub tcb_ptr: *mut Self,
+    pub dtv: *mut usize,
+    pub prev: *mut u8,
+    pub next: *mut u8,
+    pub sysinfo: usize,
+    pub canary: usize,
+    pub tid: i32,
+    pub errno: i32,
     pub tls_end: *mut u8,
     pub tls_len: usize,
-    pub tcb_ptr: *mut Self,
     pub tcb_len: usize,
     pub os_specific: Os,
 }
+
+const _: () = {
+    assert!(core::mem::offset_of!(GenericTcb<usize>, tcb_ptr) == 0);
+    assert!(core::mem::offset_of!(GenericTcb<usize>, dtv) == 8);
+    assert!(core::mem::offset_of!(GenericTcb<usize>, prev) == 16);
+    assert!(core::mem::offset_of!(GenericTcb<usize>, next) == 24);
+    assert!(core::mem::offset_of!(GenericTcb<usize>, sysinfo) == 32);
+    assert!(core::mem::offset_of!(GenericTcb<usize>, canary) == 40);
+    assert!(core::mem::offset_of!(GenericTcb<usize>, tid) == 48);
+    assert!(core::mem::offset_of!(GenericTcb<usize>, errno) == 52);
+    assert!(core::mem::offset_of!(GenericTcb<usize>, tls_end) == 56);
+    assert!(core::mem::offset_of!(GenericTcb<usize>, tls_len) == 64);
+    assert!(core::mem::offset_of!(GenericTcb<usize>, tcb_len) == 72);
+    assert!(core::mem::offset_of!(GenericTcb<usize>, os_specific) == 80);
+    assert!(core::mem::size_of::<GenericTcb<usize>>() == 88);
+};
 
 pub type ExoTcb = GenericTcb<*mut SignalTcb>;
 
@@ -50,7 +74,7 @@ impl ExoTcb {
             let ptr: *mut Self;
             unsafe {
                 core::arch::asm!(
-                    "mov {}, fs:[16]",
+                    "mov {}, fs:[0]",
                     out(reg) ptr,
                     options(nostack, preserves_flags, readonly)
                 );
@@ -60,6 +84,27 @@ impl ExoTcb {
         #[cfg(not(target_arch = "x86_64"))]
         {
             core::ptr::null_mut()
+        }
+    }
+
+    #[inline(always)]
+    pub unsafe fn errno_ptr() -> *mut i32 {
+        let ptr = unsafe { Self::current_ptr() };
+        if ptr.is_null() {
+            core::ptr::null_mut()
+        } else {
+            unsafe { &raw mut (*ptr).errno }
+        }
+    }
+}
+
+#[inline]
+pub fn sync_thread_tcb_tid() {
+    let tid = syscall::gettid() as i32;
+    let tcb_ptr = unsafe { ExoTcb::current_ptr() };
+    if !tcb_ptr.is_null() {
+        unsafe {
+            (*tcb_ptr).tid = tid;
         }
     }
 }
@@ -101,6 +146,10 @@ static SAVED_ENVP: AtomicUsize = AtomicUsize::new(0);
 static SAVED_PHDR: AtomicUsize = AtomicUsize::new(0);
 static SAVED_PHENT: AtomicUsize = AtomicUsize::new(0);
 static SAVED_PHNUM: AtomicUsize = AtomicUsize::new(0);
+static SAVED_AT_BASE: AtomicUsize = AtomicUsize::new(0);
+static SAVED_EXECFN: AtomicUsize = AtomicUsize::new(0);
+static DYN_TLS_ALLOC_HOOK: AtomicUsize = AtomicUsize::new(0);
+static DYN_TLS_FREE_HOOK: AtomicUsize = AtomicUsize::new(0);
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -115,13 +164,176 @@ struct Elf64Phdr {
     p_align: u64,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct Elf64Dyn {
+    d_tag: i64,
+    d_val: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct Elf64Rela {
+    r_offset: u64,
+    r_info: u64,
+    r_addend: i64,
+}
+
+const DT_NULL: i64 = 0;
+const DT_RELA: i64 = 7;
+const DT_RELASZ: i64 = 8;
+const DT_RELAENT: i64 = 9;
+const R_X86_64_RELATIVE: u64 = 8;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct Elf64Sym {
+    st_name: u32,
+    st_info: u8,
+    st_other: u8,
+    st_shndx: u16,
+    st_value: u64,
+    st_size: u64,
+}
+
 const PT_LOAD: u32 = 1;
+const PT_DYNAMIC: u32 = 2;
 const PT_PHDR: u32 = 6;
 const PT_TLS: u32 = 7;
+
+pub fn register_dynamic_tls_hooks(alloc_fn: usize, free_fn: usize) {
+    DYN_TLS_ALLOC_HOOK.store(alloc_fn, Ordering::Release);
+    DYN_TLS_FREE_HOOK.store(free_fn, Ordering::Release);
+}
+
+#[cfg(target_arch = "x86_64")]
+unsafe fn lookup_interp_sym(interp_base: usize, target_name: &[u8]) -> usize {
+    if interp_base == 0 {
+        return 0;
+    }
+    let ehdr = interp_base as *const u8;
+    let magic = unsafe { core::slice::from_raw_parts(ehdr, 4) };
+    if magic != b"\x7FELF" {
+        return 0;
+    }
+    let e_phoff = unsafe { (ehdr.add(32) as *const u64).read_unaligned() as usize };
+    let e_phent = unsafe { (ehdr.add(54) as *const u16).read_unaligned() as usize };
+    let e_phnum = unsafe { (ehdr.add(56) as *const u16).read_unaligned() as usize };
+    if e_phent < core::mem::size_of::<Elf64Phdr>() || e_phnum == 0 {
+        return 0;
+    }
+
+    let mut dyn_vaddr = 0usize;
+    for i in 0..e_phnum {
+        let ph = unsafe {
+            ((interp_base + e_phoff + i * e_phent) as *const Elf64Phdr).read_unaligned()
+        };
+        if ph.p_type == PT_DYNAMIC {
+            dyn_vaddr = interp_base.wrapping_add(ph.p_vaddr as usize);
+            break;
+        }
+    }
+    if dyn_vaddr == 0 {
+        return 0;
+    }
+
+    let mut symtab = 0usize;
+    let mut strtab = 0usize;
+    let mut hash = 0usize;
+    let dynp = dyn_vaddr as *const Elf64Dyn;
+    for i in 0..512 {
+        let d = unsafe { dynp.add(i).read_unaligned() };
+        match d.d_tag {
+            0 => break,
+            4 => hash = interp_base.wrapping_add(d.d_val as usize),
+            5 => strtab = interp_base.wrapping_add(d.d_val as usize),
+            6 => symtab = interp_base.wrapping_add(d.d_val as usize),
+            _ => {}
+        }
+    }
+    if symtab == 0 || strtab == 0 || hash == 0 {
+        return 0;
+    }
+
+    let mut h = 0u32;
+    for &b in target_name {
+        h = (h << 4).wrapping_add(b as u32);
+        let g = h & 0xF000_0000;
+        if g != 0 {
+            h ^= g >> 24;
+        }
+        h &= !g;
+    }
+
+    let hash_u32 = hash as *const u32;
+    let nbuckets = unsafe { *hash_u32 } as usize;
+    let nchain = unsafe { *hash_u32.add(1) } as usize;
+    if nbuckets == 0 || nchain == 0 {
+        return 0;
+    }
+    let buckets = unsafe { hash_u32.add(2) };
+    let chains = unsafe { buckets.add(nbuckets) };
+    let mut idx = unsafe { *buckets.add((h as usize) % nbuckets) } as usize;
+    let mut steps = 0usize;
+    while idx != 0 && idx < nchain && steps < nchain {
+        let sym = unsafe { *(symtab as *const Elf64Sym).add(idx) };
+        if sym.st_shndx != 0 {
+            let s_ptr = unsafe { (strtab as *const u8).add(sym.st_name as usize) };
+            let mut matched = true;
+            let mut k = 0usize;
+            while k < target_name.len() {
+                if unsafe { *s_ptr.add(k) } != target_name[k] {
+                    matched = false;
+                    break;
+                }
+                k += 1;
+            }
+            if matched && unsafe { *s_ptr.add(target_name.len()) } == 0 {
+                return interp_base.wrapping_add(sym.st_value as usize);
+            }
+        }
+        idx = unsafe { *chains.add(idx) } as usize;
+        steps += 1;
+    }
+    0
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+unsafe fn lookup_interp_sym(_interp_base: usize, _target_name: &[u8]) -> usize {
+    0
+}
+
+/// Releases dynamic `DTV` module allocations owned by the currently exiting thread.
+pub unsafe fn free_current_thread_dyn_tls() {
+    let hook = DYN_TLS_FREE_HOOK.load(Ordering::Acquire);
+    if hook != 0 {
+        let tcb = unsafe { ExoTcb::current_ptr() };
+        if !tcb.is_null() {
+            type FreeFn = unsafe extern "C" fn(*mut u8);
+            let f: FreeFn = unsafe { core::mem::transmute(hook) };
+            unsafe { f(tcb as *mut u8) };
+        }
+    }
+}
 
 /// Allocates and initializes a per-thread TLS block (`.tdata` + `.tbss` + `ExoTcb` at `%fs:0`).
 /// Returns `(mmap_base_ptr, mmap_alloc_len, fs_base_vaddr)`.
 pub unsafe fn allocate_thread_tls() -> Result<(*mut u8, usize, u64), i32> {
+    let hook = DYN_TLS_ALLOC_HOOK.load(Ordering::Acquire);
+    if hook != 0 {
+        type AllocFn = unsafe extern "C" fn(*const u8, *mut usize, *mut usize, *mut u64) -> i32;
+        let f: AllocFn = unsafe { core::mem::transmute(hook) };
+        let parent_tcb = unsafe { ExoTcb::current_ptr() };
+        let mut raw_base = 0usize;
+        let mut alloc_len = 0usize;
+        let mut fs_base = 0u64;
+        let rc = unsafe { f(parent_tcb as *const u8, &mut raw_base, &mut alloc_len, &mut fs_base) };
+        if rc == 0 && raw_base != 0 {
+            return Ok((raw_base as *mut u8, alloc_len, fs_base));
+        }
+        return Err(if rc < 0 { -rc } else { 12 });
+    }
+
     use super::alloc_dlmalloc::{MAP_ANONYMOUS, MAP_PRIVATE, PROT_READ, PROT_WRITE, sys_mmap};
 
     let phdr_addr = SAVED_PHDR.load(Ordering::Acquire);
@@ -132,7 +344,7 @@ pub unsafe fn allocate_thread_tls() -> Result<(*mut u8, usize, u64), i32> {
     let mut tls_vaddr = 0u64;
     let mut tls_filesz = 0usize;
     let mut tls_memsz = 0usize;
-    let mut tls_align = 16usize;
+    let mut tls_align = 1usize;
 
     if phdr_addr != 0 && phent >= core::mem::size_of::<Elf64Phdr>() && phnum > 0 {
         for i in 0..phnum {
@@ -144,7 +356,8 @@ pub unsafe fn allocate_thread_tls() -> Result<(*mut u8, usize, u64), i32> {
                 tls_vaddr = ph.p_vaddr;
                 tls_filesz = ph.p_filesz as usize;
                 tls_memsz = ph.p_memsz as usize;
-                tls_align = (ph.p_align as usize).max(16).next_power_of_two();
+                let align = ph.p_align as usize;
+                tls_align = if align <= 1 { 1 } else { align.next_power_of_two() };
             }
         }
     }
@@ -156,15 +369,26 @@ pub unsafe fn allocate_thread_tls() -> Result<(*mut u8, usize, u64), i32> {
     };
 
     let filesz = tls_filesz.min(tls_memsz);
-    let aligned_tls_memsz = (tls_memsz + tls_align - 1) & !(tls_align - 1);
-    let page_sz = page_size();
-    let static_tls_pages = if aligned_tls_memsz == 0 {
+    // SysV x86_64 Variant II TLS: tdata sits at tls_base - tls_block_bytes,
+    // preserving p_vaddr mod p_align for negative %fs offsets (no forced .max(16)).
+    let tls_block_bytes = if tls_memsz == 0 {
         0
     } else {
-        (aligned_tls_memsz + page_sz - 1) / page_sz
+        let misalign = (0usize
+            .wrapping_sub(tls_memsz)
+            .wrapping_sub(tls_vaddr as usize))
+            & (tls_align - 1);
+        tls_memsz + misalign
     };
-    let total_tls_pages = static_tls_pages + 1;
-    let tls_alloc_len = total_tls_pages * page_sz;
+    let page_sz = page_size();
+    let base_align = page_sz.max(tls_align);
+    let aligned_block_span = if tls_block_bytes == 0 {
+        0
+    } else {
+        (tls_block_bytes + base_align - 1) & !(base_align - 1)
+    };
+    let extra_align_pad = base_align.saturating_sub(page_sz);
+    let tls_alloc_len = aligned_block_span + extra_align_pad + page_sz;
 
     let raw_base = unsafe {
         sys_mmap(
@@ -177,21 +401,44 @@ pub unsafe fn allocate_thread_tls() -> Result<(*mut u8, usize, u64), i32> {
         )?
     };
 
-    let tls_base = raw_base + static_tls_pages * page_sz;
+    let raw_end_for_block = raw_base + aligned_block_span;
+    let tls_base = if tls_align <= page_sz {
+        raw_end_for_block
+    } else {
+        (raw_end_for_block + tls_align - 1) & !(tls_align - 1)
+    };
     if filesz > 0 && tls_vaddr != 0 {
         let src_ptr = load_bias.wrapping_add(tls_vaddr as usize) as *const u8;
-        let dst_ptr = (tls_base - aligned_tls_memsz) as *mut u8;
+        let dst_ptr = (tls_base - tls_block_bytes) as *mut u8;
         unsafe {
             core::ptr::copy_nonoverlapping(src_ptr, dst_ptr, filesz);
         }
     }
 
+    let parent_tcb = unsafe { ExoTcb::current_ptr() };
+    let parent_canary = if !parent_tcb.is_null() {
+        unsafe { (*parent_tcb).canary }
+    } else {
+        0
+    };
+
     let tcb_ptr = tls_base as *mut ExoTcb;
+    let dtv_ptr = (tls_base + 96) as *mut usize;
+    let tdata_ptr = tls_base - tls_block_bytes;
     let sig_tcb = GLOBAL_SIGNAL_TCB_ADDR.load(Ordering::Acquire) as *mut SignalTcb;
     unsafe {
+        (*dtv_ptr) = if tls_memsz > 0 { 1 } else { 0 };
+        (*dtv_ptr.add(1)) = if tls_memsz > 0 { tdata_ptr } else { 0 };
+        (*tcb_ptr).tcb_ptr = tcb_ptr;
+        (*tcb_ptr).dtv = dtv_ptr;
+        (*tcb_ptr).prev = core::ptr::null_mut();
+        (*tcb_ptr).next = core::ptr::null_mut();
+        (*tcb_ptr).sysinfo = 0;
+        (*tcb_ptr).canary = parent_canary;
+        (*tcb_ptr).tid = 0;
+        (*tcb_ptr).errno = 0;
         (*tcb_ptr).tls_end = tls_base as *mut u8;
         (*tcb_ptr).tls_len = tls_alloc_len;
-        (*tcb_ptr).tcb_ptr = tcb_ptr;
         (*tcb_ptr).tcb_len = page_sz;
         (*tcb_ptr).os_specific = sig_tcb;
     }
@@ -233,6 +480,16 @@ pub fn at_random_ptr() -> *const [u8; 16] {
         core::ptr::null()
     } else {
         addr as *const [u8; 16]
+    }
+}
+
+#[inline]
+pub fn at_execfn_ptr() -> *const u8 {
+    let addr = SAVED_EXECFN.load(Ordering::Acquire);
+    if addr == 0 {
+        core::ptr::null()
+    } else {
+        addr as *const u8
     }
 }
 
@@ -300,18 +557,21 @@ unsafe fn write_u128_cmpxchg16b(ptr: *mut u64, new_lo: u64, new_hi: u64) {
         let mut prev_lo = ptr.read_volatile();
         let mut prev_hi = ptr.add(1).read_volatile();
         loop {
-            let ok: u8;
+            let ok: u64;
             core::arch::asm!(
-                "xchg rbx, {rbx_in}",
-                "lock cmpxchg16b [{ptr}]",
-                "sete {ok}",
-                "xchg rbx, {rbx_in}",
-                ptr = in(reg) ptr,
-                rbx_in = inout(reg) new_lo => _,
+                "mov r8, rbx",
+                "mov rbx, rsi",
+                "lock cmpxchg16b [rdi]",
+                "sete r9b",
+                "mov rbx, r8",
+                "movzx r9d, r9b",
+                in("rdi") ptr,
+                in("rsi") new_lo,
                 in("rcx") new_hi,
                 inout("rax") prev_lo,
                 inout("rdx") prev_hi,
-                ok = out(reg_byte) ok,
+                out("r8") _,
+                lateout("r9") ok,
                 options(nostack)
             );
             if ok != 0 {
@@ -326,18 +586,18 @@ unsafe fn write_u128_cmpxchg16b(ptr: *mut u64, new_lo: u64, new_hi: u64) {
 unsafe fn read_u128_cmpxchg16b(ptr: *mut u64) -> (u64, u64) {
     let mut lo = 0u64;
     let mut hi = 0u64;
-    let zero = 0u64;
     unsafe {
         core::arch::asm!(
-            "xchg rbx, {zero}",
-            "xor rcx, rcx",
-            "lock cmpxchg16b [{ptr}]",
-            "xchg rbx, {zero}",
-            ptr = in(reg) ptr,
-            zero = inout(reg) zero => _,
+            "mov r8, rbx",
+            "xor ebx, ebx",
+            "xor ecx, ecx",
+            "lock cmpxchg16b [rdi]",
+            "mov rbx, r8",
+            in("rdi") ptr,
             inout("rax") lo,
             inout("rdx") hi,
             out("rcx") _,
+            out("r8") _,
             options(nostack)
         );
     }
@@ -375,28 +635,16 @@ pub fn sigprocmask_0syscall(
     set: Option<u64>,
     oldset: Option<&mut u64>,
 ) -> Result<(), i32> {
-    let Some(tcb) = signal_tcb() else {
-        return Err(38); // ENOSYS
-    };
-    let prev = tcb.blocked.load(Ordering::Acquire);
+    let clean_in = set.map(|mask| mask & !NON_BLOCKABLE_MASK);
+    let mut prev = 0u64;
+    syscall::rt_sigprocmask(
+        how,
+        clean_in.as_ref(),
+        if oldset.is_some() { Some(&mut prev) } else { None },
+    )
+    .map_err(|e| e.errno())?;
     if let Some(old) = oldset {
         *old = prev;
-    }
-    if let Some(mask) = set {
-        let clean = mask & !NON_BLOCKABLE_MASK;
-        match how {
-            SIG_BLOCK => {
-                tcb.blocked.fetch_or(clean, Ordering::AcqRel);
-            }
-            SIG_UNBLOCK => {
-                tcb.blocked.fetch_and(!clean, Ordering::AcqRel);
-            }
-            SIG_SETMASK => {
-                tcb.blocked.store(clean, Ordering::Release);
-            }
-            _ => return Err(22), // EINVAL
-        }
-        fence(Ordering::SeqCst);
     }
     Ok(())
 }
@@ -428,7 +676,6 @@ pub fn fork() -> Result<u32, i32> {
             core::ptr::null_mut(),
             core::ptr::null_mut(),
             0,
-            0,
         )
     }
     .map_err(|e| e.errno())?;
@@ -448,6 +695,113 @@ pub unsafe fn execve(
     envp: *const *const u8,
 ) -> Result<(), i32> {
     unsafe { syscall::execve_raw(path_cstr, argv, envp).map_err(|e| e.errno()) }
+}
+
+/// Applies `R_X86_64_RELATIVE` relocations in-place for static-PIE (`ET_DYN` without `PT_INTERP`).
+///
+/// Must execute before any Rust code reads relocated pointers in `.data.rel.ro`, `.data`, or `.got`.
+/// Uses only stack locals, raw pointers, and wrapping integer arithmetic (zero statics, zero panics).
+#[inline(never)]
+pub unsafe fn self_relocate_static_pie(sp: *const usize) {
+    if sp.is_null() {
+        return;
+    }
+    unsafe {
+        let argc = sp.read_volatile();
+        let mut cursor = sp.add(argc.wrapping_add(2));
+        while cursor.read_volatile() != 0 {
+            cursor = cursor.add(1);
+        }
+        let mut auxv_ptr = cursor.add(1);
+
+        let mut at_phdr = 0usize;
+        let mut at_phent = 0usize;
+        let mut at_phnum = 0usize;
+        let mut at_base = 0usize;
+        loop {
+            let a_type = auxv_ptr.read_volatile();
+            let a_val = auxv_ptr.add(1).read_volatile();
+            if a_type == AT_NULL {
+                break;
+            }
+            if a_type == AT_PHDR {
+                at_phdr = a_val;
+            } else if a_type == AT_PHENT {
+                at_phent = a_val;
+            } else if a_type == AT_PHNUM {
+                at_phnum = a_val;
+            } else if a_type == AT_BASE {
+                at_base = a_val;
+            }
+            auxv_ptr = auxv_ptr.add(2);
+        }
+
+        // If an ELF interpreter (`PT_INTERP` / `/lib/ld-exo.so`) ran, `AT_BASE != 0`
+        // and the dynamic loader has already applied all relocations.
+        if at_base != 0 || at_phdr == 0 || at_phent < core::mem::size_of::<Elf64Phdr>() || at_phnum == 0 {
+            return;
+        }
+
+        let mut has_pt_phdr = false;
+        let mut pt_phdr_vaddr = 0usize;
+        let mut has_pt_dyn = false;
+        let mut pt_dyn_vaddr = 0usize;
+        let mut i = 0usize;
+        while i < at_phnum {
+            let ph = (at_phdr.wrapping_add(i.wrapping_mul(at_phent)) as *const Elf64Phdr).read_unaligned();
+            if ph.p_type == PT_PHDR {
+                has_pt_phdr = true;
+                pt_phdr_vaddr = ph.p_vaddr as usize;
+            } else if ph.p_type == PT_DYNAMIC {
+                has_pt_dyn = true;
+                pt_dyn_vaddr = ph.p_vaddr as usize;
+            }
+            i = i.wrapping_add(1);
+        }
+
+        if !has_pt_phdr || !has_pt_dyn {
+            return;
+        }
+        let load_bias = at_phdr.wrapping_sub(pt_phdr_vaddr);
+        if load_bias == 0 {
+            return;
+        }
+
+        let dyn_ptr = load_bias.wrapping_add(pt_dyn_vaddr) as *const Elf64Dyn;
+        let mut rela_vaddr = 0usize;
+        let mut rela_sz = 0usize;
+        let mut rela_ent = core::mem::size_of::<Elf64Rela>();
+        let mut d_idx = 0usize;
+        while d_idx < 512 {
+            let d = dyn_ptr.add(d_idx).read_unaligned();
+            if d.d_tag == DT_NULL {
+                break;
+            } else if d.d_tag == DT_RELA {
+                rela_vaddr = d.d_val as usize;
+            } else if d.d_tag == DT_RELASZ {
+                rela_sz = d.d_val as usize;
+            } else if d.d_tag == DT_RELAENT && (d.d_val as usize) >= core::mem::size_of::<Elf64Rela>() {
+                rela_ent = d.d_val as usize;
+            }
+            d_idx = d_idx.wrapping_add(1);
+        }
+
+        if rela_vaddr == 0 || rela_sz == 0 {
+            return;
+        }
+        let rela_base = load_bias.wrapping_add(rela_vaddr);
+        let mut off = 0usize;
+        while off.wrapping_add(rela_ent) <= rela_sz {
+            let rela = (rela_base.wrapping_add(off) as *const Elf64Rela).read_unaligned();
+            if (rela.r_info & 0xFFFF_FFFF) == R_X86_64_RELATIVE {
+                let target = load_bias.wrapping_add(rela.r_offset as usize) as *mut usize;
+                let value = load_bias.wrapping_add(rela.r_addend as isize as usize);
+                target.write_volatile(value);
+            }
+            off = off.wrapping_add(rela_ent);
+        }
+        core::sync::atomic::compiler_fence(Ordering::SeqCst);
+    }
 }
 
 pub unsafe fn exo_rt_init_from_stack(
@@ -488,8 +842,18 @@ pub unsafe fn exo_rt_init_from_stack(
                         SAVED_PAGESZ.store(a_val, Ordering::Release);
                     }
                 }
+                AT_BASE => {
+                    if a_val != 0 {
+                        SAVED_AT_BASE.store(a_val, Ordering::Release);
+                    }
+                }
                 AT_RANDOM => {
                     AT_RANDOM_ADDR.store(a_val, Ordering::Release);
+                }
+                AT_EXECFN => {
+                    if a_val != 0 {
+                        SAVED_EXECFN.store(a_val, Ordering::Release);
+                    }
                 }
                 AT_SIGNAL_TCB => {
                     GLOBAL_SIGNAL_TCB_ADDR.store(a_val, Ordering::Release);
@@ -506,6 +870,15 @@ pub unsafe fn exo_rt_init_from_stack(
         SAVED_ARGV.store(argv as usize, Ordering::Release);
         SAVED_ENVP.store(envp as usize, Ordering::Release);
 
+        let interp_base = SAVED_AT_BASE.load(Ordering::Acquire);
+        if interp_base != 0 {
+            let alloc_fn = unsafe { lookup_interp_sym(interp_base, b"__exo_dl_alloc_thread_tls") };
+            let free_fn = unsafe { lookup_interp_sym(interp_base, b"__exo_dl_free_thread_tls") };
+            if alloc_fn != 0 {
+                register_dynamic_tls_hooks(alloc_fn, free_fn);
+            }
+        }
+
         let tcb_ptr = ExoTcb::current_ptr();
         if !tcb_ptr.is_null() {
             let sig_addr = GLOBAL_SIGNAL_TCB_ADDR.load(Ordering::Acquire);
@@ -513,6 +886,7 @@ pub unsafe fn exo_rt_init_from_stack(
                 (*tcb_ptr).os_specific = sig_addr as *mut SignalTcb;
             }
         }
+        sync_thread_tcb_tid();
 
         (argc, argv, envp)
     }

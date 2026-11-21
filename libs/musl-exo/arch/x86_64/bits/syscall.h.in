@@ -1,6 +1,6 @@
 #define __NR_read				0
 #define __NR_write				1
-#define __NR_open				519  /* Exo-OS: SYS_EXOFS_OPEN_BY_PATH */
+#define __NR_open				2
 #define __NR_close				3
 #define __NR_stat				4
 #define __NR_fstat				5
@@ -76,7 +76,7 @@
 #define __NR_fdatasync			75
 #define __NR_truncate			76
 #define __NR_ftruncate			77
-#define __NR_getdents			520  /* Exo-OS: SYS_EXOFS_READDIR */
+#define __NR_getdents			78
 #define __NR_getcwd				79
 #define __NR_chdir				80
 #define __NR_fchdir				81
@@ -215,7 +215,7 @@
 #define __NR_epoll_ctl_old			214
 #define __NR_epoll_wait_old			215
 #define __NR_remap_file_pages		216
-#define __NR_getdents64				520  /* Exo-OS: SYS_EXOFS_READDIR */
+#define __NR_getdents64				217
 #define __NR_set_tid_address		218
 #define __NR_restart_syscall		219
 #define __NR_semtimedop				220
@@ -255,7 +255,7 @@
 #define __NR_inotify_add_watch		254
 #define __NR_inotify_rm_watch		255
 #define __NR_migrate_pages			256
-#define __NR_openat					519  /* Exo-OS: SYS_EXOFS_OPEN_BY_PATH */
+#define __NR_openat					257
 #define __NR_mkdirat				258
 #define __NR_mknodat				259
 #define __NR_fchownat				260

@@ -19,10 +19,15 @@ use crate::desktop;
 use crate::Framebuffer;
 use exo_syscall_abi as syscall;
 
-pub const MAX_WAYLAND_OBJECTS: usize = 96;
+pub const MAX_WAYLAND_OBJECTS: usize = 192;
 pub const MAX_SHM_SURFACES: usize = 8;
 pub const MAX_SHM_POOLS: usize = 16;
 pub const MAX_WL_BUFFERS: usize = 32;
+pub const CLIENT_OWNER_BASE: u32 = 0x8000_0000;
+pub const MAX_WAYLAND_CLIENTS: usize = 8;
+pub const WL_CLIENT_RX_CAP: usize = 2048;
+pub const WL_CLIENT_TX_CAP: usize = 2048;
+pub const WL_CLIENT_FD_CAP: usize = 16;
 
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -42,6 +47,7 @@ pub enum WlObjectKind {
     Pointer = 12,
     Keyboard = 13,
     Callback = 14,
+    Region = 15,
 }
 
 #[repr(u32)]
@@ -107,6 +113,7 @@ pub struct ShmPoolInfo {
     pub fd: i32,
     pub size: u32,
     pub local_addr: u64,
+    pub mapped_len: u64,
 }
 
 impl ShmPoolInfo {
@@ -118,6 +125,7 @@ impl ShmPoolInfo {
             fd: -1,
             size: 0,
             local_addr: 0,
+            mapped_len: 0,
         }
     }
 }
@@ -232,6 +240,10 @@ pub struct CompositorSurface {
     pub focused: bool,
     pub is_terminal: bool,
     pub committed: bool,
+    pub xdg_surface_id: u32,
+    pub xdg_toplevel_id: u32,
+    pub frame_callback_id: u32,
+    pub configure_sent: bool,
 }
 
 impl CompositorSurface {
@@ -269,6 +281,10 @@ impl CompositorSurface {
             focused: false,
             is_terminal: false,
             committed: false,
+            xdg_surface_id: 0,
+            xdg_toplevel_id: 0,
+            frame_callback_id: 0,
+            configure_sent: false,
         }
     }
 
@@ -300,6 +316,7 @@ pub struct WaylandState {
     pub selected_category: u8,
     pub selected_app: u8,
     pub focused_surface_idx: u8,
+    pub next_configure_serial: u32,
 }
 
 const fn init_bytes_32<const N: usize>(src: &[u8; N]) -> [u8; 32] {
@@ -355,6 +372,7 @@ impl WaylandState {
             selected_category: 0, // Favorites
             selected_app: 0,
             focused_surface_idx: 0,
+            next_configure_serial: 1,
         }
     }
 
@@ -384,6 +402,7 @@ impl WaylandState {
         if id == 1 {
             return Some(0);
         }
+        let strict_owner = owner_pid >= CLIENT_OWNER_BASE;
         let mut fallback: Option<usize> = None;
         let mut i = 0usize;
         while i < MAX_WAYLAND_OBJECTS {
@@ -391,7 +410,7 @@ impl WaylandState {
                 if self.objects[i].owner_pid == owner_pid {
                     return Some(i);
                 }
-                if fallback.is_none() {
+                if !strict_owner && self.objects[i].owner_pid < CLIENT_OWNER_BASE && fallback.is_none() {
                     fallback = Some(i);
                 }
             }
@@ -439,7 +458,15 @@ impl WaylandState {
         false
     }
 
-    fn register_pool(&mut self, obj_id: u32, owner_pid: u32, fd: i32, size: u32) {
+    fn register_pool(
+        &mut self,
+        obj_id: u32,
+        owner_pid: u32,
+        fd: i32,
+        size: u32,
+        local_addr: u64,
+        mapped_len: u64,
+    ) {
         let mut free_slot: Option<usize> = None;
         let mut i = 0usize;
         while i < MAX_SHM_POOLS {
@@ -447,8 +474,18 @@ impl WaylandState {
                 && self.pools[i].obj_id == obj_id
                 && self.pools[i].owner_pid == owner_pid
             {
-                self.pools[i].fd = fd;
-                self.pools[i].size = size;
+                if self.pools[i].fd != fd || self.pools[i].local_addr != local_addr {
+                    unmap_close_pool(&mut self.pools[i]);
+                }
+                self.pools[i] = ShmPoolInfo {
+                    active: true,
+                    obj_id,
+                    owner_pid,
+                    fd,
+                    size,
+                    local_addr,
+                    mapped_len,
+                };
                 return;
             }
             if !self.pools[i].active && free_slot.is_none() {
@@ -463,9 +500,21 @@ impl WaylandState {
                 owner_pid,
                 fd,
                 size,
-                local_addr: 0,
+                local_addr,
+                mapped_len,
             };
         }
+    }
+
+    fn find_pool(&self, owner_pid: u32, obj_id: u32) -> Option<ShmPoolInfo> {
+        let mut i = 0usize;
+        while i < MAX_SHM_POOLS {
+            if self.pools[i].active && self.pools[i].obj_id == obj_id && self.pools[i].owner_pid == owner_pid {
+                return Some(self.pools[i]);
+            }
+            i += 1;
+        }
+        None
     }
 
     fn find_pool_mut(&mut self, owner_pid: u32, obj_id: u32) -> Option<&mut ShmPoolInfo> {
@@ -531,6 +580,7 @@ impl WaylandState {
     }
 
     fn find_buffer(&self, owner_pid: u32, obj_id: u32) -> Option<WlBufferInfo> {
+        let strict_owner = owner_pid >= CLIENT_OWNER_BASE;
         let mut fallback = None;
         let mut i = 0usize;
         while i < MAX_WL_BUFFERS {
@@ -538,7 +588,7 @@ impl WaylandState {
                 if self.buffers[i].owner_pid == owner_pid {
                     return Some(self.buffers[i]);
                 }
-                if fallback.is_none() {
+                if !strict_owner && self.buffers[i].owner_pid < CLIENT_OWNER_BASE && fallback.is_none() {
                     fallback = Some(self.buffers[i]);
                 }
             }
@@ -636,6 +686,72 @@ impl WaylandState {
         self.surfaces[idx].maximized = false;
         self.surfaces[idx].width = new_w.clamp(320, max_w);
         self.surfaces[idx].height = new_h.clamp(180, max_h);
+    }
+
+    pub fn alloc_socket_surface(&mut self, owner_key: u32) -> Option<usize> {
+        let mut i = 1usize;
+        while i < MAX_SHM_SURFACES {
+            if !self.surfaces[i].active {
+                let id = self.next_surface_id;
+                self.next_surface_id = self.next_surface_id.wrapping_add(1).max(2);
+                let mut s = CompositorSurface::empty();
+                s.active = true;
+                s.surface_id = id;
+                s.owner_pid = owner_key;
+                s.x = 120 + ((i as i32 - 1) * 32);
+                s.y = 76 + ((i as i32 - 1) * 28);
+                s.z_order = self.bump_z();
+                s.title[..10].copy_from_slice(b"ExoSurface");
+                s.title_len = 10;
+                self.surfaces[i] = s;
+                return Some(i);
+            }
+            i += 1;
+        }
+        None
+    }
+
+    pub fn disconnect_client(&mut self, owner_key: u32) -> bool {
+        let mut removed_visible = false;
+        let mut was_focused = false;
+        let mut i = 1usize;
+        while i < MAX_WAYLAND_OBJECTS {
+            if self.objects[i].kind != WlObjectKind::Free && self.objects[i].owner_pid == owner_key {
+                self.objects[i] = WlObject::empty();
+            }
+            i += 1;
+        }
+        i = 0;
+        while i < MAX_WL_BUFFERS {
+            if self.buffers[i].active && self.buffers[i].owner_pid == owner_key {
+                self.buffers[i] = WlBufferInfo::empty();
+            }
+            i += 1;
+        }
+        i = 0;
+        while i < MAX_SHM_POOLS {
+            if self.pools[i].active && self.pools[i].owner_pid == owner_key {
+                unmap_close_pool(&mut self.pools[i]);
+            }
+            i += 1;
+        }
+        i = 1;
+        while i < MAX_SHM_SURFACES {
+            if self.surfaces[i].active && self.surfaces[i].owner_pid == owner_key && !self.surfaces[i].is_terminal {
+                if self.surfaces[i].committed && !self.surfaces[i].minimized {
+                    removed_visible = true;
+                }
+                if self.surfaces[i].focused {
+                    was_focused = true;
+                }
+                self.surfaces[i] = CompositorSurface::empty();
+            }
+            i += 1;
+        }
+        if was_focused {
+            self.focus_surface(0);
+        }
+        removed_visible
     }
 
     pub fn alloc_surface(&mut self, owner_pid: u32, width: u32, height: u32) -> Option<usize> {
@@ -741,9 +857,13 @@ impl WaylandState {
                 {
                     return None;
                 }
+                let first_commit = !self.surfaces[i].committed && !self.surfaces[i].is_terminal;
                 self.surfaces[i].damaged = true;
                 self.surfaces[i].committed = true;
                 self.surfaces[i].damage = rect;
+                if first_commit {
+                    self.focus_surface(i);
+                }
 
                 let s = &self.surfaces[i];
                 if !s.is_terminal && s.shm_handle != 0 && s.virt_addr != 0 && s.owner_pid > 1 {
@@ -1319,6 +1439,31 @@ impl WaylandState {
         bytes: &[u8],
         fb: Framebuffer,
     ) -> (i64, Option<(u32, u32)>) {
+        let mut empty_fds = WlFdQueue::empty();
+        let (_consumed, processed, dirty) =
+            self.dispatch_wire_inner(sender_pid, bytes, &mut empty_fds, None, fb);
+        (processed, dirty)
+    }
+
+    pub fn dispatch_wire_stream(
+        &mut self,
+        owner_key: u32,
+        bytes: &[u8],
+        rx_fds: &mut WlFdQueue,
+        tx_buf: &mut WlTxBuf,
+        fb: Framebuffer,
+    ) -> (usize, i64, Option<(u32, u32)>) {
+        self.dispatch_wire_inner(owner_key, bytes, rx_fds, Some(tx_buf), fb)
+    }
+
+    fn dispatch_wire_inner(
+        &mut self,
+        sender_pid: u32,
+        bytes: &[u8],
+        rx_fds: &mut WlFdQueue,
+        mut tx_buf: Option<&mut WlTxBuf>,
+        fb: Framebuffer,
+    ) -> (usize, i64, Option<(u32, u32)>) {
         let mut offset = 0usize;
         let mut processed = 0i64;
         let mut dirty_min = u32::MAX;
@@ -1326,15 +1471,24 @@ impl WaylandState {
         while offset + 8 <= bytes.len() {
             let object_id = read_u32(bytes, offset);
             let size_op = read_u32(bytes, offset + 4);
-            let msg_size = ((size_op >> 16) as usize).max(8);
+            let raw_size = (size_op >> 16) as usize;
+            if raw_size < 8 || (raw_size & 3) != 0 || raw_size > 4096 {
+                return (usize::MAX, processed, None);
+            }
             let opcode = (size_op & 0xFFFF) as u16;
-            if offset + msg_size > bytes.len() {
+            if offset + raw_size > bytes.len() {
                 break;
             }
-            let payload = &bytes[offset + 8..offset + msg_size];
-            if let Some((y0, y1)) =
-                self.handle_single_wire_msg(sender_pid, object_id, opcode, payload, fb)
-            {
+            let payload = &bytes[offset + 8..offset + raw_size];
+            if let Some((y0, y1)) = self.handle_single_wire_msg(
+                sender_pid,
+                object_id,
+                opcode,
+                payload,
+                rx_fds,
+                tx_buf.as_deref_mut(),
+                fb,
+            ) {
                 if y0 < dirty_min {
                     dirty_min = y0;
                 }
@@ -1342,7 +1496,7 @@ impl WaylandState {
                     dirty_max = y1;
                 }
             }
-            offset += msg_size;
+            offset += raw_size;
             processed += 1;
             self.wire_messages_processed = self.wire_messages_processed.saturating_add(1);
         }
@@ -1351,7 +1505,13 @@ impl WaylandState {
         } else {
             None
         };
-        (processed, dirty_bounds)
+        (offset, processed, dirty_bounds)
+    }
+
+    fn next_serial(&mut self) -> u32 {
+        let s = self.next_configure_serial.max(1);
+        self.next_configure_serial = s.wrapping_add(1).max(1);
+        s
     }
 
     fn handle_single_wire_msg(
@@ -1360,6 +1520,8 @@ impl WaylandState {
         object_id: u32,
         opcode: u16,
         payload: &[u8],
+        rx_fds: &mut WlFdQueue,
+        tx_buf: Option<&mut WlTxBuf>,
         fb: Framebuffer,
     ) -> Option<(u32, u32)> {
         let Some(obj_idx) = self.find_object(sender_pid, object_id) else {
@@ -1373,7 +1535,12 @@ impl WaylandState {
             (WlObjectKind::Display, 0) => {
                 let cb_id = read_u32(payload, 0);
                 if cb_id != 0 {
-                    let _ = self.register_object(cb_id, WlObjectKind::Callback, sender_pid, 0xFF);
+                    if let Some(tx) = tx_buf {
+                        tx.push_u32_evt(cb_id, 0, 0);
+                        tx.push_u32_evt(1, 1, cb_id);
+                    } else {
+                        let _ = self.register_object(cb_id, WlObjectKind::Callback, sender_pid, 0xFF);
+                    }
                 }
             }
             // wl_display.get_registry(new_id registry)
@@ -1381,9 +1548,15 @@ impl WaylandState {
                 let reg_id = read_u32(payload, 0);
                 if reg_id != 0 {
                     let _ = self.register_object(reg_id, WlObjectKind::Registry, sender_pid, 0xFF);
+                    if let Some(tx) = tx_buf {
+                        tx.push_registry_global(reg_id, 1, b"wl_compositor", 6);
+                        tx.push_registry_global(reg_id, 2, b"wl_shm", 1);
+                        tx.push_registry_global(reg_id, 3, b"xdg_wm_base", 6);
+                        tx.push_registry_global(reg_id, 4, b"wl_seat", 7);
+                    }
                 }
             }
-            // wl_registry.bind(name, new_id)
+            // wl_registry.bind(name, [interface, version], new_id)
             (WlObjectKind::Registry, 0) => {
                 let name = read_u32(payload, 0);
                 let new_id = if payload.len() >= 8 {
@@ -1392,27 +1565,65 @@ impl WaylandState {
                     0
                 };
                 if new_id != 0 {
-                    let target_kind = match name {
-                        1 => WlObjectKind::Compositor,
-                        2 => WlObjectKind::Shm,
-                        3 => WlObjectKind::XdgWmBase,
-                        4 => WlObjectKind::Seat,
-                        _ => WlObjectKind::Compositor,
+                    let iface = if payload.len() >= 16 {
+                        parse_wl_string(&payload[4..])
+                    } else {
+                        &[]
+                    };
+                    let target_kind = if iface == b"wl_compositor" {
+                        WlObjectKind::Compositor
+                    } else if iface == b"wl_shm" {
+                        WlObjectKind::Shm
+                    } else if iface == b"xdg_wm_base" {
+                        WlObjectKind::XdgWmBase
+                    } else if iface == b"wl_seat" {
+                        WlObjectKind::Seat
+                    } else {
+                        match name {
+                            1 => WlObjectKind::Compositor,
+                            2 => WlObjectKind::Shm,
+                            3 => WlObjectKind::XdgWmBase,
+                            4 => WlObjectKind::Seat,
+                            _ => WlObjectKind::Compositor,
+                        }
                     };
                     let _ = self.register_object(new_id, target_kind, sender_pid, 0xFF);
+                    if let Some(tx) = tx_buf {
+                        match target_kind {
+                            WlObjectKind::Shm => {
+                                tx.push_u32_evt(new_id, 0, 0); // WL_SHM_FORMAT_ARGB8888
+                                tx.push_u32_evt(new_id, 0, 1); // WL_SHM_FORMAT_XRGB8888
+                            }
+                            WlObjectKind::Seat => {
+                                tx.push_u32_evt(new_id, 0, 3); // pointer | keyboard
+                                tx.push_str_evt(new_id, 1, b"seat0");
+                            }
+                            _ => {}
+                        }
+                    }
                 }
             }
             // wl_compositor.create_surface(new_id surface)
             (WlObjectKind::Compositor, 0) => {
                 let surf_id = read_u32(payload, 0);
                 if surf_id != 0 {
-                    if self.surfaces[0].active
+                    if sender_pid < CLIENT_OWNER_BASE
+                        && self.surfaces[0].active
                         && self.surfaces[0].is_terminal
                         && self.surfaces[0].owner_pid == 0
                     {
                         self.surfaces[0].owner_pid = sender_pid;
                         self.surfaces[0].damaged = true;
                         let _ = self.register_object(surf_id, WlObjectKind::Surface, sender_pid, 0);
+                    } else if sender_pid >= CLIENT_OWNER_BASE {
+                        if let Some(s_idx) = self.alloc_socket_surface(sender_pid) {
+                            let _ = self.register_object(
+                                surf_id,
+                                WlObjectKind::Surface,
+                                sender_pid,
+                                s_idx as u8,
+                            );
+                        }
                     } else if let Some(s_idx) = self.alloc_surface(sender_pid, 360, 240) {
                         let _ = self.register_object(
                             surf_id,
@@ -1423,14 +1634,57 @@ impl WaylandState {
                     }
                 }
             }
-            // wl_shm.create_pool(new_id pool, fd, size)
+            // wl_compositor.create_region(new_id region)
+            (WlObjectKind::Compositor, 1) => {
+                let reg_id = read_u32(payload, 0);
+                if reg_id != 0 {
+                    let _ = self.register_object(reg_id, WlObjectKind::Region, sender_pid, 0xFF);
+                }
+            }
+            // wl_compositor.release()
+            (WlObjectKind::Compositor, 2) => {
+                self.objects[obj_idx].kind = WlObjectKind::Free;
+                if let Some(tx) = tx_buf {
+                    tx.push_u32_evt(1, 1, object_id);
+                }
+            }
+            // wl_region.destroy()
+            (WlObjectKind::Region, 0) => {
+                self.objects[obj_idx].kind = WlObjectKind::Free;
+                if let Some(tx) = tx_buf {
+                    tx.push_u32_evt(1, 1, object_id);
+                }
+            }
+            // wl_shm.create_pool(new_id pool, [fd in SCM_RIGHTS or inline], size)
             (WlObjectKind::Shm, 0) => {
                 let pool_id = read_u32(payload, 0);
-                let fd = if payload.len() >= 8 { read_u32(payload, 4) as i32 } else { -1 };
-                let size = if payload.len() >= 12 { read_u32(payload, 8) } else { 0 };
+                let (fd, size) = if let Some(sfd) = rx_fds.pop_front() {
+                    let sz = if payload.len() >= 12 {
+                        read_u32(payload, 8)
+                    } else {
+                        read_u32(payload, 4)
+                    };
+                    (sfd, sz)
+                } else if payload.len() >= 12 {
+                    (read_u32(payload, 4) as i32, read_u32(payload, 8))
+                } else {
+                    (-1, read_u32(payload, 4))
+                };
                 if pool_id != 0 {
+                    let (local_addr, mapped_len) = map_shm_fd(fd, size);
                     let _ = self.register_object(pool_id, WlObjectKind::ShmPool, sender_pid, 0xFF);
-                    self.register_pool(pool_id, sender_pid, fd, size);
+                    self.register_pool(pool_id, sender_pid, fd, size, local_addr, mapped_len);
+                } else if fd >= 0 && sender_pid >= CLIENT_OWNER_BASE {
+                    unsafe {
+                        let _ = syscall::syscall1(syscall::SYS_CLOSE, fd as u64);
+                    }
+                }
+            }
+            // wl_shm.release()
+            (WlObjectKind::Shm, 1) => {
+                self.objects[obj_idx].kind = WlObjectKind::Free;
+                if let Some(tx) = tx_buf {
+                    tx.push_u32_evt(1, 1, object_id);
                 }
             }
             // wl_shm_pool.create_buffer(new_id buffer, offset, width, height, stride, format)
@@ -1464,15 +1718,59 @@ impl WaylandState {
             // wl_shm_pool.destroy()
             (WlObjectKind::ShmPool, 1) => {
                 if let Some(p) = self.find_pool_mut(sender_pid, object_id) {
-                    p.active = false;
+                    let old_addr = p.local_addr;
+                    unmap_close_pool(p);
+                    if old_addr != 0 {
+                        let mut si = 1usize;
+                        while si < MAX_SHM_SURFACES {
+                            if self.surfaces[si].active && self.surfaces[si].virt_addr == old_addr {
+                                self.surfaces[si].virt_addr = 0;
+                                self.surfaces[si].buf_size_bytes = 0;
+                            }
+                            si += 1;
+                        }
+                    }
                 }
                 self.objects[obj_idx].kind = WlObjectKind::Free;
+                if let Some(tx) = tx_buf {
+                    tx.push_u32_evt(1, 1, object_id);
+                }
             }
             // wl_shm_pool.resize(size)
             (WlObjectKind::ShmPool, 2) => {
                 let new_sz = read_u32(payload, 0);
+                let mut remapped_addr: Option<(u64, u32)> = None;
                 if let Some(p) = self.find_pool_mut(sender_pid, object_id) {
+                    if new_sz as u64 > p.mapped_len && p.fd >= 0 {
+                        if p.local_addr != 0 && p.mapped_len != 0 {
+                            unsafe {
+                                let _ = syscall::syscall2(syscall::SYS_MUNMAP, p.local_addr, p.mapped_len);
+                            }
+                        }
+                        let (new_addr, new_map_len) = map_shm_fd(p.fd, new_sz);
+                        p.local_addr = new_addr;
+                        p.mapped_len = new_map_len;
+                        remapped_addr = Some((new_addr, new_sz));
+                    }
                     p.size = new_sz;
+                }
+                if let Some((new_addr, sz)) = remapped_addr {
+                    let mut si = 1usize;
+                    while si < MAX_SHM_SURFACES {
+                        let buf_id = self.surfaces[si].attached_buffer;
+                        if self.surfaces[si].active
+                            && self.surfaces[si].owner_pid == sender_pid
+                            && buf_id != 0
+                        {
+                            if let Some(b) = self.find_buffer(sender_pid, buf_id) {
+                                if b.pool_id == object_id {
+                                    self.surfaces[si].virt_addr = new_addr;
+                                    self.surfaces[si].buf_size_bytes = sz as u64;
+                                }
+                            }
+                        }
+                        si += 1;
+                    }
                 }
             }
             // wl_buffer.destroy()
@@ -1488,6 +1786,28 @@ impl WaylandState {
                     i += 1;
                 }
                 self.objects[obj_idx].kind = WlObjectKind::Free;
+                if let Some(tx) = tx_buf {
+                    tx.push_u32_evt(1, 1, object_id);
+                }
+            }
+            // wl_surface.destroy()
+            (WlObjectKind::Surface, 0) => {
+                let mut redraw = false;
+                if (surf_idx as usize) < MAX_SHM_SURFACES && !self.surfaces[surf_idx as usize].is_terminal {
+                    redraw = self.surfaces[surf_idx as usize].committed;
+                    let was_focused = self.surfaces[surf_idx as usize].focused;
+                    self.surfaces[surf_idx as usize] = CompositorSurface::empty();
+                    if was_focused {
+                        self.focus_surface(0);
+                    }
+                }
+                self.objects[obj_idx].kind = WlObjectKind::Free;
+                if let Some(tx) = tx_buf {
+                    tx.push_u32_evt(1, 1, object_id);
+                }
+                if redraw {
+                    return Some((0, fb.height));
+                }
             }
             // wl_surface.attach(buffer_id, x, y)
             (WlObjectKind::Surface, 1) => {
@@ -1500,6 +1820,7 @@ impl WaylandState {
                         self.surfaces[surf_idx as usize].committed = false;
                     } else {
                         let buf_info = self.find_buffer(sender_pid, buf_id);
+                        let pool_info = buf_info.and_then(|b| self.find_pool(sender_pid, b.pool_id));
                         let s = &mut self.surfaces[surf_idx as usize];
                         s.attached_buffer = buf_id;
                         if dx != 0 || dy != 0 {
@@ -1508,6 +1829,12 @@ impl WaylandState {
                         }
                         if let Some(b) = buf_info {
                             if !s.is_terminal {
+                                if let Some(pool) = pool_info {
+                                    if pool.local_addr != 0 {
+                                        s.virt_addr = pool.local_addr;
+                                        s.buf_size_bytes = pool.size as u64;
+                                    }
+                                }
                                 s.buffer_offset = b.offset;
                                 s.width = b.width;
                                 s.height = b.height;
@@ -1548,19 +1875,76 @@ impl WaylandState {
                     }
                 }
             }
+            // wl_surface.frame(new_id callback)
+            (WlObjectKind::Surface, 3) => {
+                if (surf_idx as usize) < MAX_SHM_SURFACES {
+                    let cb_id = read_u32(payload, 0);
+                    if cb_id != 0 {
+                        self.surfaces[surf_idx as usize].frame_callback_id = cb_id;
+                    }
+                }
+            }
             // wl_surface.commit()
             (WlObjectKind::Surface, 6) => {
                 if (surf_idx as usize) < MAX_SHM_SURFACES {
-                    let s_id = self.surfaces[surf_idx as usize].surface_id;
-                    let rect = self.surfaces[surf_idx as usize].damage;
-                    let res = self.commit_surface_damage(s_id, sender_pid, rect, fb);
-                    self.surfaces[surf_idx as usize].damage = syscall::DamageRect {
-                        x: 0,
-                        y: 0,
-                        width: 0,
-                        height: 0,
+                    let si = surf_idx as usize;
+                    let is_term = self.surfaces[si].is_terminal;
+                    let attached_buf = self.surfaces[si].attached_buffer;
+                    let has_drawable = is_term
+                        || (attached_buf != 0
+                            && self.surfaces[si].virt_addr != 0
+                            && self.surfaces[si].width > 0
+                            && self.surfaces[si].height > 0);
+                    let need_initial_configure = self.surfaces[si].toplevel
+                        && self.surfaces[si].xdg_surface_id != 0
+                        && !self.surfaces[si].configure_sent;
+                    let xdg_surf_id = self.surfaces[si].xdg_surface_id;
+                    let xdg_top_id = self.surfaces[si].xdg_toplevel_id;
+                    let frame_cb = self.surfaces[si].frame_callback_id;
+                    self.surfaces[si].frame_callback_id = 0;
+
+                    let res = if has_drawable {
+                        let s_id = self.surfaces[si].surface_id;
+                        let rect = self.surfaces[si].damage;
+                        let out = self.commit_surface_damage(s_id, sender_pid, rect, fb);
+                        self.surfaces[si].damage = syscall::DamageRect {
+                            x: 0,
+                            y: 0,
+                            width: 0,
+                            height: 0,
+                        };
+                        out
+                    } else {
+                        None
                     };
+
+                    if let Some(tx) = tx_buf {
+                        if !is_term && attached_buf != 0 {
+                            tx.push_empty_evt(attached_buf, 0); // wl_buffer.release
+                        }
+                        if need_initial_configure {
+                            let serial = self.next_serial();
+                            self.surfaces[si].configure_sent = true;
+                            if xdg_top_id != 0 {
+                                tx.push_xdg_toplevel_configure(xdg_top_id, 0, 0);
+                            }
+                            tx.push_u32_evt(xdg_surf_id, 0, serial); // xdg_surface.configure
+                        }
+                        if frame_cb != 0 {
+                            tx.push_u32_evt(frame_cb, 0, 1); // wl_callback.done
+                            tx.push_u32_evt(1, 1, frame_cb); // wl_display.delete_id
+                        }
+                    } else if need_initial_configure {
+                        self.surfaces[si].configure_sent = true;
+                    }
                     return res;
+                }
+            }
+            // xdg_wm_base.destroy()
+            (WlObjectKind::XdgWmBase, 0) => {
+                self.objects[obj_idx].kind = WlObjectKind::Free;
+                if let Some(tx) = tx_buf {
+                    tx.push_u32_evt(1, 1, object_id);
                 }
             }
             // xdg_wm_base.get_xdg_surface(new_id, wl_surface)
@@ -1578,6 +1962,20 @@ impl WaylandState {
                         sender_pid,
                         s_idx,
                     );
+                    if (s_idx as usize) < MAX_SHM_SURFACES {
+                        self.surfaces[s_idx as usize].xdg_surface_id = xdg_surf_id;
+                    }
+                }
+            }
+            // xdg_surface.destroy()
+            (WlObjectKind::XdgSurface, 0) => {
+                if (surf_idx as usize) < MAX_SHM_SURFACES {
+                    self.surfaces[surf_idx as usize].xdg_surface_id = 0;
+                    self.surfaces[surf_idx as usize].configure_sent = false;
+                }
+                self.objects[obj_idx].kind = WlObjectKind::Free;
+                if let Some(tx) = tx_buf {
+                    tx.push_u32_evt(1, 1, object_id);
                 }
             }
             // xdg_surface.get_toplevel(new_id)
@@ -1592,19 +1990,30 @@ impl WaylandState {
                     );
                     if (surf_idx as usize) < MAX_SHM_SURFACES {
                         self.surfaces[surf_idx as usize].toplevel = true;
+                        self.surfaces[surf_idx as usize].xdg_toplevel_id = top_id;
                     }
                 }
             }
+            // xdg_surface.ack_configure(serial)
+            (WlObjectKind::XdgSurface, 4) => {}
             // xdg_toplevel.destroy()
             (WlObjectKind::XdgToplevel, 0) => {
+                let mut redraw = false;
                 if (surf_idx as usize) < MAX_SHM_SURFACES
                     && !self.surfaces[surf_idx as usize].is_terminal
                 {
+                    redraw = self.surfaces[surf_idx as usize].committed;
                     let was_focused = self.surfaces[surf_idx as usize].focused;
                     self.surfaces[surf_idx as usize] = CompositorSurface::empty();
                     if was_focused {
                         self.focus_surface(0);
                     }
+                }
+                self.objects[obj_idx].kind = WlObjectKind::Free;
+                if let Some(tx) = tx_buf {
+                    tx.push_u32_evt(1, 1, object_id);
+                }
+                if redraw {
                     return Some((0, fb.height));
                 }
             }
@@ -1658,7 +2067,7 @@ impl WaylandState {
                     return Some((0, fb.height));
                 }
             }
-            // wl_seat.get_pointer(new_id) / get_keyboard(new_id)
+            // wl_seat.get_pointer(new_id) / get_keyboard(new_id) / release()
             (WlObjectKind::Seat, 0) => {
                 let ptr_id = read_u32(payload, 0);
                 if ptr_id != 0 {
@@ -1671,9 +2080,560 @@ impl WaylandState {
                     let _ = self.register_object(kbd_id, WlObjectKind::Keyboard, sender_pid, 0xFF);
                 }
             }
+            (WlObjectKind::Seat, 3) => {
+                self.objects[obj_idx].kind = WlObjectKind::Free;
+                if let Some(tx) = tx_buf {
+                    tx.push_u32_evt(1, 1, object_id);
+                }
+            }
+            (WlObjectKind::Pointer, 1) | (WlObjectKind::Keyboard, 0) => {
+                self.objects[obj_idx].kind = WlObjectKind::Free;
+                if let Some(tx) = tx_buf {
+                    tx.push_u32_evt(1, 1, object_id);
+                }
+            }
             _ => {}
         }
         None
+    }
+}
+
+pub struct WlFdQueue {
+    fds: [i32; WL_CLIENT_FD_CAP],
+    head: usize,
+    len: usize,
+}
+
+impl WlFdQueue {
+    pub const fn empty() -> Self {
+        Self {
+            fds: [-1; WL_CLIENT_FD_CAP],
+            head: 0,
+            len: 0,
+        }
+    }
+
+    pub fn push(&mut self, fd: i32) {
+        if fd < 0 {
+            return;
+        }
+        if self.len >= WL_CLIENT_FD_CAP {
+            unsafe {
+                let _ = syscall::syscall1(syscall::SYS_CLOSE, fd as u64);
+            }
+            return;
+        }
+        let idx = (self.head + self.len) % WL_CLIENT_FD_CAP;
+        self.fds[idx] = fd;
+        self.len += 1;
+    }
+
+    pub fn pop_front(&mut self) -> Option<i32> {
+        if self.len == 0 {
+            return None;
+        }
+        let fd = self.fds[self.head];
+        self.fds[self.head] = -1;
+        self.head = (self.head + 1) % WL_CLIENT_FD_CAP;
+        self.len -= 1;
+        Some(fd)
+    }
+
+    pub fn close_all(&mut self) {
+        while let Some(fd) = self.pop_front() {
+            unsafe {
+                let _ = syscall::syscall1(syscall::SYS_CLOSE, fd as u64);
+            }
+        }
+    }
+}
+
+pub struct WlTxBuf {
+    pub data: [u8; WL_CLIENT_TX_CAP],
+    pub len: usize,
+}
+
+impl WlTxBuf {
+    pub const fn new() -> Self {
+        Self {
+            data: [0; WL_CLIENT_TX_CAP],
+            len: 0,
+        }
+    }
+
+    fn push_raw(&mut self, obj_id: u32, opcode: u16, words: &[u32]) {
+        let total = 8 + words.len() * 4;
+        if self.len + total > self.data.len() {
+            return;
+        }
+        let hdr = ((total as u32) << 16) | (opcode as u32);
+        self.data[self.len..self.len + 4].copy_from_slice(&obj_id.to_le_bytes());
+        self.data[self.len + 4..self.len + 8].copy_from_slice(&hdr.to_le_bytes());
+        self.len += 8;
+        let mut i = 0usize;
+        while i < words.len() {
+            self.data[self.len..self.len + 4].copy_from_slice(&words[i].to_le_bytes());
+            self.len += 4;
+            i += 1;
+        }
+    }
+
+    pub fn push_empty_evt(&mut self, obj_id: u32, opcode: u16) {
+        self.push_raw(obj_id, opcode, &[]);
+    }
+
+    pub fn push_u32_evt(&mut self, obj_id: u32, opcode: u16, val: u32) {
+        self.push_raw(obj_id, opcode, &[val]);
+    }
+
+    pub fn push_xdg_toplevel_configure(&mut self, obj_id: u32, width: i32, height: i32) {
+        self.push_raw(obj_id, 0, &[width as u32, height as u32, 0]);
+    }
+
+    fn push_str_bytes(&mut self, text: &[u8]) {
+        let len_nul = text.len() + 1;
+        let padded = (len_nul + 3) & !3;
+        self.data[self.len..self.len + 4].copy_from_slice(&(len_nul as u32).to_le_bytes());
+        self.len += 4;
+        self.data[self.len..self.len + text.len()].copy_from_slice(text);
+        self.data[self.len + text.len()..self.len + padded].fill(0);
+        self.len += padded;
+    }
+
+    pub fn push_str_evt(&mut self, obj_id: u32, opcode: u16, text: &[u8]) {
+        let padded = ((text.len() + 1) + 3) & !3;
+        let total = 8 + 4 + padded;
+        if self.len + total > self.data.len() {
+            return;
+        }
+        let hdr = ((total as u32) << 16) | (opcode as u32);
+        self.data[self.len..self.len + 4].copy_from_slice(&obj_id.to_le_bytes());
+        self.data[self.len + 4..self.len + 8].copy_from_slice(&hdr.to_le_bytes());
+        self.len += 8;
+        self.push_str_bytes(text);
+    }
+
+    pub fn push_registry_global(&mut self, reg_id: u32, name: u32, iface: &[u8], version: u32) {
+        let padded = ((iface.len() + 1) + 3) & !3;
+        let total = 8 + 4 + 4 + padded + 4;
+        if self.len + total > self.data.len() {
+            return;
+        }
+        let hdr = (total as u32) << 16; // opcode 0 = global
+        self.data[self.len..self.len + 4].copy_from_slice(&reg_id.to_le_bytes());
+        self.data[self.len + 4..self.len + 8].copy_from_slice(&hdr.to_le_bytes());
+        self.data[self.len + 8..self.len + 12].copy_from_slice(&name.to_le_bytes());
+        self.len += 12;
+        self.push_str_bytes(iface);
+        self.data[self.len..self.len + 4].copy_from_slice(&version.to_le_bytes());
+        self.len += 4;
+    }
+}
+
+fn map_shm_fd(fd: i32, size: u32) -> (u64, u64) {
+    if fd < 0 || size == 0 {
+        return (0, 0);
+    }
+    let capped = (size as u64).min(64 * 1024 * 1024).max(4096);
+    let aligned = (capped + 4095) & !4095;
+    let rc = unsafe {
+        syscall::syscall6(
+            syscall::SYS_MMAP,
+            0,
+            aligned,
+            syscall::PROT_READ,
+            syscall::MAP_SHARED,
+            fd as u64,
+            0,
+        )
+    };
+    if rc > 0 {
+        (rc as u64, aligned)
+    } else {
+        (0, 0)
+    }
+}
+
+fn unmap_close_pool(p: &mut ShmPoolInfo) {
+    if p.local_addr != 0 && p.mapped_len != 0 {
+        unsafe {
+            let _ = syscall::syscall2(syscall::SYS_MUNMAP, p.local_addr, p.mapped_len);
+        }
+    }
+    if p.fd >= 0 {
+        unsafe {
+            let _ = syscall::syscall1(syscall::SYS_CLOSE, p.fd as u64);
+        }
+    }
+    *p = ShmPoolInfo::empty();
+}
+
+#[repr(C)]
+struct SockAddrUn {
+    sun_family: u16,
+    sun_path: [u8; 108],
+}
+
+#[repr(C)]
+struct RawIoVec {
+    iov_base: u64,
+    iov_len: u64,
+}
+
+#[repr(C)]
+struct UnixMsghdr {
+    msg_name: u64,
+    msg_namelen: u32,
+    _pad0: u32,
+    msg_iov: u64,
+    msg_iovlen: u64,
+    msg_control: u64,
+    msg_controllen: u64,
+    msg_flags: i32,
+    _pad1: u32,
+}
+
+#[repr(C)]
+struct UnixCmsghdr {
+    cmsg_len: usize,
+    cmsg_level: i32,
+    cmsg_type: i32,
+}
+
+pub struct WlClientSlot {
+    pub fd: i32,
+    pub owner_key: u32,
+    pub rx_buf: [u8; WL_CLIENT_RX_CAP],
+    pub rx_len: usize,
+    pub rx_fds: WlFdQueue,
+    pub tx_buf: WlTxBuf,
+}
+
+impl WlClientSlot {
+    pub const fn empty() -> Self {
+        Self {
+            fd: -1,
+            owner_key: 0,
+            rx_buf: [0; WL_CLIENT_RX_CAP],
+            rx_len: 0,
+            rx_fds: WlFdQueue::empty(),
+            tx_buf: WlTxBuf::new(),
+        }
+    }
+
+    fn close_fd_and_reset(&mut self) {
+        if self.fd >= 0 {
+            unsafe {
+                let _ = syscall::syscall1(syscall::SYS_CLOSE, self.fd as u64);
+            }
+        }
+        self.fd = -1;
+        self.rx_len = 0;
+        self.rx_fds.close_all();
+        self.tx_buf.len = 0;
+    }
+}
+
+pub struct SocketPollOutcome {
+    pub did_io: bool,
+    pub full_repaint: bool,
+    pub dirty: Option<(u32, u32)>,
+}
+
+pub struct WaylandSocketServer {
+    pub listener_fd: i32,
+    pub bind_cooldown: u32,
+    pub announced: bool,
+    pub clients: [WlClientSlot; MAX_WAYLAND_CLIENTS],
+}
+
+struct StaticWaylandSocket(core::cell::UnsafeCell<WaylandSocketServer>);
+
+unsafe impl Sync for StaticWaylandSocket {}
+
+static WAYLAND_SOCKET_SERVER: StaticWaylandSocket =
+    StaticWaylandSocket(core::cell::UnsafeCell::new(WaylandSocketServer::new()));
+
+/// Retourne l'instance `.bss` de `WaylandSocketServer` sans allouer ~36 Kio sur la pile.
+pub fn wayland_socket_mut() -> &'static mut WaylandSocketServer {
+    // SAFETY: `fb_server` exécute sa boucle principale sur un thread unique.
+    unsafe { &mut *WAYLAND_SOCKET_SERVER.0.get() }
+}
+
+impl WaylandSocketServer {
+    pub const fn new() -> Self {
+        Self {
+            listener_fd: -1,
+            bind_cooldown: 0,
+            announced: false,
+            clients: [const { WlClientSlot::empty() }; MAX_WAYLAND_CLIENTS],
+        }
+    }
+
+    fn try_bind(&mut self) {
+        if self.listener_fd >= 0 {
+            return;
+        }
+        if self.bind_cooldown > 0 {
+            self.bind_cooldown -= 1;
+            return;
+        }
+        unsafe {
+            let _ = syscall::syscall2(syscall::SYS_MKDIR, b"/run\0".as_ptr() as u64, 0o755);
+            let _ = syscall::syscall1(syscall::SYS_UNLINK, b"/run/wayland-0\0".as_ptr() as u64);
+        }
+        let fd = unsafe {
+            syscall::syscall3(
+                syscall::SYS_SOCKET,
+                1, // AF_UNIX
+                1 | syscall::O_NONBLOCK | syscall::O_CLOEXEC, // SOCK_STREAM
+                0,
+            )
+        };
+        if fd < 0 {
+            self.bind_cooldown = 15;
+            return;
+        }
+        let mut sa = SockAddrUn {
+            sun_family: 1,
+            sun_path: [0; 108],
+        };
+        let path = b"/run/wayland-0\0";
+        sa.sun_path[..path.len()].copy_from_slice(path);
+        let bind_rc = unsafe {
+            syscall::syscall3(
+                syscall::SYS_BIND,
+                fd as u64,
+                &sa as *const SockAddrUn as u64,
+                core::mem::size_of::<SockAddrUn>() as u64,
+            )
+        };
+        if bind_rc < 0 {
+            unsafe {
+                let _ = syscall::syscall1(syscall::SYS_CLOSE, fd as u64);
+            }
+            self.bind_cooldown = 15;
+            return;
+        }
+        let listen_rc = unsafe { syscall::syscall2(syscall::SYS_LISTEN, fd as u64, 16) };
+        if listen_rc < 0 {
+            unsafe {
+                let _ = syscall::syscall1(syscall::SYS_CLOSE, fd as u64);
+            }
+            self.bind_cooldown = 15;
+            return;
+        }
+        self.listener_fd = fd as i32;
+        if !self.announced {
+            self.announced = true;
+            let msg = b"fb_server: wayland socket /run/wayland-0 ready\n";
+            unsafe {
+                let _ = syscall::syscall3(syscall::SYS_EXO_LOG, msg.as_ptr() as u64, msg.len() as u64, 1);
+            }
+        }
+    }
+
+    pub fn poll(&mut self, state: &mut WaylandState, fb: Framebuffer) -> SocketPollOutcome {
+        const MSG_DONTWAIT: u64 = 0x40;
+        const EINTR_ERR: i64 = -4;
+
+        let mut outcome = SocketPollOutcome {
+            did_io: false,
+            full_repaint: false,
+            dirty: None,
+        };
+
+        self.try_bind();
+        if self.listener_fd < 0 {
+            return outcome;
+        }
+
+        // Accept up to 4 newly connected clients per pass.
+        let mut accepts = 0usize;
+        while accepts < 4 {
+            let cfd = unsafe { syscall::syscall3(syscall::SYS_ACCEPT, self.listener_fd as u64, 0, 0) };
+            if cfd < 0 {
+                break;
+            }
+            outcome.did_io = true;
+            let mut placed = false;
+            let mut si = 0usize;
+            while si < MAX_WAYLAND_CLIENTS {
+                if self.clients[si].fd < 0 {
+                    self.clients[si].fd = cfd as i32;
+                    self.clients[si].owner_key = CLIENT_OWNER_BASE | (si as u32);
+                    self.clients[si].rx_len = 0;
+                    self.clients[si].rx_fds.close_all();
+                    self.clients[si].tx_buf.len = 0;
+                    placed = true;
+                    break;
+                }
+                si += 1;
+            }
+            if !placed {
+                unsafe {
+                    let _ = syscall::syscall1(syscall::SYS_CLOSE, cfd as u64);
+                }
+                break;
+            }
+            accepts += 1;
+        }
+
+        let mut dirty_min = u32::MAX;
+        let mut dirty_max = 0u32;
+        let mut si = 0usize;
+        while si < MAX_WAYLAND_CLIENTS {
+            if self.clients[si].fd < 0 {
+                si += 1;
+                continue;
+            }
+            let owner_key = self.clients[si].owner_key;
+            let mut disconnected = false;
+            let mut reads = 0usize;
+            while reads < 4 && self.clients[si].rx_len < WL_CLIENT_RX_CAP {
+                let start = self.clients[si].rx_len;
+                let cap = WL_CLIENT_RX_CAP - start;
+                let mut iov = RawIoVec {
+                    iov_base: self.clients[si].rx_buf[start..].as_mut_ptr() as u64,
+                    iov_len: cap as u64,
+                };
+                let mut ctrl = [0u8; 128];
+                let mut msg = UnixMsghdr {
+                    msg_name: 0,
+                    msg_namelen: 0,
+                    _pad0: 0,
+                    msg_iov: &mut iov as *mut RawIoVec as u64,
+                    msg_iovlen: 1,
+                    msg_control: ctrl.as_mut_ptr() as u64,
+                    msg_controllen: ctrl.len() as u64,
+                    msg_flags: 0,
+                    _pad1: 0,
+                };
+                let rc = unsafe {
+                    syscall::syscall3(
+                        syscall::SYS_RECVMSG,
+                        self.clients[si].fd as u64,
+                        &mut msg as *mut UnixMsghdr as u64,
+                        MSG_DONTWAIT,
+                    )
+                };
+                if rc < 0 {
+                    if rc != syscall::EAGAIN && rc != EINTR_ERR {
+                        disconnected = true;
+                    }
+                    break;
+                }
+                if msg.msg_controllen >= core::mem::size_of::<UnixCmsghdr>() as u64 {
+                    let cmsg = unsafe { core::ptr::read_unaligned(ctrl.as_ptr() as *const UnixCmsghdr) };
+                    if cmsg.cmsg_level == 1 && cmsg.cmsg_type == 1 && cmsg.cmsg_len >= 16 {
+                        let avail_bytes = (msg.msg_controllen as usize).min(ctrl.len()).min(cmsg.cmsg_len);
+                        let n_fds = (avail_bytes.saturating_sub(16)) / 4;
+                        let mut fi = 0usize;
+                        while fi < n_fds {
+                            let off = 16 + fi * 4;
+                            let rfd = i32::from_le_bytes([
+                                ctrl[off],
+                                ctrl[off + 1],
+                                ctrl[off + 2],
+                                ctrl[off + 3],
+                            ]);
+                            self.clients[si].rx_fds.push(rfd);
+                            fi += 1;
+                        }
+                    }
+                }
+                if rc == 0 && msg.msg_controllen == 0 {
+                    disconnected = true;
+                    break;
+                }
+                self.clients[si].rx_len += rc as usize;
+                outcome.did_io = true;
+                reads += 1;
+            }
+
+            if !disconnected && self.clients[si].rx_len >= 8 {
+                let slot = &mut self.clients[si];
+                let (consumed, msgs, slot_dirty) = state.dispatch_wire_stream(
+                    owner_key,
+                    &slot.rx_buf[..slot.rx_len],
+                    &mut slot.rx_fds,
+                    &mut slot.tx_buf,
+                    fb,
+                );
+                if consumed == usize::MAX {
+                    disconnected = true;
+                } else {
+                    if consumed > 0 {
+                        if consumed < slot.rx_len {
+                            slot.rx_buf.copy_within(consumed..slot.rx_len, 0);
+                        }
+                        slot.rx_len -= consumed;
+                    }
+                    if msgs > 0 {
+                        outcome.did_io = true;
+                    }
+                    if let Some((y0, y1)) = slot_dirty {
+                        if y0 < dirty_min {
+                            dirty_min = y0;
+                        }
+                        if y1 > dirty_max {
+                            dirty_max = y1;
+                        }
+                    }
+                }
+            }
+
+            if !disconnected && self.clients[si].tx_buf.len > 0 {
+                let tx_len = self.clients[si].tx_buf.len;
+                let iov = RawIoVec {
+                    iov_base: self.clients[si].tx_buf.data.as_ptr() as u64,
+                    iov_len: tx_len as u64,
+                };
+                let msg = UnixMsghdr {
+                    msg_name: 0,
+                    msg_namelen: 0,
+                    _pad0: 0,
+                    msg_iov: &iov as *const RawIoVec as u64,
+                    msg_iovlen: 1,
+                    msg_control: 0,
+                    msg_controllen: 0,
+                    msg_flags: 0,
+                    _pad1: 0,
+                };
+                let sent = unsafe {
+                    syscall::syscall3(
+                        syscall::SYS_SENDMSG,
+                        self.clients[si].fd as u64,
+                        &msg as *const UnixMsghdr as u64,
+                        MSG_DONTWAIT,
+                    )
+                };
+                if sent > 0 {
+                    let s_usize = (sent as usize).min(tx_len);
+                    if s_usize < tx_len {
+                        self.clients[si].tx_buf.data.copy_within(s_usize..tx_len, 0);
+                    }
+                    self.clients[si].tx_buf.len -= s_usize;
+                    outcome.did_io = true;
+                } else if sent < 0 && sent != syscall::EAGAIN && sent != EINTR_ERR {
+                    disconnected = true;
+                }
+            }
+
+            if disconnected {
+                self.clients[si].close_fd_and_reset();
+                if state.disconnect_client(owner_key) {
+                    outcome.full_repaint = true;
+                }
+                outcome.did_io = true;
+            }
+            si += 1;
+        }
+
+        if dirty_min < dirty_max {
+            outcome.dirty = Some((dirty_min, dirty_max));
+        }
+        outcome
     }
 }
 

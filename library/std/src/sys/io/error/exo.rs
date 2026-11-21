@@ -1,7 +1,37 @@
 use crate::io;
+use crate::sync::atomic::{AtomicI32, Ordering};
+use crate::sys::pal::runtime::ExoTcb;
 
+static EARLY_ERRNO: AtomicI32 = AtomicI32::new(0);
+
+#[inline]
+pub fn errno_location() -> *mut i32 {
+    let ptr = unsafe { ExoTcb::errno_ptr() };
+    if ptr.is_null() {
+        EARLY_ERRNO.as_ptr()
+    } else {
+        ptr
+    }
+}
+
+#[inline]
 pub fn errno() -> i32 {
-    0
+    let ptr = unsafe { ExoTcb::errno_ptr() };
+    if ptr.is_null() {
+        EARLY_ERRNO.load(Ordering::Relaxed)
+    } else {
+        unsafe { ptr.read() }
+    }
+}
+
+#[inline]
+pub fn set_errno(e: i32) {
+    let ptr = unsafe { ExoTcb::errno_ptr() };
+    if ptr.is_null() {
+        EARLY_ERRNO.store(e, Ordering::Relaxed);
+    } else {
+        unsafe { ptr.write(e) };
+    }
 }
 
 #[inline]

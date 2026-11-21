@@ -10,7 +10,7 @@ use exo_syscall_abi as syscall;
     pub const ARG_MAX: usize = 32;
     pub const ENV_MAX: usize = 16;
     pub const IO_BUF: usize = 4096;
-    pub const DIRENT64_HEADER_SIZE: usize = 24;
+    pub const DIRENT64_HEADER_SIZE: usize = 19;
     pub const DT_DIR: u8 = 4;
     pub const S_IFMT: u32 = 0o170000;
     pub const S_IFDIR: u32 = 0o040000;

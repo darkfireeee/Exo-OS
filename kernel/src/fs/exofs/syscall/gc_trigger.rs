@@ -260,6 +260,7 @@ fn run_gc(args: &GcArgs) -> ExofsResult<GcResult> {
                 res.blobs_deleted = res.blobs_deleted.saturating_add(1);
             }
         }
+        crate::scheduler::core::switch::maybe_yield_kthread();
         i = i.wrapping_add(1);
     }
     gc_lock_release();

@@ -391,8 +391,10 @@ fn serialize_catalog(
     if used > total {
         return Err(ExofsError::NoSpace);
     }
+    let used_blocks = used.div_ceil(block_size).clamp(1, OBJECT_INDEX_BLOCKS as usize);
+    let write_len = used_blocks.saturating_mul(block_size);
     let mut buf = Vec::new();
-    buf.try_reserve(total).map_err(|_| ExofsError::NoMemory)?;
+    buf.try_reserve(write_len).map_err(|_| ExofsError::NoMemory)?;
     push_u32(&mut buf, OBJECT_INDEX_MAGIC);
     push_u16(&mut buf, OBJECT_INDEX_VERSION);
     push_u16(&mut buf, 0);
@@ -420,7 +422,7 @@ fn serialize_catalog(
         j = j.wrapping_add(1);
     }
 
-    buf.resize(total, 0);
+    buf.resize(write_len, 0);
     Ok(buf)
 }
 
@@ -489,7 +491,16 @@ fn deserialize_catalog(
     Ok(Some((mappings, free_extents, next_lba)))
 }
 
+#[inline]
+pub(crate) fn maybe_yield_io() {
+    crate::scheduler::core::switch::maybe_yield_kthread();
+}
+
 pub fn persist_catalog_to_global_disk() -> ExofsResult<bool> {
+    persist_catalog_to_global_disk_with_sync(true)
+}
+
+pub(crate) fn persist_catalog_to_global_disk_with_sync(sync: bool) -> ExofsResult<bool> {
     if !virtio_adapter::has_global_disk() {
         return Ok(false);
     }
@@ -506,8 +517,11 @@ pub fn persist_catalog_to_global_disk() -> ExofsResult<bool> {
             device.write_block(lba, &buf[pos..pos + block_size])?;
             lba = lba.saturating_add(1);
             pos = pos.saturating_add(block_size);
+            maybe_yield_io();
         }
-        device.flush().map_err(|_| ExofsError::NvmeFlushFailed)?;
+        if sync {
+            device.flush().map_err(|_| ExofsError::NvmeFlushFailed)?;
+        }
         CATALOG_LOADED.store(true, Ordering::Release);
         Ok(true)
     })
@@ -552,6 +566,15 @@ pub fn free_blob_mapping(blob_id: &BlobId) -> ExofsResult<Option<PersistedBlobMa
 }
 
 pub fn persist_blob_data_if_disk(blob_id: BlobId, data: &[u8], sync: bool) -> ExofsResult<bool> {
+    persist_blob_data_if_disk_options(blob_id, data, sync, true)
+}
+
+pub(crate) fn persist_blob_data_if_disk_options(
+    blob_id: BlobId,
+    data: &[u8],
+    sync: bool,
+    update_catalog: bool,
+) -> ExofsResult<bool> {
     if !virtio_adapter::has_global_disk() {
         return Ok(false);
     }
@@ -594,16 +617,17 @@ pub fn persist_blob_data_if_disk(blob_id: BlobId, data: &[u8], sync: bool) -> Ex
             device.write_block(lba, &block)?;
             lba = lba.saturating_add(1);
             pos = pos.saturating_add(chunk);
+            maybe_yield_io();
         }
 
-        if sync || data.is_empty() {
+        if !update_catalog && sync {
             device.flush().map_err(|_| ExofsError::NvmeFlushFailed)?;
         }
 
         Ok(true)
     })?;
-    if wrote {
-        let _ = persist_catalog_to_global_disk()?;
+    if wrote && update_catalog {
+        let _ = persist_catalog_to_global_disk_with_sync(sync)?;
     }
     Ok(wrote)
 }
@@ -654,6 +678,7 @@ pub fn load_blob_data_if_available(blob_id: &BlobId) -> ExofsResult<Option<Vec<u
             lba = lba.saturating_add(1);
             remaining = remaining.saturating_sub(take);
             logical_off = logical_off.saturating_add(block_size as u64);
+            maybe_yield_io();
         }
 
         Ok(Some(out))

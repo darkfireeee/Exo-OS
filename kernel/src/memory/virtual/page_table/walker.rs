@@ -217,11 +217,50 @@ impl PageTableWalker {
         let pt = unsafe { phys_to_table_mut(l2_entry.phys_addr()) };
         let l1_idx = virt.p1_index();
         let old = pt[l1_idx];
-        if !old.is_present() {
+        if !old.is_present() && !old.is_prot_none() {
+            if crate::memory::integrity::guard_pages::is_guard_pte(old.raw()) {
+                pt[l1_idx].clear();
+            }
             return None;
         }
         pt[l1_idx].clear();
-        old.frame()
+        old.frame_or_prot_none()
+    }
+
+    /// Stamps a hardware-non-present guard PTE (`GUARD_PTE_VALUE`) for a lazy
+    /// `PROT_NONE` page, allocating missing intermediate page tables.
+    pub fn set_guard_pte<A: FrameAllocatorForWalk>(
+        &mut self,
+        virt: VirtAddr,
+        alloc: &A,
+    ) -> Result<(), AllocError> {
+        let flags = PageFlags::USER | PageFlags::WRITABLE;
+        // SAFETY: `pml4_phys` is a valid PML4 for this address space.
+        let pml4 = unsafe { phys_to_table_mut(self.pml4_phys) };
+        let l3_phys = self.ensure_table(pml4, virt.p4_index(), alloc, flags)?;
+        let pdpt = unsafe { phys_to_table_mut(l3_phys) };
+        let l2_phys = self.ensure_table(pdpt, virt.p3_index(), alloc, flags)?;
+        let pd = unsafe { phys_to_table_mut(l2_phys) };
+        let l1_phys = self.ensure_table(pd, virt.p2_index(), alloc, flags)?;
+        let pt = unsafe { phys_to_table_mut(l1_phys) };
+        let slot = &mut pt[virt.p1_index()] as *mut PageTableEntry as *mut u64;
+        // SAFETY: `slot` points to a valid L1 PTE in the newly ensured PT.
+        unsafe {
+            crate::memory::integrity::guard_pages::write_guard_pte(slot);
+        }
+        Ok(())
+    }
+
+    /// Clears a lazy guard PTE back to `0` so demand paging can fault in a page
+    /// after permissions are upgraded from `PROT_NONE`.
+    pub fn clear_guard_pte(&mut self, virt: VirtAddr) {
+        if let Some(entry_ptr) = self.leaf_entry_ptr(virt) {
+            // SAFETY: `entry_ptr` is a valid L1 PTE pointer returned by `leaf_entry_ptr`.
+            let entry = unsafe { &mut *entry_ptr };
+            if crate::memory::integrity::guard_pages::is_guard_pte(entry.raw()) {
+                entry.clear();
+            }
+        }
     }
 
     /// Modifies the flags of an existing mapping.
@@ -261,11 +300,11 @@ impl PageTableWalker {
 
         let pt = unsafe { phys_to_table_mut(l2_entry.phys_addr()) };
         let entry = &mut pt[virt.p1_index()];
-        if !entry.is_present() {
+        if !entry.is_present() && !entry.is_prot_none() {
             return Err(AllocError::InvalidParams);
         }
 
-        let frame = entry.frame().ok_or(AllocError::InvalidParams)?;
+        let frame = entry.frame_or_prot_none().ok_or(AllocError::InvalidParams)?;
         *entry = PageTableEntry::from_page_flags(frame, new_flags);
         Ok(())
     }

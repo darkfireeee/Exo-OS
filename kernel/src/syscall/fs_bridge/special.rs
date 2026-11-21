@@ -372,6 +372,8 @@ pub fn read_eventfd_to_user(blob_id: BlobId, buf_ptr: u64) -> Result<i64, FsBrid
     };
     write_user_typed(buf_ptr, out).map_err(|_| FsBridgeError::Fault)?;
     store_eventfd_state(blob_id, next, flags)?;
+    drop(_guard);
+    notify_io_event(Some(blob_id));
     Ok(size_of::<u64>() as i64)
 }
 
@@ -385,6 +387,8 @@ pub fn write_eventfd_from_user(blob_id: BlobId, buf_ptr: u64) -> Result<i64, FsB
     let (value, flags) = eventfd_state(blob_id)?;
     let next = value.checked_add(add).ok_or(FsBridgeError::WouldBlock)?;
     store_eventfd_state(blob_id, next, flags)?;
+    drop(_guard);
+    notify_io_event(Some(blob_id));
     Ok(size_of::<u64>() as i64)
 }
 
@@ -426,21 +430,129 @@ pub fn is_socket_peer_closed(blob_id: BlobId) -> bool {
     is_socket_peer_closed_locked(blob_id)
 }
 
-/// Clean up kernel-side pseudo-blob state once `OBJECT_TABLE.open_count_for(&blob_id) == 0`.
+pub struct UnixSocketMeta {
+    pub blob_id: BlobId,
+    pub sock_type: i32,
+    pub bound_path: Vec<u8>,
+    pub peer_path: Vec<u8>,
+    pub shutdown_rd: bool,
+    pub shutdown_wr: bool,
+    pub peer_shutdown_wr: bool,
+    pub cred_pid: u32,
+    pub cred_uid: u32,
+    pub cred_gid: u32,
+    pub last_error: i32,
+    pub passcred: bool,
+    pub reuseaddr: bool,
+    pub rcvbuf: u32,
+    pub sndbuf: u32,
+}
+
+impl UnixSocketMeta {
+    fn new(blob_id: BlobId, sock_type: i32, pid: u32) -> Self {
+        let (uid, gid) = process_uid_gid(pid);
+        Self {
+            blob_id,
+            sock_type,
+            bound_path: Vec::new(),
+            peer_path: Vec::new(),
+            shutdown_rd: false,
+            shutdown_wr: false,
+            peer_shutdown_wr: false,
+            cred_pid: pid,
+            cred_uid: uid,
+            cred_gid: gid,
+            last_error: 0,
+            passcred: false,
+            reuseaddr: false,
+            rcvbuf: SOCKET_MAX_CAPACITY as u32,
+            sndbuf: SOCKET_MAX_CAPACITY as u32,
+        }
+    }
+}
+
+pub static UNIX_SOCKET_META: Mutex<Vec<UnixSocketMeta>> = Mutex::new(Vec::new());
+
+fn process_uid_gid(pid: u32) -> (u32, u32) {
+    crate::process::core::registry::PROCESS_REGISTRY
+        .find_by_pid(crate::process::core::pid::Pid(pid))
+        .map(|pcb| {
+            let c = pcb.creds.lock();
+            (c.euid, c.egid)
+        })
+        .unwrap_or((0, 0))
+}
+
+fn register_unix_socket_meta(blob_id: BlobId, sock_type: i32, pid: u32) {
+    let mut table = UNIX_SOCKET_META.lock();
+    if let Some(m) = table.iter_mut().find(|m| m.blob_id == blob_id) {
+        m.sock_type = sock_type;
+        m.cred_pid = pid;
+        let (uid, gid) = process_uid_gid(pid);
+        m.cred_uid = uid;
+        m.cred_gid = gid;
+        return;
+    }
+    if table.try_reserve(1).is_ok() {
+        table.push(UnixSocketMeta::new(blob_id, sock_type, pid));
+    }
+}
+
+fn remove_unix_socket_meta(blob_id: BlobId) {
+    let mut table = UNIX_SOCKET_META.lock();
+    if let Some(pos) = table.iter().position(|m| m.blob_id == blob_id) {
+        table.swap_remove(pos);
+    }
+}
+
+#[inline]
+pub fn socket_is_read_shutdown(blob_id: BlobId) -> bool {
+    UNIX_SOCKET_META
+        .lock()
+        .iter()
+        .find(|m| m.blob_id == blob_id)
+        .map(|m| m.shutdown_rd || m.peer_shutdown_wr)
+        .unwrap_or(false)
+}
+
+#[inline]
+pub fn socket_is_write_shutdown(blob_id: BlobId) -> bool {
+    UNIX_SOCKET_META
+        .lock()
+        .iter()
+        .find(|m| m.blob_id == blob_id)
+        .map(|m| m.shutdown_wr)
+        .unwrap_or(false)
+}
+
+/// Clean up kernel-side pseudo-blob state (or POSIX deferred-unlinked regular files)
+/// once `OBJECT_TABLE.open_count_for(&blob_id) == 0`.
 pub fn cleanup_closed_blob(blob_id: BlobId) {
     if OBJECT_TABLE.open_count_for(&blob_id) != 0 {
         return;
     }
+    remove_blob_edge(&blob_id);
     if is_pseudo_blob(&blob_id, PSEUDO_SOCKET_TAG) {
         on_socket_blob_closed(blob_id);
+    } else if is_pseudo_blob(&blob_id, PSEUDO_NET_SOCKET_TAG) {
+        crate::syscall::net_bridge::on_net_socket_blob_closed(blob_id);
+        BLOB_CACHE.invalidate(&blob_id);
     } else if is_pseudo_blob(&blob_id, PSEUDO_EPOLL_TAG) {
         remove_epoll_watches_for_blob(blob_id);
         BLOB_CACHE.invalidate(&blob_id);
     } else if is_pseudo_blob(&blob_id, PSEUDO_PIPE_TAG)
         || is_pseudo_blob(&blob_id, PSEUDO_EVENTFD_TAG)
         || is_pseudo_blob(&blob_id, PSEUDO_INOTIFY_TAG)
+        || is_pseudo_blob(&blob_id, PSEUDO_MEMFD_TAG)
     {
         BLOB_CACHE.invalidate(&blob_id);
+    } else if let Some(is_symlink) = take_deferred_unlink(&blob_id) {
+        if is_symlink {
+            invalidate_symlink(&blob_id_to_object_id(blob_id));
+        }
+        BLOB_CACHE.invalidate(&blob_id);
+        remove_mode(&blob_id);
+        remove_times(&blob_id);
     }
 }
 
@@ -464,8 +576,31 @@ pub fn on_socket_blob_closed(blob_id: BlobId) {
             }
         }
     }
+    {
+        let mut dgram_eps = UNIX_DGRAM_ENDPOINTS.lock();
+        let mut i = 0;
+        while i < dgram_eps.len() {
+            if dgram_eps[i].1 == blob_id {
+                dgram_eps.swap_remove(i);
+            } else {
+                i += 1;
+            }
+        }
+    }
+    {
+        let mut dgram_qs = UNIX_DGRAM_QUEUES.lock();
+        let mut i = 0;
+        while i < dgram_qs.len() {
+            if dgram_qs[i].0 == blob_id {
+                dgram_qs.swap_remove(i);
+            } else {
+                i += 1;
+            }
+        }
+    }
 
     let mut ancillary_handles = Vec::new();
+    let mut peers_to_wake = Vec::new();
     {
         let _guard = SOCKET_PAYLOAD_LOCK.lock();
         for &s_blob in &to_close {
@@ -474,6 +609,7 @@ pub fn on_socket_blob_closed(blob_id: BlobId) {
                 .and_then(|d| parse_socket_peer_bytes(&d).ok())
                 .unwrap_or(BlobId([0u8; 32]));
             BLOB_CACHE.invalidate(&s_blob);
+            remove_unix_socket_meta(s_blob);
 
             {
                 let mut closed = CLOSED_SOCKETS.lock();
@@ -484,8 +620,13 @@ pub fn on_socket_blob_closed(blob_id: BlobId) {
                     if let Some(peer_pos) = closed.iter().position(|b| *b == peer) {
                         // Both endpoints are closed; evict peer instead of growing CLOSED_SOCKETS.
                         closed.swap_remove(peer_pos);
-                    } else if closed.try_reserve(1).is_ok() {
-                        closed.push(s_blob);
+                    } else {
+                        if closed.try_reserve(1).is_ok() {
+                            closed.push(s_blob);
+                        }
+                        if peers_to_wake.try_reserve(1).is_ok() {
+                            peers_to_wake.push(peer);
+                        }
                     }
                 }
             }
@@ -516,6 +657,9 @@ pub fn on_socket_blob_closed(blob_id: BlobId) {
                 cleanup_closed_blob(b);
             }
         }
+    }
+    for peer in peers_to_wake {
+        notify_io_event(Some(peer));
     }
 }
 
@@ -583,6 +727,9 @@ pub fn socket_read_to_user(
     consume: bool,
     nonblock: bool,
 ) -> Result<i64, FsBridgeError> {
+    if socket_is_dgram(blob_id) {
+        return dgram_read_to_user(blob_id, buf_ptr, count, consume, nonblock, 0, 0, 0);
+    }
     if count == 0 {
         return Ok(0);
     }
@@ -590,8 +737,10 @@ pub fn socket_read_to_user(
         return Err(FsBridgeError::Fault);
     }
     loop {
+        let gen = io_wait_gen();
         let _guard = SOCKET_PAYLOAD_LOCK.lock();
         let data = snapshot_blob(&blob_id)?;
+        let peer = parse_socket_peer_bytes(&data)?;
         if data.len() > SOCKET_HEADER_LEN {
             let read_len = count.min(data.len() - SOCKET_HEADER_LEN);
             let out = &data[SOCKET_HEADER_LEN..SOCKET_HEADER_LEN + read_len];
@@ -604,11 +753,15 @@ pub fn socket_read_to_user(
                     .insert(blob_id, next)
                     .map_err(exofs_to_bridge_error)?;
                 let _ = BLOB_CACHE.mark_dirty(&blob_id);
+                drop(_guard);
+                if peer != BlobId([0u8; 32]) {
+                    notify_io_event(Some(peer));
+                }
             }
             return Ok(read_len as i64);
         }
-        let peer = parse_socket_peer_bytes(&data)?;
-        let peer_closed = peer != BlobId([0u8; 32]) && is_socket_closed(peer);
+        let peer_closed = (peer != BlobId([0u8; 32]) && is_socket_closed(peer))
+            || socket_is_read_shutdown(blob_id);
         drop(_guard);
 
         if peer_closed {
@@ -617,15 +770,15 @@ pub fn socket_read_to_user(
         if nonblock {
             return Err(FsBridgeError::WouldBlock);
         }
-        if !crate::scheduler::timer::sleep::sleep_ns(1_000_000) {
-            return Err(FsBridgeError::Interrupted);
-        }
+        let _ = wait_for_io_event(gen, None, 1_000_000_000)?;
     }
 }
 
 pub const SOCKET_MAX_CAPACITY: usize = 131072;
 pub const PIPE_MAX_CAPACITY: usize = 65536;
 const MAX_ANCILLARY_FDS_PER_SOCKET: usize = 256;
+const MAX_DGRAM_QUEUE_PACKETS: usize = 64;
+const MAX_DGRAM_PACKET_SIZE: usize = 65536;
 
 #[inline]
 fn append_socket_payload_locked(blob_id: BlobId, bytes: &[u8]) -> Result<i64, FsBridgeError> {
@@ -660,8 +813,73 @@ fn append_socket_payload_locked(blob_id: BlobId, bytes: &[u8]) -> Result<i64, Fs
 
 #[inline]
 pub fn append_socket_payload(blob_id: BlobId, bytes: &[u8]) -> Result<i64, FsBridgeError> {
-    let _guard = SOCKET_PAYLOAD_LOCK.lock();
-    append_socket_payload_locked(blob_id, bytes)
+    let written = {
+        let _guard = SOCKET_PAYLOAD_LOCK.lock();
+        append_socket_payload_locked(blob_id, bytes)?
+    };
+    if written > 0 {
+        notify_io_event(Some(blob_id));
+    }
+    Ok(written)
+}
+
+/// Write `input` to a connected `AF_UNIX` `SOCK_STREAM` or `SOCK_DGRAM` socket,
+/// blocking on `IO_WAIT_HUB` if the target buffer is full and `!nonblock`.
+pub fn write_unix_socket_bytes(
+    self_blob: BlobId,
+    input: &[u8],
+    flags: u32,
+    nonblock: bool,
+    pid: u32,
+) -> Result<i64, FsBridgeError> {
+    let nosignal = (flags & 0x4000) != 0;
+    if socket_is_write_shutdown(self_blob) {
+        if !nosignal {
+            let _ = crate::process::signal::delivery::send_signal_to_pid(
+                crate::process::core::pid::Pid(pid),
+                crate::process::signal::default::Signal::SIGPIPE,
+            );
+        }
+        return Err(FsBridgeError::BrokenPipe);
+    }
+    let peer = socket_peer_blob(self_blob)?;
+    if peer == BlobId([0u8; 32]) {
+        return Err(FsBridgeError::NotConnected);
+    }
+    if socket_is_dgram(self_blob) {
+        return dgram_send_to_blob(self_blob, peer, input, nonblock, nosignal, pid);
+    }
+    if input.is_empty() {
+        return append_socket_payload(peer, &[]);
+    }
+    loop {
+        let gen = io_wait_gen();
+        if socket_is_write_shutdown(self_blob) || is_socket_closed(peer) {
+            if !nosignal {
+                let _ = crate::process::signal::delivery::send_signal_to_pid(
+                    crate::process::core::pid::Pid(pid),
+                    crate::process::signal::default::Signal::SIGPIPE,
+                );
+            }
+            return Err(FsBridgeError::BrokenPipe);
+        }
+        match append_socket_payload(peer, input) {
+            Ok(n) => return Ok(n),
+            Err(FsBridgeError::BrokenPipe) => {
+                if !nosignal {
+                    let _ = crate::process::signal::delivery::send_signal_to_pid(
+                        crate::process::core::pid::Pid(pid),
+                        crate::process::signal::default::Signal::SIGPIPE,
+                    );
+                }
+                return Err(FsBridgeError::BrokenPipe);
+            }
+            Err(FsBridgeError::WouldBlock) if !nonblock => {
+                let _ = wait_for_io_event(gen, None, 1_000_000_000)?;
+            }
+            Err(e) => return Err(e),
+        }
+    }
 }
 
 #[inline]
@@ -670,21 +888,27 @@ pub fn read_pipe_payload(
     count: usize,
     consume: bool,
 ) -> Result<Vec<u8>, FsBridgeError> {
-    let _guard = PIPE_PAYLOAD_LOCK.lock();
-    let data = BLOB_CACHE
-        .get(&blob_id)
-        .map(|bytes| bytes.to_vec())
-        .unwrap_or_default();
-    if data.is_empty() {
-        return Ok(Vec::new());
-    }
-    let read_len = count.min(data.len());
-    let out = data[..read_len].to_vec();
-    if consume {
-        BLOB_CACHE
-            .insert(blob_id, data[read_len..].to_vec())
-            .map_err(exofs_to_bridge_error)?;
-        let _ = BLOB_CACHE.mark_dirty(&blob_id);
+    let out = {
+        let _guard = PIPE_PAYLOAD_LOCK.lock();
+        let data = BLOB_CACHE
+            .get(&blob_id)
+            .map(|bytes| bytes.to_vec())
+            .unwrap_or_default();
+        if data.is_empty() {
+            return Ok(Vec::new());
+        }
+        let read_len = count.min(data.len());
+        let out = data[..read_len].to_vec();
+        if consume {
+            BLOB_CACHE
+                .insert(blob_id, data[read_len..].to_vec())
+                .map_err(exofs_to_bridge_error)?;
+            let _ = BLOB_CACHE.mark_dirty(&blob_id);
+        }
+        out
+    };
+    if consume && !out.is_empty() {
+        notify_io_event(Some(blob_id));
     }
     Ok(out)
 }
@@ -700,6 +924,7 @@ pub fn read_pipe_to_user(
         return Ok(0);
     }
     loop {
+        let gen = io_wait_gen();
         {
             let _guard = PIPE_PAYLOAD_LOCK.lock();
             let data = BLOB_CACHE
@@ -715,6 +940,8 @@ pub fn read_pipe_to_user(
                     .insert(blob_id, remaining)
                     .map_err(exofs_to_bridge_error)?;
                 let _ = BLOB_CACHE.mark_dirty(&blob_id);
+                drop(_guard);
+                notify_io_event(Some(blob_id));
                 return Ok(read_len as i64);
             }
         }
@@ -724,9 +951,7 @@ pub fn read_pipe_to_user(
         if nonblock {
             return Err(FsBridgeError::WouldBlock);
         }
-        if !crate::scheduler::timer::sleep::sleep_ns(1_000_000) {
-            return Err(FsBridgeError::Interrupted);
-        }
+        let _ = wait_for_io_event(gen, None, 1_000_000_000)?;
     }
 }
 
@@ -755,8 +980,14 @@ fn append_pipe_payload_locked(blob_id: BlobId, bytes: &[u8]) -> Result<i64, FsBr
 
 #[inline]
 pub fn append_pipe_payload(blob_id: BlobId, bytes: &[u8]) -> Result<i64, FsBridgeError> {
-    let _guard = PIPE_PAYLOAD_LOCK.lock();
-    append_pipe_payload_locked(blob_id, bytes)
+    let written = {
+        let _guard = PIPE_PAYLOAD_LOCK.lock();
+        append_pipe_payload_locked(blob_id, bytes)?
+    };
+    if written > 0 {
+        notify_io_event(Some(blob_id));
+    }
+    Ok(written)
 }
 
 /// Write `input` bytes to pipe `blob_id`, checking `SIGPIPE` and `PIPE_MAX_CAPACITY`.
@@ -767,6 +998,7 @@ pub fn write_pipe_bytes(
     pid: u32,
 ) -> Result<i64, FsBridgeError> {
     loop {
+        let gen = io_wait_gen();
         if OBJECT_TABLE.readable_count_for(&blob_id) == 0 {
             let _ = crate::process::signal::delivery::send_signal_to_pid(
                 crate::process::core::pid::Pid(pid),
@@ -780,9 +1012,7 @@ pub fn write_pipe_bytes(
         match append_pipe_payload(blob_id, input) {
             Ok(n) => return Ok(n),
             Err(FsBridgeError::WouldBlock) if !nonblock => {
-                if !crate::scheduler::timer::sleep::sleep_ns(1_000_000) {
-                    return Err(FsBridgeError::Interrupted);
-                }
+                let _ = wait_for_io_event(gen, None, 1_000_000_000)?;
             }
             Err(e) => return Err(e),
         }
@@ -917,11 +1147,14 @@ pub fn fs_socketpair(
     BLOB_CACHE
         .insert(b_blob, socket_blob_with_peer(a_blob))
         .map_err(exofs_to_bridge_error)?;
+    register_unix_socket_meta(a_blob, clean_ty, pid);
+    register_unix_socket_meta(b_blob, clean_ty, pid);
 
+    let obj_flags = open_flags::O_RDWR | ((ty as u32) & O_NONBLOCK);
     let a_fd = OBJECT_TABLE
-        .open(a_blob, open_flags::O_RDWR, 0, 0, pid as u64)
+        .open(a_blob, obj_flags, 0, 0, pid as u64)
         .map_err(exofs_to_bridge_error)?;
-    let b_fd = match OBJECT_TABLE.open(b_blob, open_flags::O_RDWR, 0, 0, pid as u64) {
+    let b_fd = match OBJECT_TABLE.open(b_blob, obj_flags, 0, 0, pid as u64) {
         Ok(fd) => fd,
         Err(err) => {
             let _ = OBJECT_TABLE.close(a_fd);
@@ -961,10 +1194,178 @@ pub struct UnixListenerEntry {
     pub path: Vec<u8>,
     pub listener_blob: BlobId,
     pub pending: Vec<BlobId>,
+    pub listening: bool,
+    pub backlog: usize,
+}
+
+pub struct UnixDgramPacket {
+    pub sender_path: Vec<u8>,
+    pub data: Vec<u8>,
 }
 
 pub static UNIX_LISTENERS: Mutex<Vec<UnixListenerEntry>> = Mutex::new(Vec::new());
+pub static UNIX_DGRAM_ENDPOINTS: Mutex<Vec<(Vec<u8>, BlobId)>> = Mutex::new(Vec::new());
+pub static UNIX_DGRAM_QUEUES: Mutex<Vec<(BlobId, Vec<UnixDgramPacket>)>> = Mutex::new(Vec::new());
 pub static SOCKET_ANCILLARY_FDS: Mutex<Vec<(BlobId, u32, u32)>> = Mutex::new(Vec::new());
+
+#[inline]
+pub fn socket_is_dgram(blob_id: BlobId) -> bool {
+    UNIX_SOCKET_META
+        .lock()
+        .iter()
+        .find(|m| m.blob_id == blob_id)
+        .map(|m| m.sock_type == 2)
+        .unwrap_or(false)
+}
+
+#[inline]
+fn dgram_queue_len(blob_id: BlobId) -> usize {
+    UNIX_DGRAM_QUEUES
+        .lock()
+        .iter()
+        .find(|(b, _)| *b == blob_id)
+        .map(|(_, q)| q.len())
+        .unwrap_or(0)
+}
+
+#[inline]
+pub fn dgram_next_packet_len(blob_id: BlobId) -> usize {
+    UNIX_DGRAM_QUEUES
+        .lock()
+        .iter()
+        .find(|(b, _)| *b == blob_id)
+        .and_then(|(_, q)| q.first().map(|p| p.data.len()))
+        .unwrap_or(0)
+}
+
+fn dgram_send_to_blob(
+    self_blob: BlobId,
+    target_blob: BlobId,
+    data: &[u8],
+    nonblock: bool,
+    nosignal: bool,
+    pid: u32,
+) -> Result<i64, FsBridgeError> {
+    if data.len() > MAX_DGRAM_PACKET_SIZE {
+        return Err(FsBridgeError::MsgSize);
+    }
+    if target_blob == BlobId([0u8; 32]) {
+        return Err(FsBridgeError::NotConnected);
+    }
+    let sender_path = UNIX_SOCKET_META
+        .lock()
+        .iter()
+        .find(|m| m.blob_id == self_blob)
+        .map(|m| m.bound_path.clone())
+        .unwrap_or_default();
+    loop {
+        let gen = io_wait_gen();
+        if is_socket_closed(target_blob) {
+            if !nosignal {
+                let _ = crate::process::signal::delivery::send_signal_to_pid(
+                    crate::process::core::pid::Pid(pid),
+                    crate::process::signal::default::Signal::SIGPIPE,
+                );
+            }
+            return Err(FsBridgeError::ConnRefused);
+        }
+        let mut qs = UNIX_DGRAM_QUEUES.lock();
+        let queue = if let Some((_, q)) = qs.iter_mut().find(|(b, _)| *b == target_blob) {
+            q
+        } else {
+            qs.try_reserve(1).map_err(|_| FsBridgeError::NoMemory)?;
+            qs.push((target_blob, Vec::new()));
+            &mut qs.last_mut().unwrap().1
+        };
+        if queue.len() < MAX_DGRAM_QUEUE_PACKETS {
+            queue.try_reserve(1).map_err(|_| FsBridgeError::NoMemory)?;
+            let mut pkt_data = Vec::new();
+            pkt_data
+                .try_reserve_exact(data.len())
+                .map_err(|_| FsBridgeError::NoMemory)?;
+            pkt_data.extend_from_slice(data);
+            queue.push(UnixDgramPacket {
+                sender_path,
+                data: pkt_data,
+            });
+            drop(qs);
+            notify_io_event(Some(target_blob));
+            return Ok(data.len() as i64);
+        }
+        drop(qs);
+        if nonblock {
+            return Err(FsBridgeError::WouldBlock);
+        }
+        let _ = wait_for_io_event(gen, None, 1_000_000_000)?;
+    }
+}
+
+fn dgram_read_to_user(
+    blob_id: BlobId,
+    buf_ptr: u64,
+    count: usize,
+    consume: bool,
+    nonblock: bool,
+    flags: u32,
+    addr_ptr: u64,
+    addr_len_ptr: u64,
+) -> Result<i64, FsBridgeError> {
+    if count != 0 && buf_ptr == 0 {
+        return Err(FsBridgeError::Fault);
+    }
+    loop {
+        let gen = io_wait_gen();
+        let pkt_opt = {
+            let mut qs = UNIX_DGRAM_QUEUES.lock();
+            if let Some((_, q)) = qs.iter_mut().find(|(b, _)| *b == blob_id) {
+                if !q.is_empty() {
+                    if consume {
+                        Some(q.remove(0))
+                    } else {
+                        Some(UnixDgramPacket {
+                            sender_path: q[0].sender_path.clone(),
+                            data: q[0].data.clone(),
+                        })
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+        if let Some(pkt) = pkt_opt {
+            let full_len = pkt.data.len();
+            let copy_len = full_len.min(count);
+            if copy_len != 0 {
+                if copy_to_user(buf_ptr as *mut u8, pkt.data.as_ptr(), copy_len).is_err() {
+                    if consume {
+                        let mut qs = UNIX_DGRAM_QUEUES.lock();
+                        if let Some((_, q)) = qs.iter_mut().find(|(b, _)| *b == blob_id) {
+                            q.insert(0, pkt);
+                        }
+                    }
+                    return Err(FsBridgeError::Fault);
+                }
+            }
+            if addr_ptr != 0 && addr_len_ptr != 0 {
+                write_sockaddr_un(addr_ptr, addr_len_ptr, &pkt.sender_path)?;
+            }
+            if consume {
+                notify_io_event(Some(blob_id));
+            }
+            let reported = if (flags & 0x20) != 0 { full_len } else { copy_len };
+            return Ok(reported as i64);
+        }
+        if socket_is_read_shutdown(blob_id) {
+            return Ok(0);
+        }
+        if nonblock {
+            return Err(FsBridgeError::WouldBlock);
+        }
+        let _ = wait_for_io_event(gen, None, 1_000_000_000)?;
+    }
+}
 
 #[inline]
 pub fn fs_is_unix_socket_fd(fd: u32, pid: u32) -> bool {
@@ -980,29 +1381,90 @@ pub fn fs_is_unix_socket_fd(fd: u32, pid: u32) -> bool {
     is_pseudo_blob(&entry.blob_id, PSEUDO_SOCKET_TAG)
 }
 
+pub fn socket_readiness_mask(blob_id: BlobId) -> u32 {
+    let mut mask = 0u32;
+
+    // Listening SOCK_STREAM socket: readable iff pending connection queue is non-empty.
+    {
+        let listeners = UNIX_LISTENERS.lock();
+        if let Some(l) = listeners.iter().find(|l| l.listener_blob == blob_id) {
+            if l.listening && !l.pending.is_empty() {
+                mask |= EPOLLIN;
+            }
+            return mask;
+        }
+    }
+
+    let (sock_type, shut_rd, shut_wr, peer_shut_wr, last_err) = {
+        let meta = UNIX_SOCKET_META.lock();
+        meta.iter()
+            .find(|m| m.blob_id == blob_id)
+            .map(|m| {
+                (
+                    m.sock_type,
+                    m.shutdown_rd,
+                    m.shutdown_wr,
+                    m.peer_shutdown_wr,
+                    m.last_error,
+                )
+            })
+            .unwrap_or((1, false, false, false, 0))
+    };
+
+    if last_err != 0 {
+        mask |= EPOLLERR;
+    }
+
+    if sock_type == 2 {
+        // SOCK_DGRAM
+        if dgram_queue_len(blob_id) > 0 || shut_rd {
+            mask |= EPOLLIN;
+        }
+        if !shut_wr {
+            let peer = socket_peer_blob(blob_id).unwrap_or(BlobId([0u8; 32]));
+            if peer == BlobId([0u8; 32]) || dgram_queue_len(peer) < MAX_DGRAM_QUEUE_PACKETS {
+                mask |= EPOLLOUT;
+            }
+        }
+        if shut_rd && shut_wr {
+            mask |= EPOLLHUP;
+        }
+        return mask;
+    }
+
+    // SOCK_STREAM
+    let peer = socket_peer_blob(blob_id).unwrap_or(BlobId([0u8; 32]));
+    let peer_closed = peer != BlobId([0u8; 32]) && is_socket_closed(peer);
+    let has_data = socket_payload_len(blob_id) != 0;
+    let has_ancillary = SOCKET_ANCILLARY_FDS
+        .lock()
+        .iter()
+        .any(|(b, _, _)| *b == blob_id);
+
+    if has_data || has_ancillary || peer_closed || shut_rd || peer_shut_wr {
+        mask |= EPOLLIN;
+    }
+    if peer_closed || peer_shut_wr {
+        mask |= EPOLLRDHUP;
+    }
+    if peer_closed || (shut_rd && shut_wr) {
+        mask |= EPOLLHUP;
+    }
+    if !shut_wr && peer != BlobId([0u8; 32]) && !peer_closed {
+        if socket_payload_len(peer) < SOCKET_MAX_CAPACITY {
+            mask |= EPOLLOUT;
+        }
+    }
+    mask
+}
+
 #[inline]
 pub fn socket_is_readable(blob_id: BlobId) -> bool {
-    if socket_payload_len(blob_id) != 0 {
-        return true;
-    }
-    if SOCKET_ANCILLARY_FDS
-        .lock()
-        .iter()
-        .any(|(b, _, _)| *b == blob_id)
-    {
-        return true;
-    }
-    if UNIX_LISTENERS
-        .lock()
-        .iter()
-        .any(|l| l.listener_blob == blob_id && !l.pending.is_empty())
-    {
-        return true;
-    }
-    if is_socket_peer_closed(blob_id) {
-        return true;
-    }
-    false
+    (socket_readiness_mask(blob_id) & EPOLLIN) != 0
+}
+
+fn is_abstract_unix_addr(addr: &[u8]) -> bool {
+    !addr.is_empty() && addr[0] == 0
 }
 
 fn parse_sockaddr_un_path(addr_ptr: u64, addr_len: u64) -> Result<Vec<u8>, FsBridgeError> {
@@ -1018,6 +1480,20 @@ fn parse_sockaddr_un_path(addr_ptr: u64, addr_len: u64) -> Result<Vec<u8>, FsBri
         return Err(FsBridgeError::Invalid);
     }
     let path_slice = &raw[2..copy_len];
+    if path_slice.is_empty() {
+        return Err(FsBridgeError::Invalid);
+    }
+    // Linux abstract namespace: leading NUL followed by 1+ arbitrary name bytes.
+    if path_slice[0] == 0 {
+        if path_slice.len() < 2 {
+            return Err(FsBridgeError::Invalid);
+        }
+        let mut out = Vec::new();
+        out.try_reserve_exact(path_slice.len())
+            .map_err(|_| FsBridgeError::NoMemory)?;
+        out.extend_from_slice(path_slice);
+        return Ok(out);
+    }
     let end = path_slice
         .iter()
         .position(|&b| b == 0)
@@ -1041,8 +1517,10 @@ pub fn fs_unix_socket(domain: i32, ty: i32, protocol: i32, pid: u32) -> Result<i
     BLOB_CACHE
         .insert(blob_id, socket_blob_with_peer(BlobId([0u8; 32])))
         .map_err(exofs_to_bridge_error)?;
+    register_unix_socket_meta(blob_id, clean_ty, pid);
+    let obj_flags = open_flags::O_RDWR | ((ty as u32) & O_NONBLOCK);
     let obj_fd = OBJECT_TABLE
-        .open(blob_id, open_flags::O_RDWR, 0, 0, pid as u64)
+        .open(blob_id, obj_flags, 0, 0, pid as u64)
         .map_err(exofs_to_bridge_error)?;
     if process_has_fd_table(pid) {
         let fd_flags = fd_table_flags(ty as u32, open_flags::O_RDWR);
@@ -1073,38 +1551,82 @@ pub fn fs_unix_bind(
         return Err(FsBridgeError::Invalid);
     }
     let normalized = parse_sockaddr_un_path(addr_ptr, addr_len)?;
-    if path_entry(&normalized).is_ok() {
-        return Err(FsBridgeError::Exists);
-    }
-    let (parent_path, leaf) = split_parent_and_leaf(&normalized)?;
-    ensure_directory_chain(&parent_path)?;
-    let file_blob = blob_id_for_path(&normalized)?;
-    BLOB_CACHE
-        .insert(file_blob, Vec::new())
-        .map_err(exofs_to_bridge_error)?;
-    let _ = BLOB_CACHE.mark_dirty(&file_blob);
-    upsert_mode(file_blob, 0o140000 | 0o660);
-    upsert_parent_entry(&parent_path, &leaf, file_blob, PATH_INDEX_KIND_FILE)?;
+    let is_abstract = is_abstract_unix_addr(&normalized);
+    let is_dgram = socket_is_dgram(entry.blob_id);
 
-    let mut listeners = UNIX_LISTENERS.lock();
-    if let Some(existing) = listeners.iter_mut().find(|l| l.path == normalized) {
-        existing.listener_blob = entry.blob_id;
-        existing.pending.clear();
+    // Reject duplicate bind on an already-bound socket.
+    {
+        let meta = UNIX_SOCKET_META.lock();
+        if let Some(m) = meta.iter().find(|m| m.blob_id == entry.blob_id) {
+            if !m.bound_path.is_empty() {
+                return Err(FsBridgeError::Invalid);
+            }
+        }
+    }
+
+    if is_abstract {
+        if UNIX_LISTENERS.lock().iter().any(|l| l.path == normalized)
+            || UNIX_DGRAM_ENDPOINTS
+                .lock()
+                .iter()
+                .any(|(p, _)| *p == normalized)
+        {
+            return Err(FsBridgeError::AddrInUse);
+        }
     } else {
-        listeners
-            .try_reserve(1)
-            .map_err(|_| FsBridgeError::NoMemory)?;
-        listeners.push(UnixListenerEntry {
-            path: normalized,
-            listener_blob: entry.blob_id,
-            pending: Vec::new(),
-        });
+        if path_entry(&normalized).is_ok() {
+            return Err(FsBridgeError::AddrInUse);
+        }
+        let (parent_path, leaf) = split_parent_and_leaf(&normalized)?;
+        ensure_directory_exists(&parent_path)?;
+        let file_blob = allocate_fresh_file_blob(&normalized)?;
+        BLOB_CACHE
+            .insert(file_blob, Vec::new())
+            .map_err(exofs_to_bridge_error)?;
+        let _ = BLOB_CACHE.mark_dirty(&file_blob);
+        upsert_mode(file_blob, 0o140000 | 0o660);
+        upsert_parent_entry(&parent_path, &leaf, file_blob, PATH_INDEX_KIND_FILE)?;
+    }
+
+    {
+        let mut meta = UNIX_SOCKET_META.lock();
+        if let Some(m) = meta.iter_mut().find(|m| m.blob_id == entry.blob_id) {
+            m.bound_path = normalized.clone();
+        }
+    }
+
+    if is_dgram {
+        let mut eps = UNIX_DGRAM_ENDPOINTS.lock();
+        if eps.iter().any(|(p, _)| *p == normalized) {
+            return Err(FsBridgeError::AddrInUse);
+        }
+        eps.try_reserve(1).map_err(|_| FsBridgeError::NoMemory)?;
+        eps.push((normalized, entry.blob_id));
+    } else {
+        let mut listeners = UNIX_LISTENERS.lock();
+        if let Some(existing) = listeners.iter_mut().find(|l| l.path == normalized) {
+            existing.listener_blob = entry.blob_id;
+            existing.pending.clear();
+            existing.listening = false;
+            existing.backlog = 0;
+        } else {
+            listeners
+                .try_reserve(1)
+                .map_err(|_| FsBridgeError::NoMemory)?;
+            listeners.push(UnixListenerEntry {
+                path: normalized,
+                listener_blob: entry.blob_id,
+                pending: Vec::new(),
+                listening: false,
+                backlog: 0,
+            });
+        }
     }
     Ok(0)
 }
 
 /// `listen(fd, backlog)`.
-pub fn fs_unix_listen(fd: u32, _backlog: i32, pid: u32) -> Result<i64, FsBridgeError> {
+pub fn fs_unix_listen(fd: u32, backlog: i32, pid: u32) -> Result<i64, FsBridgeError> {
     let resolved = resolve_fd(pid, fd)?;
     let entry = OBJECT_TABLE
         .get(resolved.handle)
@@ -1112,6 +1634,18 @@ pub fn fs_unix_listen(fd: u32, _backlog: i32, pid: u32) -> Result<i64, FsBridgeE
     if !is_pseudo_blob(&entry.blob_id, PSEUDO_SOCKET_TAG) {
         return Err(FsBridgeError::Invalid);
     }
+    if socket_is_dgram(entry.blob_id) {
+        return Err(FsBridgeError::OpNotSupp);
+    }
+    let mut listeners = UNIX_LISTENERS.lock();
+    let Some(listener) = listeners
+        .iter_mut()
+        .find(|l| l.listener_blob == entry.blob_id)
+    else {
+        return Err(FsBridgeError::Invalid);
+    };
+    listener.listening = true;
+    listener.backlog = (backlog.max(1) as usize).min(128);
     Ok(0)
 }
 
@@ -1133,6 +1667,38 @@ pub fn fs_unix_connect(
         return Err(FsBridgeError::Invalid);
     }
     let normalized = parse_sockaddr_un_path(addr_ptr, addr_len)?;
+    let is_abstract = is_abstract_unix_addr(&normalized);
+
+    if socket_is_dgram(entry.blob_id) {
+        let target_blob = {
+            let eps = UNIX_DGRAM_ENDPOINTS.lock();
+            eps.iter()
+                .find(|(p, _)| *p == normalized)
+                .map(|(_, b)| *b)
+        };
+        let Some(target_blob) = target_blob else {
+            return Err(if is_abstract || path_entry(&normalized).is_ok() {
+                FsBridgeError::ConnRefused
+            } else {
+                FsBridgeError::NotFound
+            });
+        };
+        let _guard = SOCKET_PAYLOAD_LOCK.lock();
+        BLOB_CACHE
+            .insert(entry.blob_id, socket_blob_with_peer(target_blob))
+            .map_err(exofs_to_bridge_error)?;
+        drop(_guard);
+        let mut meta = UNIX_SOCKET_META.lock();
+        if let Some(m) = meta.iter_mut().find(|m| m.blob_id == entry.blob_id) {
+            m.peer_path = normalized;
+            let (uid, gid) = process_uid_gid(pid);
+            m.cred_pid = pid;
+            m.cred_uid = uid;
+            m.cred_gid = gid;
+        }
+        return Ok(0);
+    }
+
     let server_blob = next_pseudo_blob(PSEUDO_SOCKET_TAG);
 
     let _guard = SOCKET_PAYLOAD_LOCK.lock();
@@ -1142,7 +1708,7 @@ pub fn fs_unix_connect(
     let cur_data = snapshot_blob(&entry.blob_id)?;
     let cur_peer = parse_socket_peer_bytes(&cur_data)?;
     if cur_peer != BlobId([0u8; 32]) {
-        return Err(FsBridgeError::Invalid);
+        return Err(FsBridgeError::IsConn);
     }
 
     let mut listeners = UNIX_LISTENERS.lock();
@@ -1150,8 +1716,20 @@ pub fn fs_unix_connect(
         return Err(FsBridgeError::Invalid);
     }
     let Some(listener) = listeners.iter_mut().find(|l| l.path == normalized) else {
-        return Err(FsBridgeError::NotFound);
+        drop(listeners);
+        drop(_guard);
+        return Err(if is_abstract || path_entry(&normalized).is_ok() {
+            FsBridgeError::ConnRefused
+        } else {
+            FsBridgeError::NotFound
+        });
     };
+    if !listener.listening {
+        return Err(FsBridgeError::ConnRefused);
+    }
+    if listener.pending.len() >= listener.backlog {
+        return Err(FsBridgeError::WouldBlock);
+    }
     listener
         .pending
         .try_reserve(1)
@@ -1164,8 +1742,76 @@ pub fn fs_unix_connect(
         BLOB_CACHE.invalidate(&server_blob);
         return Err(exofs_to_bridge_error(err));
     }
+    let listener_blob = listener.listener_blob;
     listener.pending.push(server_blob);
+    drop(listeners);
+    drop(_guard);
+
+    // Record socket metadata for accepted server endpoint and client credentials at connect time.
+    let (client_uid, client_gid) = process_uid_gid(pid);
+    let (client_bound_path, server_cred) = {
+        let mut meta = UNIX_SOCKET_META.lock();
+        let l_cred = meta
+            .iter()
+            .find(|m| m.blob_id == listener_blob)
+            .map(|m| (m.cred_pid, m.cred_uid, m.cred_gid, m.sock_type))
+            .unwrap_or((pid, client_uid, client_gid, 1));
+        let mut c_bound = Vec::new();
+        if let Some(cm) = meta.iter_mut().find(|m| m.blob_id == entry.blob_id) {
+            cm.peer_path = normalized.clone();
+            cm.cred_pid = pid;
+            cm.cred_uid = client_uid;
+            cm.cred_gid = client_gid;
+            c_bound = cm.bound_path.clone();
+        }
+        (c_bound, l_cred)
+    };
+    register_unix_socket_meta(server_blob, server_cred.3, server_cred.0);
+    {
+        let mut meta = UNIX_SOCKET_META.lock();
+        if let Some(sm) = meta.iter_mut().find(|m| m.blob_id == server_blob) {
+            sm.cred_pid = server_cred.0;
+            sm.cred_uid = server_cred.1;
+            sm.cred_gid = server_cred.2;
+            sm.bound_path = normalized;
+            sm.peer_path = client_bound_path;
+        }
+    }
+    notify_io_event(Some(listener_blob));
     Ok(0)
+}
+
+fn write_sockaddr_un(addr_ptr: u64, addr_len_ptr: u64, path: &[u8]) -> Result<(), FsBridgeError> {
+    if addr_len_ptr == 0 {
+        return if addr_ptr == 0 {
+            Ok(())
+        } else {
+            Err(FsBridgeError::Fault)
+        };
+    }
+    let user_cap = read_user_typed::<u32>(addr_len_ptr).map_err(|_| FsBridgeError::Fault)? as usize;
+    let mut raw = [0u8; 110];
+    raw[0..2].copy_from_slice(&1u16.to_ne_bytes()); // AF_UNIX
+    let full_len = if path.is_empty() {
+        2usize
+    } else if path[0] == 0 {
+        // Abstract namespace: exact leading NUL + name bytes, no extra NUL terminator.
+        let copy_n = path.len().min(108);
+        raw[2..2 + copy_n].copy_from_slice(&path[..copy_n]);
+        2 + copy_n
+    } else {
+        let copy_n = path.len().min(107);
+        raw[2..2 + copy_n].copy_from_slice(&path[..copy_n]);
+        raw[2 + copy_n] = 0;
+        2 + copy_n + 1
+    };
+    if addr_ptr != 0 && user_cap > 0 {
+        let to_copy = full_len.min(user_cap);
+        copy_to_user(addr_ptr as *mut u8, raw.as_ptr(), to_copy)
+            .map_err(|_| FsBridgeError::Fault)?;
+    }
+    write_user_typed::<u32>(addr_len_ptr, full_len as u32).map_err(|_| FsBridgeError::Fault)?;
+    Ok(())
 }
 
 /// `accept(fd, addr_ptr, addr_len_ptr)`.
@@ -1185,8 +1831,12 @@ pub fn fs_unix_accept(
     if !is_pseudo_blob(&entry.blob_id, PSEUDO_SOCKET_TAG) {
         return Err(FsBridgeError::Invalid);
     }
-    let nonblock = (resolved.flags & O_NONBLOCK) != 0;
+    if socket_is_dgram(entry.blob_id) {
+        return Err(FsBridgeError::OpNotSupp);
+    }
+    let nonblock = ((resolved.flags | entry.flags) & O_NONBLOCK) != 0;
     let server_blob = loop {
+        let gen = io_wait_gen();
         {
             let mut listeners = UNIX_LISTENERS.lock();
             let Some(listener) = listeners
@@ -1195,6 +1845,9 @@ pub fn fs_unix_accept(
             else {
                 return Err(FsBridgeError::Invalid);
             };
+            if !listener.listening {
+                return Err(FsBridgeError::Invalid);
+            }
             if !listener.pending.is_empty() {
                 break listener.pending.remove(0);
             }
@@ -1202,16 +1855,19 @@ pub fn fs_unix_accept(
         if nonblock {
             return Err(FsBridgeError::WouldBlock);
         }
-        if !crate::scheduler::timer::sleep::sleep_ns(1_000_000) {
-            return Err(FsBridgeError::Interrupted);
-        }
+        let _ = wait_for_io_event(gen, None, 1_000_000_000)?;
     };
     if addr_ptr != 0 && addr_len_ptr != 0 {
-        let _ = write_user_typed::<u32>(addr_len_ptr, 2);
-        let _ = write_user_typed::<u16>(addr_ptr, 1);
+        let peer_path = UNIX_SOCKET_META
+            .lock()
+            .iter()
+            .find(|m| m.blob_id == server_blob)
+            .map(|m| m.peer_path.clone())
+            .unwrap_or_default();
+        write_sockaddr_un(addr_ptr, addr_len_ptr, &peer_path)?;
     }
     let s_fd = OBJECT_TABLE
-        .open(server_blob, open_flags::O_RDWR, 0, 0, 0)
+        .open(server_blob, open_flags::O_RDWR, 0, 0, pid as u64)
         .map_err(exofs_to_bridge_error)?;
     if process_has_fd_table(pid) {
         let fd_flags = fd_table_flags(0, open_flags::O_RDWR);
@@ -1224,16 +1880,86 @@ pub fn fs_unix_accept(
     Ok(s_fd as i64)
 }
 
-/// `sendto` on `AF_UNIX` socket.
-pub fn fs_unix_sendto(
+/// `shutdown(fd, how)` on `AF_UNIX` socket.
+pub fn fs_unix_shutdown(fd: u32, how: i32, pid: u32) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    if !(0..=2).contains(&how) {
+        return Err(FsBridgeError::Invalid);
+    }
+    let resolved = resolve_fd(pid, fd)?;
+    let entry = OBJECT_TABLE
+        .get(resolved.handle)
+        .map_err(exofs_to_bridge_error)?;
+    if !is_pseudo_blob(&entry.blob_id, PSEUDO_SOCKET_TAG) {
+        return Err(FsBridgeError::Invalid);
+    }
+    let peer = socket_peer_blob(entry.blob_id)?;
+    if peer == BlobId([0u8; 32]) && !socket_is_dgram(entry.blob_id) {
+        return Err(FsBridgeError::NotConnected);
+    }
+    let shut_rd = how == 0 || how == 2;
+    let shut_wr = how == 1 || how == 2;
+    {
+        let mut meta = UNIX_SOCKET_META.lock();
+        if let Some(m) = meta.iter_mut().find(|m| m.blob_id == entry.blob_id) {
+            if shut_rd {
+                m.shutdown_rd = true;
+            }
+            if shut_wr {
+                m.shutdown_wr = true;
+            }
+        }
+        if shut_wr && peer != BlobId([0u8; 32]) {
+            if let Some(pm) = meta.iter_mut().find(|m| m.blob_id == peer) {
+                pm.peer_shutdown_wr = true;
+            }
+        }
+    }
+    notify_io_event(Some(entry.blob_id));
+    if peer != BlobId([0u8; 32]) {
+        notify_io_event(Some(peer));
+    }
+    Ok(0)
+}
+
+/// `getsockname(fd, addr, addrlen)` on `AF_UNIX` socket.
+pub fn fs_unix_getsockname(
     fd: u32,
-    buf_ptr: u64,
-    len: usize,
-    _flags: u32,
+    addr_ptr: u64,
+    addr_len_ptr: u64,
     pid: u32,
 ) -> Result<i64, FsBridgeError> {
-    if len != 0 && buf_ptr == 0 {
-        return Err(FsBridgeError::Fault);
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    let resolved = resolve_fd(pid, fd)?;
+    let entry = OBJECT_TABLE
+        .get(resolved.handle)
+        .map_err(exofs_to_bridge_error)?;
+    if !is_pseudo_blob(&entry.blob_id, PSEUDO_SOCKET_TAG) {
+        return Err(FsBridgeError::Invalid);
+    }
+    let path = UNIX_SOCKET_META
+        .lock()
+        .iter()
+        .find(|m| m.blob_id == entry.blob_id)
+        .map(|m| m.bound_path.clone())
+        .unwrap_or_default();
+    write_sockaddr_un(addr_ptr, addr_len_ptr, &path)?;
+    Ok(0)
+}
+
+/// `getpeername(fd, addr, addrlen)` on `AF_UNIX` socket.
+pub fn fs_unix_getpeername(
+    fd: u32,
+    addr_ptr: u64,
+    addr_len_ptr: u64,
+    pid: u32,
+) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
     }
     let resolved = resolve_fd(pid, fd)?;
     let entry = OBJECT_TABLE
@@ -1246,19 +1972,270 @@ pub fn fs_unix_sendto(
     if peer == BlobId([0u8; 32]) {
         return Err(FsBridgeError::NotConnected);
     }
-    if len == 0 {
-        return append_socket_payload(peer, &[]);
-    }
-    let input = read_user_bytes(buf_ptr, len)?;
-    append_socket_payload(peer, &input)
+    let path = {
+        let meta = UNIX_SOCKET_META.lock();
+        meta.iter()
+            .find(|m| m.blob_id == peer)
+            .map(|m| m.bound_path.clone())
+            .or_else(|| {
+                meta.iter()
+                    .find(|m| m.blob_id == entry.blob_id)
+                    .map(|m| m.peer_path.clone())
+            })
+            .unwrap_or_default()
+    };
+    write_sockaddr_un(addr_ptr, addr_len_ptr, &path)?;
+    Ok(0)
 }
 
-/// `recvfrom` on `AF_UNIX` socket.
+/// `setsockopt(fd, level, optname, optval, optlen)` on `AF_UNIX` socket.
+pub fn fs_unix_setsockopt(
+    fd: u32,
+    level: i32,
+    optname: i32,
+    optval: u64,
+    optlen: u32,
+    pid: u32,
+) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    let resolved = resolve_fd(pid, fd)?;
+    let entry = OBJECT_TABLE
+        .get(resolved.handle)
+        .map_err(exofs_to_bridge_error)?;
+    if !is_pseudo_blob(&entry.blob_id, PSEUDO_SOCKET_TAG) {
+        return Err(FsBridgeError::Invalid);
+    }
+    if optlen != 0 && optval == 0 {
+        return Err(FsBridgeError::Fault);
+    }
+    const SOL_SOCKET: i32 = 1;
+    const SO_REUSEADDR: i32 = 2;
+    const SO_SNDBUF: i32 = 7;
+    const SO_RCVBUF: i32 = 8;
+    const SO_PASSCRED: i32 = 16;
+    const SO_RCVTIMEO: i32 = 20;
+    const SO_SNDTIMEO: i32 = 21;
+    if level != SOL_SOCKET {
+        return Err(FsBridgeError::NoProtoOpt);
+    }
+    let mut meta = UNIX_SOCKET_META.lock();
+    let Some(m) = meta.iter_mut().find(|m| m.blob_id == entry.blob_id) else {
+        return Err(FsBridgeError::BadFd);
+    };
+    match optname {
+        SO_REUSEADDR | SO_PASSCRED | SO_SNDBUF | SO_RCVBUF => {
+            if optlen < 4 {
+                return Err(FsBridgeError::Invalid);
+            }
+            let val = read_user_typed::<i32>(optval).map_err(|_| FsBridgeError::Fault)?;
+            match optname {
+                SO_REUSEADDR => m.reuseaddr = val != 0,
+                SO_PASSCRED => m.passcred = val != 0,
+                SO_SNDBUF => m.sndbuf = (val.max(4096) as u32).min(SOCKET_MAX_CAPACITY as u32),
+                SO_RCVBUF => m.rcvbuf = (val.max(4096) as u32).min(SOCKET_MAX_CAPACITY as u32),
+                _ => {}
+            }
+            Ok(0)
+        }
+        SO_RCVTIMEO | SO_SNDTIMEO => {
+            if optlen < 16 {
+                return Err(FsBridgeError::Invalid);
+            }
+            let _ts = read_user_typed::<LinuxTimeval>(optval).map_err(|_| FsBridgeError::Fault)?;
+            Ok(0)
+        }
+        _ => Err(FsBridgeError::NoProtoOpt),
+    }
+}
+
+/// `getsockopt(fd, level, optname, optval, optlen*)` on `AF_UNIX` socket.
+pub fn fs_unix_getsockopt(
+    fd: u32,
+    level: i32,
+    optname: i32,
+    optval: u64,
+    optlen_ptr: u64,
+    pid: u32,
+) -> Result<i64, FsBridgeError> {
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
+    }
+    let resolved = resolve_fd(pid, fd)?;
+    let entry = OBJECT_TABLE
+        .get(resolved.handle)
+        .map_err(exofs_to_bridge_error)?;
+    if !is_pseudo_blob(&entry.blob_id, PSEUDO_SOCKET_TAG) {
+        return Err(FsBridgeError::Invalid);
+    }
+    if optval == 0 || optlen_ptr == 0 {
+        return Err(FsBridgeError::Fault);
+    }
+    const SOL_SOCKET: i32 = 1;
+    const SO_REUSEADDR: i32 = 2;
+    const SO_TYPE: i32 = 3;
+    const SO_ERROR: i32 = 4;
+    const SO_SNDBUF: i32 = 7;
+    const SO_RCVBUF: i32 = 8;
+    const SO_PASSCRED: i32 = 16;
+    const SO_PEERCRED: i32 = 17;
+    if level != SOL_SOCKET {
+        return Err(FsBridgeError::NoProtoOpt);
+    }
+    let user_len = read_user_typed::<u32>(optlen_ptr).map_err(|_| FsBridgeError::Fault)? as usize;
+    match optname {
+        SO_PEERCRED => {
+            #[repr(C)]
+            #[derive(Clone, Copy)]
+            struct LinuxUcred {
+                pid: i32,
+                uid: u32,
+                gid: u32,
+            }
+            if user_len < size_of::<LinuxUcred>() {
+                return Err(FsBridgeError::Invalid);
+            }
+            let peer = socket_peer_blob(entry.blob_id)?;
+            let cred = {
+                let meta = UNIX_SOCKET_META.lock();
+                if peer != BlobId([0u8; 32]) {
+                    meta.iter()
+                        .find(|m| m.blob_id == peer)
+                        .map(|m| LinuxUcred {
+                            pid: m.cred_pid as i32,
+                            uid: m.cred_uid,
+                            gid: m.cred_gid,
+                        })
+                        .unwrap_or(LinuxUcred {
+                            pid: pid as i32,
+                            uid: 0,
+                            gid: 0,
+                        })
+                } else {
+                    LinuxUcred {
+                        pid: 0,
+                        uid: u32::MAX,
+                        gid: u32::MAX,
+                    }
+                }
+            };
+            write_user_typed(optval, cred).map_err(|_| FsBridgeError::Fault)?;
+            write_user_typed::<u32>(optlen_ptr, size_of::<LinuxUcred>() as u32)
+                .map_err(|_| FsBridgeError::Fault)?;
+            Ok(0)
+        }
+        SO_TYPE | SO_ERROR | SO_REUSEADDR | SO_PASSCRED | SO_SNDBUF | SO_RCVBUF => {
+            if user_len < 4 {
+                return Err(FsBridgeError::Invalid);
+            }
+            let val: i32 = {
+                let mut meta = UNIX_SOCKET_META.lock();
+                let Some(m) = meta.iter_mut().find(|m| m.blob_id == entry.blob_id) else {
+                    return Err(FsBridgeError::BadFd);
+                };
+                match optname {
+                    SO_TYPE => m.sock_type,
+                    SO_ERROR => {
+                        let err = m.last_error;
+                        m.last_error = 0;
+                        err
+                    }
+                    SO_REUSEADDR => i32::from(m.reuseaddr),
+                    SO_PASSCRED => i32::from(m.passcred),
+                    SO_SNDBUF => m.sndbuf as i32,
+                    SO_RCVBUF => m.rcvbuf as i32,
+                    _ => 0,
+                }
+            };
+            write_user_typed::<i32>(optval, val).map_err(|_| FsBridgeError::Fault)?;
+            write_user_typed::<u32>(optlen_ptr, 4).map_err(|_| FsBridgeError::Fault)?;
+            Ok(0)
+        }
+        _ => Err(FsBridgeError::NoProtoOpt),
+    }
+}
+
+/// `sendto` on `AF_UNIX` socket (`SOCK_STREAM` and `SOCK_DGRAM`).
+pub fn fs_unix_sendto(
+    fd: u32,
+    buf_ptr: u64,
+    len: usize,
+    flags: u32,
+    addr_ptr: u64,
+    addr_len: u64,
+    pid: u32,
+) -> Result<i64, FsBridgeError> {
+    if len != 0 && buf_ptr == 0 {
+        return Err(FsBridgeError::Fault);
+    }
+    let resolved = resolve_fd(pid, fd)?;
+    let entry = OBJECT_TABLE
+        .get(resolved.handle)
+        .map_err(exofs_to_bridge_error)?;
+    if !is_pseudo_blob(&entry.blob_id, PSEUDO_SOCKET_TAG) {
+        return Err(FsBridgeError::Invalid);
+    }
+    let nonblock = ((resolved.flags | entry.flags) & O_NONBLOCK) != 0 || (flags & 0x40) != 0;
+    let nosignal = (flags & 0x4000) != 0;
+    let input = if len == 0 {
+        Vec::new()
+    } else {
+        read_user_bytes(buf_ptr, len)?
+    };
+
+    if socket_is_dgram(entry.blob_id) {
+        if socket_is_write_shutdown(entry.blob_id) {
+            if !nosignal {
+                let _ = crate::process::signal::delivery::send_signal_to_pid(
+                    crate::process::core::pid::Pid(pid),
+                    crate::process::signal::default::Signal::SIGPIPE,
+                );
+            }
+            return Err(FsBridgeError::BrokenPipe);
+        }
+        let target_blob = if addr_ptr != 0 {
+            let normalized = parse_sockaddr_un_path(addr_ptr, addr_len)?;
+            let is_abstract = is_abstract_unix_addr(&normalized);
+            let found = UNIX_DGRAM_ENDPOINTS
+                .lock()
+                .iter()
+                .find(|(p, _)| *p == normalized)
+                .map(|(_, b)| *b);
+            match found {
+                Some(b) => b,
+                None => {
+                    return Err(if is_abstract || path_entry(&normalized).is_ok() {
+                        FsBridgeError::ConnRefused
+                    } else {
+                        FsBridgeError::NotFound
+                    });
+                }
+            }
+        } else {
+            let peer = socket_peer_blob(entry.blob_id)?;
+            if peer == BlobId([0u8; 32]) {
+                return Err(FsBridgeError::NotConnected);
+            }
+            peer
+        };
+        return dgram_send_to_blob(entry.blob_id, target_blob, &input, nonblock, nosignal, pid);
+    }
+
+    if addr_ptr != 0 {
+        return Err(FsBridgeError::IsConn);
+    }
+    write_unix_socket_bytes(entry.blob_id, &input, flags, nonblock, pid)
+}
+
+/// `recvfrom` on `AF_UNIX` socket (`SOCK_STREAM` and `SOCK_DGRAM`).
 pub fn fs_unix_recvfrom(
     fd: u32,
     buf_ptr: u64,
     len: usize,
     flags: u32,
+    addr_ptr: u64,
+    addr_len_ptr: u64,
     pid: u32,
 ) -> Result<i64, FsBridgeError> {
     let resolved = resolve_fd(pid, fd)?;
@@ -1269,8 +2246,30 @@ pub fn fs_unix_recvfrom(
         return Err(FsBridgeError::Invalid);
     }
     let consume = (flags & 0x02) == 0;
-    let nonblock = (resolved.flags & O_NONBLOCK) != 0 || (flags & 0x40) != 0;
-    socket_read_to_user(entry.blob_id, buf_ptr, len, consume, nonblock)
+    let nonblock = ((resolved.flags | entry.flags) & O_NONBLOCK) != 0 || (flags & 0x40) != 0;
+    if socket_is_dgram(entry.blob_id) {
+        return dgram_read_to_user(
+            entry.blob_id,
+            buf_ptr,
+            len,
+            consume,
+            nonblock,
+            flags,
+            addr_ptr,
+            addr_len_ptr,
+        );
+    }
+    let n = socket_read_to_user(entry.blob_id, buf_ptr, len, consume, nonblock)?;
+    if addr_ptr != 0 && addr_len_ptr != 0 {
+        let peer_path = UNIX_SOCKET_META
+            .lock()
+            .iter()
+            .find(|m| m.blob_id == entry.blob_id)
+            .map(|m| m.peer_path.clone())
+            .unwrap_or_default();
+        write_sockaddr_un(addr_ptr, addr_len_ptr, &peer_path)?;
+    }
+    Ok(n)
 }
 
 #[repr(C)]
@@ -1321,7 +2320,7 @@ fn rollback_received_fds(pid: u32, received: &[(i32, u32)], has_fd_table: bool) 
 pub fn fs_unix_sendmsg(
     fd: u32,
     msg_ptr: u64,
-    _flags: u32,
+    flags: u32,
     pid: u32,
 ) -> Result<i64, FsBridgeError> {
     if msg_ptr == 0 {
@@ -1334,11 +2333,28 @@ pub fn fs_unix_sendmsg(
     if !is_pseudo_blob(&entry.blob_id, PSEUDO_SOCKET_TAG) {
         return Err(FsBridgeError::Invalid);
     }
+    let nonblock = ((resolved.flags | entry.flags) & O_NONBLOCK) != 0 || (flags & 0x40) != 0;
+    let nosignal = (flags & 0x4000) != 0;
+    if socket_is_write_shutdown(entry.blob_id) {
+        if !nosignal {
+            let _ = crate::process::signal::delivery::send_signal_to_pid(
+                crate::process::core::pid::Pid(pid),
+                crate::process::signal::default::Signal::SIGPIPE,
+            );
+        }
+        return Err(FsBridgeError::BrokenPipe);
+    }
     let peer = socket_peer_blob(entry.blob_id)?;
     if peer == BlobId([0u8; 32]) {
         return Err(FsBridgeError::NotConnected);
     }
     if is_socket_closed(peer) {
+        if !nosignal {
+            let _ = crate::process::signal::delivery::send_signal_to_pid(
+                crate::process::core::pid::Pid(pid),
+                crate::process::signal::default::Signal::SIGPIPE,
+            );
+        }
         return Err(FsBridgeError::BrokenPipe);
     }
     let msg = read_user_typed::<UnixMsghdr>(msg_ptr).map_err(|_| FsBridgeError::Fault)?;
@@ -1395,7 +2411,7 @@ pub fn fs_unix_sendmsg(
                         rollback_staged_ancillary(&staged_fds);
                         return Err(FsBridgeError::BadFd);
                     };
-                    let Ok(dup_handle) = OBJECT_TABLE.dup(src_res.handle) else {
+                    let Ok(dup_handle) = OBJECT_TABLE.dup_checked_for_owner(src_res.handle, 0) else {
                         rollback_staged_ancillary(&staged_fds);
                         return Err(FsBridgeError::BadFd);
                     };
@@ -1411,34 +2427,57 @@ pub fn fs_unix_sendmsg(
         }
     }
 
-    let _guard = SOCKET_PAYLOAD_LOCK.lock();
-    let written = if staged_fds.is_empty() {
-        append_socket_payload_locked(peer, &payload)?
-    } else {
-        let mut q = SOCKET_ANCILLARY_FDS.lock();
-        let existing = q.iter().filter(|(b, _, _)| *b == peer).count();
-        if existing + staged_fds.len() > MAX_ANCILLARY_FDS_PER_SOCKET {
-            drop(q);
+    loop {
+        let gen = io_wait_gen();
+        let _guard = SOCKET_PAYLOAD_LOCK.lock();
+        if socket_is_write_shutdown(entry.blob_id) || is_socket_closed(peer) {
+            drop(_guard);
             rollback_staged_ancillary(&staged_fds);
-            return Err(FsBridgeError::WouldBlock);
+            if !nosignal {
+                let _ = crate::process::signal::delivery::send_signal_to_pid(
+                    crate::process::core::pid::Pid(pid),
+                    crate::process::signal::default::Signal::SIGPIPE,
+                );
+            }
+            return Err(FsBridgeError::BrokenPipe);
         }
-        if q.try_reserve(staged_fds.len()).is_err() {
-            drop(q);
-            rollback_staged_ancillary(&staged_fds);
-            return Err(FsBridgeError::NoMemory);
-        }
-        let n = match append_socket_payload_locked(peer, &payload) {
-            Ok(n) => n,
+        let result = if staged_fds.is_empty() {
+            append_socket_payload_locked(peer, &payload)
+        } else {
+            let mut q = SOCKET_ANCILLARY_FDS.lock();
+            let existing = q.iter().filter(|(b, _, _)| *b == peer).count();
+            if existing + staged_fds.len() > MAX_ANCILLARY_FDS_PER_SOCKET {
+                Err(FsBridgeError::WouldBlock)
+            } else if q.try_reserve(staged_fds.len()).is_err() {
+                Err(FsBridgeError::NoMemory)
+            } else {
+                match append_socket_payload_locked(peer, &payload) {
+                    Ok(n) => {
+                        q.extend(staged_fds.drain(..));
+                        Ok(n)
+                    }
+                    Err(err) => Err(err),
+                }
+            }
+        };
+        drop(_guard);
+        match result {
+            Ok(written) => {
+                notify_io_event(Some(peer));
+                return Ok(written);
+            }
+            Err(FsBridgeError::WouldBlock) if !nonblock => {
+                if let Err(err) = wait_for_io_event(gen, None, 1_000_000_000) {
+                    rollback_staged_ancillary(&staged_fds);
+                    return Err(err);
+                }
+            }
             Err(err) => {
-                drop(q);
                 rollback_staged_ancillary(&staged_fds);
                 return Err(err);
             }
-        };
-        q.extend(staged_fds);
-        n
-    };
-    Ok(written)
+        }
+    }
 }
 
 fn fail_recvmsg(
@@ -1486,8 +2525,9 @@ pub fn fs_unix_recvmsg(
     }
 
     let consume = (flags & 0x02) == 0;
-    let nonblock = (resolved.flags & O_NONBLOCK) != 0 || (flags & 0x40) != 0;
+    let nonblock = ((resolved.flags | entry.flags) & O_NONBLOCK) != 0 || (flags & 0x40) != 0;
     loop {
+        let gen = io_wait_gen();
         let _guard = SOCKET_PAYLOAD_LOCK.lock();
         let data = read_socket_payload_locked(entry.blob_id, total_cap, false)?;
         let matching: Vec<(u32, u32)> = {
@@ -1498,7 +2538,8 @@ pub fn fs_unix_recvmsg(
                 .collect()
         };
         if data.is_empty() && matching.is_empty() {
-            let peer_closed = is_socket_peer_closed_locked(entry.blob_id);
+            let peer_closed =
+                is_socket_peer_closed_locked(entry.blob_id) || socket_is_read_shutdown(entry.blob_id);
             drop(_guard);
             if peer_closed {
                 msg.msg_controllen = 0;
@@ -1509,9 +2550,7 @@ pub fn fs_unix_recvmsg(
             if nonblock {
                 return Err(FsBridgeError::WouldBlock);
             }
-            if !crate::scheduler::timer::sleep::sleep_ns(1_000_000) {
-                return Err(FsBridgeError::Interrupted);
-            }
+            let _ = wait_for_io_event(gen, None, 1_000_000_000)?;
             continue;
         }
 
@@ -1540,7 +2579,10 @@ pub fn fs_unix_recvmsg(
         let has_fd_table = process_has_fd_table(pid);
         let mut received_fds: Vec<(i32, u32)> = Vec::new();
         let mut out_msg_flags: i32 = 0;
-        if !matching.is_empty() {
+        let mut delivered_fd_count = 0usize;
+        // On MSG_PEEK (`!consume`), do NOT install duplicate FDs into the receiver's FD table
+        // (avoids leaking FDs on repeated peeks; FDs remain queued for the consuming recvmsg).
+        if consume && !matching.is_empty() {
             let max_fds = if msg.msg_control != 0 && msg.msg_controllen >= 16 {
                 ((msg.msg_controllen as usize).saturating_sub(16)) / 4
             } else {
@@ -1551,8 +2593,17 @@ pub fn fs_unix_recvmsg(
                 out_msg_flags |= 0x08; // MSG_CTRUNC
             }
             for &(obj_handle, fd_flags) in matching.iter().take(take) {
-                let Ok(dup_handle) = OBJECT_TABLE.dup(obj_handle) else {
-                    return Err(fail_recvmsg(_guard, pid, &received_fds, has_fd_table, FsBridgeError::NoMemory));
+                let dup_handle = match OBJECT_TABLE.dup_transferred(obj_handle, pid as u64) {
+                    Ok(h) => h,
+                    Err(err) => {
+                        return Err(fail_recvmsg(
+                            _guard,
+                            pid,
+                            &received_fds,
+                            has_fd_table,
+                            exofs_to_bridge_error(err),
+                        ));
+                    }
                 };
                 let new_flags = if (flags & 0x4000_0000) != 0 {
                     fd_flags | O_CLOEXEC
@@ -1579,25 +2630,43 @@ pub fn fs_unix_recvmsg(
                 }
                 received_fds.push((new_fd, dup_handle));
             }
+            delivered_fd_count = received_fds.len();
 
             if !received_fds.is_empty() {
                 let cmsg_len = 16 + received_fds.len() * 4;
                 let aligned_len = ((cmsg_len + 7) & !7).min(msg.msg_controllen as usize);
-                let hdr = UnixCmsghdr {
-                    cmsg_len,
-                    cmsg_level: 1,
-                    cmsg_type: 1,
-                };
-                if write_user_typed(msg.msg_control, hdr).is_err() {
-                    return Err(fail_recvmsg(_guard, pid, &received_fds, has_fd_table, FsBridgeError::Fault));
+                let mut cmsg_bytes = Vec::new();
+                if cmsg_bytes.try_reserve_exact(aligned_len).is_err() {
+                    return Err(fail_recvmsg(
+                        _guard,
+                        pid,
+                        &received_fds,
+                        has_fd_table,
+                        FsBridgeError::NoMemory,
+                    ));
                 }
+                cmsg_bytes.resize(aligned_len, 0);
+                cmsg_bytes[0..8].copy_from_slice(&cmsg_len.to_ne_bytes());
+                cmsg_bytes[8..12].copy_from_slice(&1i32.to_ne_bytes());
+                cmsg_bytes[12..16].copy_from_slice(&1i32.to_ne_bytes());
                 for (idx, &(rfd, _)) in received_fds.iter().enumerate() {
-                    let Some(fd_addr) = msg.msg_control.checked_add(16 + (idx as u64) * 4) else {
-                        return Err(fail_recvmsg(_guard, pid, &received_fds, has_fd_table, FsBridgeError::Fault));
-                    };
-                    if write_user_typed(fd_addr, rfd).is_err() {
-                        return Err(fail_recvmsg(_guard, pid, &received_fds, has_fd_table, FsBridgeError::Fault));
-                    }
+                    let off = 16 + idx * 4;
+                    cmsg_bytes[off..off + 4].copy_from_slice(&rfd.to_ne_bytes());
+                }
+                if copy_to_user(
+                    msg.msg_control as *mut u8,
+                    cmsg_bytes.as_ptr(),
+                    aligned_len,
+                )
+                .is_err()
+                {
+                    return Err(fail_recvmsg(
+                        _guard,
+                        pid,
+                        &received_fds,
+                        has_fd_table,
+                        FsBridgeError::Fault,
+                    ));
                 }
                 msg.msg_controllen = aligned_len as u64;
             } else {
@@ -1612,17 +2681,25 @@ pub fn fs_unix_recvmsg(
             return Err(fail_recvmsg(_guard, pid, &received_fds, has_fd_table, FsBridgeError::Fault));
         }
 
+        let peer = snapshot_blob(&entry.blob_id)
+            .ok()
+            .and_then(|d| parse_socket_peer_bytes(&d).ok())
+            .unwrap_or(BlobId([0u8; 32]));
+
         if consume {
             if copied != 0 {
                 let _ = read_socket_payload_locked(entry.blob_id, copied, true)?;
             }
-            if !matching.is_empty() {
+            // Remove ONLY the `delivered_fd_count` FDs actually delivered to userspace.
+            // Undelivered FDs on MSG_CTRUNC remain safely queued for subsequent recvmsg
+            // (and are cleanly released by `on_socket_blob_closed` if the socket closes).
+            if delivered_fd_count > 0 {
                 let mut to_close = Vec::new();
                 {
                     let mut q = SOCKET_ANCILLARY_FDS.lock();
                     let mut i = 0;
                     let mut removed = 0usize;
-                    while i < q.len() && removed < matching.len() {
+                    while i < q.len() && removed < delivered_fd_count {
                         if q[i].0 == entry.blob_id {
                             let (_, obj_handle, _) = q.remove(i);
                             if to_close.try_reserve(1).is_ok() {
@@ -1640,6 +2717,11 @@ pub fn fs_unix_recvmsg(
                 for h in to_close {
                     let _ = close_object_handle_with_cleanup(h);
                 }
+            } else {
+                drop(_guard);
+            }
+            if peer != BlobId([0u8; 32]) {
+                notify_io_event(Some(peer));
             }
         }
         return Ok(copied as i64);

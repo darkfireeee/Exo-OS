@@ -151,18 +151,37 @@ fn validate_program_header_span(image_len: usize, header: ElfHeader) -> Result<(
     Ok(())
 }
 
+pub const PT_PHDR: u32 = 6;
+pub const PT_GNU_STACK: u32 = 0x6474_e551;
+pub const PT_GNU_RELRO: u32 = 0x6474_e552;
+pub const ET_EXEC: u16 = 2;
+pub const ET_DYN: u16 = 3;
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct Elf64Phdr {
+    pub p_type: u32,
+    pub p_flags: u32,
+    pub p_offset: u64,
+    pub p_vaddr: u64,
+    pub p_paddr: u64,
+    pub p_filesz: u64,
+    pub p_memsz: u64,
+    pub p_align: u64,
+}
+
 #[inline]
-fn read_u16(data: &[u8], off: usize) -> u16 {
+pub fn read_u16(data: &[u8], off: usize) -> u16 {
     u16::from_le_bytes([data[off], data[off + 1]])
 }
 
 #[inline]
-fn read_u32(data: &[u8], off: usize) -> u32 {
+pub fn read_u32(data: &[u8], off: usize) -> u32 {
     u32::from_le_bytes([data[off], data[off + 1], data[off + 2], data[off + 3]])
 }
 
 #[inline]
-fn read_u64(data: &[u8], off: usize) -> u64 {
+pub fn read_u64(data: &[u8], off: usize) -> u64 {
     u64::from_le_bytes([
         data[off],
         data[off + 1],

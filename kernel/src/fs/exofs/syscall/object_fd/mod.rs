@@ -141,6 +141,28 @@ impl ObjectFdTable {
         found
     }
 
+    /// Ferme un handle interne depuis un chemin de nettoyage noyau (close_process_fd,
+    /// close_on_exec, close_all_noalloc) et retourne son `BlobId` si le slot était ouvert.
+    pub fn close_for_cleanup(&self, fd: u32) -> Option<BlobId> {
+        self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        let inner = unsafe { &mut *self.inner.get() };
+        let blob_id = inner.get_entry(fd).ok().map(|e| e.blob_id);
+        let found = if blob_id.is_some() {
+            inner.close_slot(fd)
+        } else {
+            false
+        };
+        self.release();
+        if found {
+            self.closes.fetch_add(1, Ordering::Relaxed);
+            blob_id
+        } else {
+            self.errors.fetch_add(1, Ordering::Relaxed);
+            None
+        }
+    }
+
     /// Lit l'entrée d'un fd (snapshot copié).
     pub fn get(&self, fd: u32) -> ExofsResult<ObjectFdEntry> {
         self.acquire();
@@ -219,6 +241,35 @@ impl ObjectFdTable {
         let inner = unsafe { &mut *self.inner.get() };
         let r = match inner.get_entry(fd) {
             Ok(entry) if owner_matches(entry, owner) => inner.dup_fd(fd),
+            Ok(_) => Err(ExofsError::PermissionDenied),
+            Err(err) => Err(err),
+        };
+        self.release();
+        r
+    }
+
+    /// Checks ownership for the current process and creates a duplicate slot owned by `target_owner`.
+    pub fn dup_checked_for_owner(&self, fd: u32, target_owner: u64) -> ExofsResult<u32> {
+        self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        let owner = current_owner_pid();
+        let inner = unsafe { &mut *self.inner.get() };
+        let r = match inner.get_entry(fd) {
+            Ok(entry) if owner_matches(entry, owner) => inner.dup_fd_with_owner(fd, target_owner),
+            Ok(_) => Err(ExofsError::PermissionDenied),
+            Err(err) => Err(err),
+        };
+        self.release();
+        r
+    }
+
+    /// Transfers a staged ancillary FD handle (`owner_uid == 0`) to `target_owner`.
+    pub fn dup_transferred(&self, fd: u32, target_owner: u64) -> ExofsResult<u32> {
+        self.acquire();
+        // SAFETY: accès exclusif garanti par lock atomique acquis avant.
+        let inner = unsafe { &mut *self.inner.get() };
+        let r = match inner.get_entry(fd) {
+            Ok(entry) if entry.owner_uid == 0 => inner.dup_fd_with_owner(fd, target_owner),
             Ok(_) => Err(ExofsError::PermissionDenied),
             Err(err) => Err(err),
         };

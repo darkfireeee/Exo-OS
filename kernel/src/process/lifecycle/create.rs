@@ -308,7 +308,8 @@ pub fn create_init_process_from_elf(elf: ElfLoadResult) -> Result<ProcessHandle,
     let thread_ptr = Box::into_raw(thread);
 
     const PAGE_SIZE_U64: u64 = crate::memory::core::PAGE_SIZE as u64;
-    const USER_STACK_SIZE: u64 = crate::memory::core::layout::USER_STACK_BOOTSTRAP_SIZE as u64;
+    const USER_STACK_SIZE: u64 =
+        crate::memory::core::layout::USER_STACK_DEFAULT_SIZE as u64 - PAGE_SIZE_U64;
     let stack_top = elf.initial_stack_top;
     let stack_base = stack_top.saturating_sub(USER_STACK_SIZE) & !(PAGE_SIZE_U64 - 1);
     let stack_size = stack_top.saturating_sub(stack_base);

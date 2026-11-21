@@ -24,22 +24,17 @@ pub fn fs_open(path: &[u8], flags: u32, mode: u32, pid: u32) -> Result<i64, FsBr
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);
     }
-    let fd_flags = flags & !(O_CLOEXEC | O_NONBLOCK);
+    let fd_flags = flags & !O_CLOEXEC;
     if !open_flags::validate(fd_flags) {
         return Err(FsBridgeError::Invalid);
     }
 
     ensure_root_directory()?;
-    let normalized_input = normalized_path_bytes(path)?;
-    if fd_flags & open_flags::O_CREAT != 0 && normalized_input != b"/" {
-        let (parent_path, _) = split_parent_and_leaf(&normalized_input)?;
-        ensure_directory_chain(&parent_path)?;
-    }
-    let normalized_path = resolve_path_with_symlinks(path, true, true)?;
+    let normalized_path = resolve_path_with_symlinks(path, true, fd_flags & open_flags::O_CREAT != 0)?;
     let existing_entry = path_entry(&normalized_path).ok();
     let blob_id = match existing_entry {
         Some((existing_blob_id, _)) => existing_blob_id,
-        None => blob_id_for_path(&normalized_path)?,
+        None => allocate_fresh_file_blob(&normalized_path)?,
     };
     let exists = existing_entry.is_some();
     let is_dir = existing_entry
@@ -195,13 +190,8 @@ pub fn fs_openat(
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);
     }
-    // Unambiguously supported cases:
-    // - AT_FDCWD + relative/absolute path
-    // - absolute path, regardless of dirfd (POSIX semantics)
-    if dirfd == AT_FDCWD || path.starts_with(b"/") {
-        return fs_open(path, flags, mode, pid);
-    }
-    Err(FsBridgeError::Invalid)
+    let resolved = resolve_dirfd_path(dirfd, path, pid)?;
+    fs_open(&resolved, flags, mode, pid)
 }
 
 /// `mkdir(path, mode)`.
@@ -210,17 +200,19 @@ pub fn fs_mkdir(path: &[u8], mode: u32, pid: u32) -> Result<i64, FsBridgeError> 
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);
     }
-    let normalized_path = normalized_path_bytes(path)?;
-    if normalized_path == b"/" {
-        ensure_root_directory()?;
-        return Ok(0);
-    }
     ensure_root_directory()?;
-    let (parent_path, leaf) = split_parent_and_leaf(&normalized_path)?;
-    ensure_directory_chain(&parent_path)?;
-    let blob_id = blob_id_for_path(&normalized_path)?;
-    if BLOB_CACHE.contains(&blob_id) {
+    let normalized_path = resolve_path_with_symlinks(path, false, true)?;
+    if normalized_path == b"/" {
         return Err(FsBridgeError::Exists);
+    }
+    let (parent_path, leaf) = split_parent_and_leaf(&normalized_path)?;
+    ensure_directory_exists(&parent_path)?;
+    if path_entry(&normalized_path).is_ok() {
+        return Err(FsBridgeError::Exists);
+    }
+    let blob_id = blob_id_for_path(&normalized_path)?;
+    if BLOB_CACHE.contains(&blob_id) && OBJECT_TABLE.open_count_for(&blob_id) == 0 {
+        BLOB_CACHE.invalidate(&blob_id);
     }
     let effective_mode = S_IFDIR | apply_umask(mode, 0o777, pid);
 
@@ -248,23 +240,25 @@ pub fn fs_rmdir(path: &[u8], pid: u32) -> Result<i64, FsBridgeError> {
         return Err(FsBridgeError::NotReady);
     }
     let _ = pid;
-    let normalized_path = normalized_path_bytes(path)?;
+    let normalized_path = resolve_path_with_symlinks(path, false, false)?;
     if normalized_path == b"/" {
         return Err(FsBridgeError::PermDenied);
     }
     let (parent_path, leaf) = split_parent_and_leaf(&normalized_path)?;
-    let blob_id = blob_id_for_path(&normalized_path)?;
+    let (blob_id, _kind) = path_entry(&normalized_path)?;
     let data = snapshot_blob(&blob_id)?;
     let entry_count = path_index_entry_count(&data).ok_or(FsBridgeError::NotDir)?;
     if entry_count != 0 {
         return Err(FsBridgeError::NotEmpty);
     }
-    if OBJECT_TABLE.open_count_for(&blob_id) != 0 {
-        return Err(FsBridgeError::PermDenied);
-    }
-    BLOB_CACHE.invalidate(&blob_id);
     remove_parent_entry(&parent_path, &leaf)?;
-    remove_mode(&blob_id);
+    if OBJECT_TABLE.open_count_for(&blob_id) != 0 {
+        mark_deferred_unlink(blob_id, false);
+    } else {
+        BLOB_CACHE.invalidate(&blob_id);
+        remove_mode(&blob_id);
+        remove_times(&blob_id);
+    }
     Ok(0)
 }
 
@@ -285,15 +279,17 @@ pub fn fs_unlink(path: &[u8], pid: u32) -> Result<i64, FsBridgeError> {
     if kind == PATH_INDEX_KIND_DIR || blob_is_directory(&data) {
         return Err(FsBridgeError::IsDir);
     }
-    if OBJECT_TABLE.open_count_for(&blob_id) != 0 {
-        return Err(FsBridgeError::PermDenied);
-    }
-    if kind == PATH_INDEX_KIND_SYMLINK {
-        invalidate_symlink(&blob_id_to_object_id(blob_id));
-    }
-    BLOB_CACHE.invalidate(&blob_id);
     remove_parent_entry(&parent_path, &leaf)?;
-    remove_mode(&blob_id);
+    if OBJECT_TABLE.open_count_for(&blob_id) != 0 {
+        mark_deferred_unlink(blob_id, kind == PATH_INDEX_KIND_SYMLINK);
+    } else {
+        if kind == PATH_INDEX_KIND_SYMLINK {
+            invalidate_symlink(&blob_id_to_object_id(blob_id));
+        }
+        BLOB_CACHE.invalidate(&blob_id);
+        remove_mode(&blob_id);
+        remove_times(&blob_id);
+    }
     Ok(0)
 }
 
@@ -342,12 +338,17 @@ pub fn fs_rename(old_path: &[u8], new_path: &[u8], pid: u32) -> Result<i64, FsBr
             if dst_is_dir && path_index_entry_count(&dst_data).unwrap_or(0) != 0 {
                 return Err(FsBridgeError::NotEmpty);
             }
-            if OBJECT_TABLE.open_count_for(&dst_blob_id) != 0 {
-                return Err(FsBridgeError::PermDenied);
-            }
             remove_parent_entry(&new_parent, &new_leaf)?;
-            BLOB_CACHE.invalidate(&dst_blob_id);
-            remove_mode(&dst_blob_id);
+            if OBJECT_TABLE.open_count_for(&dst_blob_id) != 0 {
+                mark_deferred_unlink(dst_blob_id, dst_kind == PATH_INDEX_KIND_SYMLINK);
+            } else {
+                if dst_kind == PATH_INDEX_KIND_SYMLINK {
+                    invalidate_symlink(&blob_id_to_object_id(dst_blob_id));
+                }
+                BLOB_CACHE.invalidate(&dst_blob_id);
+                remove_mode(&dst_blob_id);
+                remove_times(&dst_blob_id);
+            }
         }
         Err(FsBridgeError::NotFound) => {}
         Err(err) => return Err(err),
@@ -368,12 +369,12 @@ pub fn fs_renameat(
     new_path: &[u8],
     pid: u32,
 ) -> Result<i64, FsBridgeError> {
-    if olddirfd == AT_FDCWD || old_path.starts_with(b"/") {
-        if newdirfd == AT_FDCWD || new_path.starts_with(b"/") {
-            return fs_rename(old_path, new_path, pid);
-        }
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
     }
-    Err(FsBridgeError::Invalid)
+    let old_resolved = resolve_dirfd_path(olddirfd, old_path, pid)?;
+    let new_resolved = resolve_dirfd_path(newdirfd, new_path, pid)?;
+    fs_rename(&old_resolved, &new_resolved, pid)
 }
 
 /// `link(oldpath, newpath)`.
@@ -393,14 +394,13 @@ pub fn fs_linkat(
     pid: u32,
 ) -> Result<i64, FsBridgeError> {
     pub const AT_SYMLINK_FOLLOW: u32 = 0x400;
-    if olddirfd != AT_FDCWD && !old_path.starts_with(b"/") {
-        return Err(FsBridgeError::Invalid);
-    }
-    if newdirfd != AT_FDCWD && !new_path.starts_with(b"/") {
-        return Err(FsBridgeError::Invalid);
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
     }
     if flags & !AT_SYMLINK_FOLLOW != 0 {
         return Err(FsBridgeError::Invalid);
     }
-    fs_link_with_follow(old_path, new_path, flags & AT_SYMLINK_FOLLOW != 0, pid)
+    let old_resolved = resolve_dirfd_path(olddirfd, old_path, pid)?;
+    let new_resolved = resolve_dirfd_path(newdirfd, new_path, pid)?;
+    fs_link_with_follow(&old_resolved, &new_resolved, flags & AT_SYMLINK_FOLLOW != 0, pid)
 }

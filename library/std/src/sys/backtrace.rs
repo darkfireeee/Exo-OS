@@ -236,3 +236,8 @@ pub fn set_image_base() {
 pub fn set_image_base() {
     // nothing to do for platforms other than SGX
 }
+
+#[cfg(target_os = "exo")]
+#[allow(dead_code)]
+#[path = "pal/exo_os/unwind_abi.rs"]
+mod exo_unwind_abi;

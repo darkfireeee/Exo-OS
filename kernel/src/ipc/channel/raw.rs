@@ -274,6 +274,7 @@ pub fn mailbox_open(ep_id: EndpointId) -> bool {
     if id == 0 {
         return false;
     }
+    let _irq = crate::scheduler::core::preempt::IrqGuard::new();
     let _guard = MAILBOX_LIFECYCLE_LOCK.lock();
     // Idempotence: already open?
     if find_slot(id).is_some() {
@@ -304,10 +305,11 @@ pub fn mailbox_close(ep_id: EndpointId) {
     if id == 0 {
         return;
     }
-    let _guard = MAILBOX_LIFECYCLE_LOCK.lock();
-    if let Some(idx) = find_slot(id) {
-        let slot = &RAW_TABLE[idx];
-        let waiter = {
+    let waiter = {
+        let _irq = crate::scheduler::core::preempt::IrqGuard::new();
+        let _guard = MAILBOX_LIFECYCLE_LOCK.lock();
+        if let Some(idx) = find_slot(id) {
+            let slot = &RAW_TABLE[idx];
             let mut ring = slot.ring.lock();
             if slot.endpoint_id.load(Ordering::Acquire) == id {
                 let w = slot.take_waiter_locked();
@@ -319,10 +321,11 @@ pub fn mailbox_close(ep_id: EndpointId) {
             } else {
                 core::ptr::null_mut()
             }
-        };
-        drop(_guard);
-        wake_waiter_outside_lock(waiter);
-    }
+        } else {
+            core::ptr::null_mut()
+        }
+    };
+    wake_waiter_outside_lock(waiter);
 }
 
 /// Number of currently open mailboxes.
@@ -363,7 +366,8 @@ pub fn send_raw(ep_id: EndpointId, data: &[u8], flags: u32) -> Result<MessageId,
     let slot = &RAW_TABLE[idx];
     let nowait = flags & 0x0001 != 0;
 
-    {
+    let waiter = {
+        let _irq = crate::scheduler::core::preempt::IrqGuard::new();
         let mut ring = slot.ring.lock();
         // FIX-IPC-RAW-TOCTOU-01: re-verify slot ownership UNDER lock.
         // Without this guard, concurrent `mailbox_close` can free slot
@@ -377,17 +381,18 @@ pub fn send_raw(ep_id: EndpointId, data: &[u8], flags: u32) -> Result<MessageId,
             ring.enqueue(data);
             slot.send_count.fetch_add(1, Ordering::Relaxed);
             IPC_STATS.record(StatEvent::MessageSent);
-            let waiter = slot.take_waiter_locked();
-            // Wake-up OUTSIDE lock (FIX-IPC-LOCKORD-01) — see drop(ring) below.
-            drop(ring);
-            wake_waiter_outside_lock(waiter);
-            return Ok(alloc_message_id());
-        }
-        // Full ring.
-        if nowait {
+            Some(slot.take_waiter_locked())
+        } else if nowait {
             slot.drop_count.fetch_add(1, Ordering::Relaxed);
             return Err(IpcError::WouldBlock);
+        } else {
+            None
         }
+    };
+    if let Some(w) = waiter {
+        // Wake-up OUTSIDE lock & IRQ guard (FIX-IPC-LOCKORD-01).
+        wake_waiter_outside_lock(w);
+        return Ok(alloc_message_id());
     }
 
     // Short spin wait with lock release.
@@ -395,26 +400,33 @@ pub fn send_raw(ep_id: EndpointId, data: &[u8], flags: u32) -> Result<MessageId,
     loop {
         core::hint::spin_loop();
         spins = spins.saturating_add(1);
-        let mut ring = slot.ring.lock();
-        // FIX-IPC-RAW-TOCTOU-01: same guard in wait loop.
-        if slot.endpoint_id.load(Ordering::Acquire) != id {
-            return Err(IpcError::NotFound);
-        }
-        if ring.enqueue(data) {
-            slot.send_count.fetch_add(1, Ordering::Relaxed);
-            IPC_STATS.record(StatEvent::MessageSent);
-            let waiter = slot.take_waiter_locked();
-            drop(ring);
-            wake_waiter_outside_lock(waiter);
+        let waiter = {
+            let _irq = crate::scheduler::core::preempt::IrqGuard::new();
+            let mut ring = slot.ring.lock();
+            // FIX-IPC-RAW-TOCTOU-01: same guard in wait loop.
+            if slot.endpoint_id.load(Ordering::Acquire) != id {
+                return Err(IpcError::NotFound);
+            }
+            if ring.enqueue(data) {
+                slot.send_count.fetch_add(1, Ordering::Relaxed);
+                IPC_STATS.record(StatEvent::MessageSent);
+                Some(slot.take_waiter_locked())
+            } else {
+                None
+            }
+        };
+        if let Some(w) = waiter {
+            wake_waiter_outside_lock(w);
             return Ok(alloc_message_id());
         }
         if (spins & 0x7F) == 0 {
-            drop(ring);
-            unsafe {
-                let _ = crate::scheduler::core::switch::cooperative_reschedule();
+            let switched = unsafe { crate::scheduler::core::switch::cooperative_reschedule() };
+            if (!switched || (spins & 0x1FF) == 0)
+                && crate::scheduler::core::preempt::PreemptGuard::depth() == 0
+                && crate::scheduler::timer::sleep_ns(500_000)
+            {
+                spins = spins.saturating_add(512);
             }
-        } else {
-            drop(ring);
         }
         if spins > 200_000 {
             slot.drop_count.fetch_add(1, Ordering::Relaxed);
@@ -432,9 +444,10 @@ fn wake_waiter_outside_lock(waiter: *mut ThreadControlBlock) {
 /// Strictly non-blocking variant of `send_raw`.
 ///
 /// Constraints:
-/// - never spins on ring lock;
-/// - returns `WouldBlock` if slot is busy or ring is full;
-/// - suited for IRQ/ISR contexts that must remain bounded.
+/// - never sleeps or blocks indefinitely on ring lock;
+/// - all holders of `slot.ring` keep `IrqGuard`, so bounded `try_lock` spin only
+///   bridges brief remote-CPU leaf critical sections without losing IRQ edges;
+/// - returns `WouldBlock` if ring is full or still contended after bound.
 pub fn try_send_raw_nowait(ep_id: EndpointId, data: &[u8]) -> Result<MessageId, IpcError> {
     if data.len() > MAX_MSG_SIZE {
         return Err(IpcError::MessageTooLarge);
@@ -445,13 +458,22 @@ pub fn try_send_raw_nowait(ep_id: EndpointId, data: &[u8]) -> Result<MessageId, 
         return Err(IpcError::NullEndpoint);
     }
 
+    let _irq = crate::scheduler::core::preempt::IrqGuard::new();
     if find_slot(id).is_none() && !mailbox_open(ep_id) {
         return Err(IpcError::OutOfResources);
     }
 
     let idx = find_slot(id).ok_or(IpcError::NotFound)?;
     let slot = &RAW_TABLE[idx];
-    let Some(mut ring) = slot.ring.try_lock() else {
+    let mut ring_guard = None;
+    for _ in 0..4096 {
+        if let Some(ring) = slot.ring.try_lock() {
+            ring_guard = Some(ring);
+            break;
+        }
+        core::hint::spin_loop();
+    }
+    let Some(mut ring) = ring_guard else {
         slot.drop_count.fetch_add(1, Ordering::Relaxed);
         return Err(IpcError::WouldBlock);
     };
@@ -467,6 +489,7 @@ pub fn try_send_raw_nowait(ep_id: EndpointId, data: &[u8]) -> Result<MessageId, 
         IPC_STATS.record(StatEvent::MessageSent);
         let waiter = slot.take_waiter_locked();
         drop(ring);
+        drop(_irq);
         wake_waiter_outside_lock(waiter);
         return Ok(alloc_message_id());
     }
@@ -491,6 +514,7 @@ pub fn recv_raw_or_register_waiter(
     }
     let idx = find_slot(id).ok_or(IpcError::NotFound)?;
     let slot = &RAW_TABLE[idx];
+    let _irq = crate::scheduler::core::preempt::IrqGuard::new();
     let mut ring = slot.ring.lock();
     // FIX-IPC-RAW-TOCTOU-01: ownership re-verification under lock
     // (avoids reading message from previous endpoint on a reassigned slot).
@@ -524,6 +548,7 @@ pub fn has_registered_waiter(ep_id: EndpointId, waiter_tcb: *mut ThreadControlBl
         return false;
     };
     let slot = &RAW_TABLE[idx];
+    let _irq = crate::scheduler::core::preempt::IrqGuard::new();
     let ring = slot.ring.lock();
     if slot.endpoint_id.load(Ordering::Acquire) != id {
         return false;
@@ -536,6 +561,7 @@ pub fn clear_waiter(ep_id: EndpointId, tcb: *mut ThreadControlBlock) {
     let id = ep_id.get();
     if let Some(idx) = find_slot(id) {
         let slot = &RAW_TABLE[idx];
+        let _irq = crate::scheduler::core::preempt::IrqGuard::new();
         let mut _ring = slot.ring.lock();
         let _ = slot.waiter.compare_exchange(
             tcb as usize,
@@ -563,6 +589,7 @@ pub fn recv_raw(ep_id: EndpointId, buf: &mut [u8], flags: u32) -> Result<usize, 
     let nowait = flags & 0x0001 != 0;
 
     {
+        let _irq = crate::scheduler::core::preempt::IrqGuard::new();
         let mut ring = slot.ring.lock();
         // FIX-IPC-RAW-TOCTOU-01: ownership re-verification under lock.
         if slot.endpoint_id.load(Ordering::Acquire) != id {
@@ -587,27 +614,31 @@ pub fn recv_raw(ep_id: EndpointId, buf: &mut [u8], flags: u32) -> Result<usize, 
     loop {
         core::hint::spin_loop();
         spins = spins.saturating_add(1);
-        let mut ring = slot.ring.lock();
-        // FIX-IPC-RAW-TOCTOU-01: guard in wait loop as well.
-        if slot.endpoint_id.load(Ordering::Acquire) != id {
-            return Err(IpcError::NotFound);
-        }
-        match ring.dequeue(buf) {
-            Ok(Some(n)) => {
-                slot.recv_count.fetch_add(1, Ordering::Relaxed);
-                IPC_STATS.record(StatEvent::MessageReceived);
-                return Ok(n);
+        {
+            let _irq = crate::scheduler::core::preempt::IrqGuard::new();
+            let mut ring = slot.ring.lock();
+            // FIX-IPC-RAW-TOCTOU-01: guard in wait loop as well.
+            if slot.endpoint_id.load(Ordering::Acquire) != id {
+                return Err(IpcError::NotFound);
             }
-            Ok(None) => {}
-            Err(err) => return Err(err),
+            match ring.dequeue(buf) {
+                Ok(Some(n)) => {
+                    slot.recv_count.fetch_add(1, Ordering::Relaxed);
+                    IPC_STATS.record(StatEvent::MessageReceived);
+                    return Ok(n);
+                }
+                Ok(None) => {}
+                Err(err) => return Err(err),
+            }
         }
         if (spins & 0x7F) == 0 {
-            drop(ring);
-            unsafe {
-                let _ = crate::scheduler::core::switch::cooperative_reschedule();
+            let switched = unsafe { crate::scheduler::core::switch::cooperative_reschedule() };
+            if (!switched || (spins & 0x1FF) == 0)
+                && crate::scheduler::core::preempt::PreemptGuard::depth() == 0
+                && crate::scheduler::timer::sleep_ns(500_000)
+            {
+                spins = spins.saturating_add(512);
             }
-        } else {
-            drop(ring);
         }
         if spins > 200_000 {
             return Err(IpcError::Timeout);

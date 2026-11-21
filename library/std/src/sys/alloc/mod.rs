@@ -69,6 +69,9 @@ unsafe fn realloc_fallback(
 }
 
 cfg_select! {
+    target_os = "exo" => {
+        mod exo;
+    }
     any(
         target_family = "unix",
         target_os = "wasi",
@@ -85,9 +88,6 @@ cfg_select! {
     }
     target_os = "motor" => {
         mod motor;
-    }
-    target_os = "exo" => {
-        mod exo;
     }
     all(target_vendor = "fortanix", target_env = "sgx") => {
         mod sgx;

@@ -10,6 +10,8 @@ use crate::process::lifecycle::exec::ElfLoadError;
 use super::registry::{InterpreterPath, DYNAMIC_LOADER_PATH_MAX};
 
 pub const USER_ELF_BASE_MAX: u64 = USER_END.as_u64();
+pub const ET_EXEC: u16 = 2;
+pub const ET_DYN: u16 = 3;
 pub const PT_LOAD: u32 = 1;
 pub const PT_DYNAMIC: u32 = 2;
 pub const PT_INTERP: u32 = 3;
@@ -39,12 +41,67 @@ pub fn validate_elf_header(data: &[u8]) -> Result<(), ElfLoadError> {
     if data[5] != 1 {
         return Err(ElfLoadError::UnsupportedArch);
     }
+    // e_type must be ET_EXEC (2) or ET_DYN (3)
+    let e_type = u16::from_le_bytes([data[16], data[17]]);
+    if e_type != ET_EXEC && e_type != ET_DYN {
+        return Err(ElfLoadError::InvalidElf);
+    }
     // e_machine = 0x3E → EM_X86_64
     let e_machine = u16::from_le_bytes([data[18], data[19]]);
     if e_machine != 0x3E {
         return Err(ElfLoadError::UnsupportedArch);
     }
     Ok(())
+}
+
+#[inline]
+pub fn elf_type(data: &[u8]) -> Result<u16, ElfLoadError> {
+    if data.len() < 64 {
+        return Err(ElfLoadError::InvalidElf);
+    }
+    Ok(u16::from_le_bytes([data[16], data[17]]))
+}
+
+/// Returns `(min_vaddr_aligned, max_vaddr_aligned)` across all non-empty `PT_LOAD` segments.
+pub fn compute_et_dyn_span(data: &[u8]) -> Result<(u64, u64), ElfLoadError> {
+    let (e_phoff, e_phnum, e_phentsize) = phdr_span(data)?;
+    let page_mask = PAGE_SIZE as u64 - 1;
+    let mut min_vaddr = u64::MAX;
+    let mut max_vaddr = 0u64;
+    let mut i = 0usize;
+    while i < e_phnum {
+        let ph = phdr_at(data, e_phoff, e_phentsize, i)?;
+        if elf_u32(ph, 0) == PT_LOAD {
+            let p_memsz = elf_u64(ph, 40);
+            if p_memsz > 0 {
+                let p_vaddr = elf_u64(ph, 16);
+                let seg_end = p_vaddr
+                    .checked_add(p_memsz)
+                    .ok_or(ElfLoadError::InvalidElf)?;
+                let aligned_start = p_vaddr & !page_mask;
+                let aligned_end = seg_end
+                    .checked_add(page_mask)
+                    .map(|v| v & !page_mask)
+                    .ok_or(ElfLoadError::InvalidElf)?;
+                if aligned_start < min_vaddr {
+                    min_vaddr = aligned_start;
+                }
+                if aligned_end > max_vaddr {
+                    max_vaddr = aligned_end;
+                }
+            }
+        }
+        i += 1;
+    }
+    if min_vaddr == u64::MAX || max_vaddr <= min_vaddr {
+        return Err(ElfLoadError::InvalidElf);
+    }
+    Ok((min_vaddr, max_vaddr))
+}
+
+#[inline]
+pub fn compute_et_dyn_min_vaddr(data: &[u8]) -> Result<u64, ElfLoadError> {
+    Ok(compute_et_dyn_span(data)?.0)
 }
 
 #[inline]

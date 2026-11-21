@@ -507,12 +507,22 @@ fn handle(req: &syscall::TtyRequest) -> syscall::TtyReply {
         }
         syscall::TTY_MSG_IOCTL => {
             let state = tty_mut();
-            if req.a == 0x5402 || req.a == 0x5403 || req.a == 0x5404 {
+            if req.a == 0x5401 {
+                let mut mode_bits = 0u32;
+                if state.line.is_echo() {
+                    mode_bits |= 1;
+                }
+                if state.line.is_canonical() {
+                    mode_bits |= 2;
+                }
+                reply(0, mode_bits, &[])
+            } else if req.a == 0x5402 || req.a == 0x5403 || req.a == 0x5404 {
                 state.line.set_echo(req.b & 1 != 0);
                 state.line.set_canonical(req.b & 2 != 0);
                 state.ready_len = 0;
                 let mut tmp = [0u8; LINE_OUT_MAX];
                 let _ = state.line.take_line(&mut tmp);
+                reply(0, 0, &[])
             } else if req.a == 0x5410 {
                 let target = req.b as u32;
                 // Protection contre kill de serveurs système : seul un PID applicatif (> 19)
@@ -520,8 +530,10 @@ fn handle(req: &syscall::TtyRequest) -> syscall::TtyReply {
                 if target == 0 || target > 19 {
                     state.foreground_pid = target;
                 }
+                reply(0, 0, &[])
+            } else {
+                reply(-25 /* ENOTTY */, 0, &[])
             }
-            reply(0, 0, &[])
         }
         _ => reply(syscall::EINVAL, 0, &[]),
     }

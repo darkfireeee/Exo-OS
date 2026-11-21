@@ -97,12 +97,38 @@ pub fn sys_rt_sigaction(
         None => return EFAULT,
     };
 
+    let sig_tcb_opt = {
+        let vaddr = pcb.signal_tcb_vaddr.load(core::sync::atomic::Ordering::Acquire);
+        if (0x1000..USER_ADDR_MAX).contains(&vaddr) {
+            Some(unsafe { &*(vaddr as *const crate::process::signal::tcb::SignalTcb) })
+        } else {
+            None
+        }
+    };
+
     // Read old action and write it to oldact_ptr if requested.
     if oldact_ptr != 0 {
-        let old_action = {
+        let mut old_action = {
             let handlers = pcb.sig_handlers.lock();
             handlers.get(sig as u8)
         };
+        if let Some(stcb) = sig_tcb_opt {
+            if let Some(entry) = stcb.atomic_get_action(sig as u8) {
+                old_action = SigAction {
+                    kind: if entry.is_dfl() {
+                        SigActionKind::Term
+                    } else if entry.is_ign() {
+                        SigActionKind::Ignore
+                    } else {
+                        SigActionKind::User
+                    },
+                    handler: entry.handler_vaddr,
+                    flags: entry.flags,
+                    mask: entry.mask,
+                    restorer: entry.restorer,
+                };
+            }
+        }
         // Construct LinuxSigaction from SigAction (for userspace ABI).
         let linux_old = LinuxSigaction {
             sa_handler: if old_action.kind == SigActionKind::Ignore {
@@ -144,8 +170,20 @@ pub fn sys_rt_sigaction(
             restorer: linux_act.sa_restorer,
         };
 
-        let mut handlers = pcb.sig_handlers.lock();
-        handlers.set(sig as u8, new_action);
+        {
+            let mut handlers = pcb.sig_handlers.lock();
+            handlers.set(sig as u8, new_action);
+        }
+        if let Some(stcb) = sig_tcb_opt {
+            let entry = crate::process::signal::tcb::SigactionEntry {
+                handler_vaddr: linux_act.sa_handler,
+                flags: linux_act.sa_flags as u32,
+                _pad: 0,
+                mask: linux_act.sa_mask,
+                restorer: linux_act.sa_restorer,
+            };
+            let _ = stcb.atomic_set_action(sig as u8, entry);
+        }
     }
 
     0 // success
@@ -209,6 +247,27 @@ pub fn sys_rt_sigprocmask(
         let safe_mask = crate::process::signal::mask::SigMask::from(computed).0;
         tcb.signal_mask
             .store(safe_mask, core::sync::atomic::Ordering::Release);
+
+        if let Some(pcb) = PROCESS_REGISTRY.find_by_pid(Pid(tcb.pid.0)) {
+            let tid = crate::process::core::pid::Tid(tcb.tid as u32);
+            let mut thread_ptr = pcb.find_thread_by_tid(tid);
+            if thread_ptr.is_null() {
+                thread_ptr = pcb.find_alive_thread();
+            }
+            if !thread_ptr.is_null() {
+                let thread = unsafe { &*thread_ptr };
+                crate::process::signal::delivery::sync_pending_after_unblock(thread, safe_mask);
+            }
+            if pcb.thread_count.load(core::sync::atomic::Ordering::Acquire) <= 1 {
+                let vaddr = pcb
+                    .signal_tcb_vaddr
+                    .load(core::sync::atomic::Ordering::Acquire);
+                if (0x1000..USER_ADDR_MAX).contains(&vaddr) {
+                    let stcb = unsafe { &*(vaddr as *const crate::process::signal::tcb::SignalTcb) };
+                    stcb.set_mask(safe_mask);
+                }
+            }
+        }
     }
 
     0 // success
@@ -345,17 +404,10 @@ pub fn sys_tgkill(tgid: u64, tid: u64, signum: u64, _a4: u64, _a5: u64, _a6: u64
         }
     }
 
-    // Target specific thread `tid` if it exists in the group, otherwise fallback to main_thread.
-    let mut thread_ptr = core::ptr::null_mut();
-    for slot in &pcb.thread_slots {
-        let p = slot.load(core::sync::atomic::Ordering::Acquire);
-        if !p.is_null() && unsafe { (*p).tid.0 as u64 == tid } {
-            thread_ptr = p;
-            break;
-        }
-    }
+    // Target specific thread `tid` if it exists in the group, otherwise fallback if tid == tgid or 0.
+    let mut thread_ptr = pcb.find_thread_by_tid(crate::process::core::pid::Tid(tid as u32));
     if thread_ptr.is_null() && (tid == tgid || tid == 0) {
-        thread_ptr = pcb.main_thread_ptr();
+        thread_ptr = pcb.find_alive_thread();
     }
     if thread_ptr.is_null() {
         return ESRCH;
@@ -408,17 +460,10 @@ pub fn sys_sigaltstack(ss_ptr: u64, oss_ptr: u64, _a3: u64, _a4: u64, _a5: u64, 
         None => return EFAULT,
     };
 
-    let target_tid = unsafe { (*tcb_ptr).tid };
-    let mut thread_ptr = core::ptr::null_mut();
-    for slot in &pcb.thread_slots {
-        let p = slot.load(core::sync::atomic::Ordering::Acquire);
-        if !p.is_null() && unsafe { (*p).tid.0 as u64 == target_tid } {
-            thread_ptr = p;
-            break;
-        }
-    }
+    let target_tid = crate::process::core::pid::Tid(unsafe { (*tcb_ptr).tid as u32 });
+    let mut thread_ptr = pcb.find_thread_by_tid(target_tid);
     if thread_ptr.is_null() {
-        thread_ptr = pcb.main_thread_ptr();
+        thread_ptr = pcb.find_alive_thread();
     }
     if thread_ptr.is_null() {
         return EFAULT;
@@ -429,15 +474,12 @@ pub fn sys_sigaltstack(ss_ptr: u64, oss_ptr: u64, _a3: u64, _a4: u64, _a5: u64, 
 
     // Export old sigaltstack if oss_ptr is provided.
     if oss_ptr != 0 {
+        let disabled = thread.addresses.sigaltstack_top() == 0;
         let old = SigAltStack {
-            ss_sp: thread.addresses.sigaltstack_base,
-            ss_flags: if thread.addresses.sigaltstack_size == 0 {
-                SS_DISABLE
-            } else {
-                0
-            },
+            ss_sp: if disabled { 0 } else { thread.addresses.sigaltstack_base },
+            ss_flags: if disabled { SS_DISABLE } else { 0 },
             _pad: 0,
-            ss_size: thread.addresses.sigaltstack_size,
+            ss_size: if disabled { 0 } else { thread.addresses.sigaltstack_size },
         };
         if write_user_typed(oss_ptr, old).is_err() {
             return EFAULT;

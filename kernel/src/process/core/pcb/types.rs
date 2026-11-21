@@ -76,12 +76,15 @@ pub mod process_flags {
     pub const VFORK_DONE: u32 = 1 << 10;
     /// vfork() child temporarily sharing parent address space until exec/exit.
     pub const VFORK_SHARED_AS: u32 = 1 << 11;
+    /// exit_group() in progress — sibling kills preserve primary exit_code.
+    pub const GROUP_EXITING: u32 = 1 << 12;
+    /// execve() in progress — prevents new threads spawning during image teardown.
+    pub const EXECING: u32 = 1 << 13;
 }
 
 pub use process_flags as ProcessFlags;
 
 pub const PROCESS_NAME_LEN: usize = 16;
-pub const MAX_THREADS_PER_PROCESS: usize = 64;
 pub const DEFAULT_UMASK: u32 = 0o022;
 
 // ─────────────────────────────────────────────────────────────────────────────

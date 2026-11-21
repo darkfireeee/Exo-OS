@@ -18,7 +18,11 @@
   "pre-link-args": {
     "ld.lld": [
       "--no-pie",
-      "--image-base=0x0000010000000000"
+      "--image-base=0x0000010000000000",
+      "-u",
+      "_exo_ring1_entry",
+      "-e",
+      "_exo_ring1_entry"
     ]
   }
 }

@@ -1,0 +1,27 @@
+[workspace]
+resolver = "2"
+
+[package]
+name = "exo-compliance-runner"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "exo-compliance-runner"
+path = "src/main.rs"
+test = false
+bench = false
+
+[profile.dev]
+opt-level = 2
+panic = "abort"
+codegen-units = 1
+
+[profile.release]
+opt-level = 3
+panic = "abort"
+codegen-units = 1
+
+[patch.crates-io]
+libc = { path = "../../libs/vendors/libc" }

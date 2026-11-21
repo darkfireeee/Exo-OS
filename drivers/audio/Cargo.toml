@@ -3,6 +3,7 @@ name = "exo-audio-drivers"
 version = "0.1.0"
 edition = "2021"
 license.workspace = true
+publish = false
 
 [lib]
 name = "exo_audio_drivers"

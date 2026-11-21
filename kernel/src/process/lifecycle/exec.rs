@@ -209,6 +209,50 @@ pub fn load_elf_for_boot(
 /// # Safety
 /// `thread` must point to the calling thread's ProcessThread.
 /// The address space will be rebuilt — no userspace access after the call.
+struct ExecFlagGuard<'a>(&'a ProcessControlBlock);
+
+impl Drop for ExecFlagGuard<'_> {
+    fn drop(&mut self) {
+        self.0
+            .flags
+            .fetch_and(!process_flags::EXECING, Ordering::Release);
+    }
+}
+
+/// Terminates sibling threads before replacing the process address space (POSIX execve).
+fn terminate_other_threads_for_exec(pcb: &ProcessControlBlock, survivor: &ProcessThread) {
+    let survivor_ptr = survivor as *const ProcessThread as *mut ProcessThread;
+    if pcb.thread_count.load(Ordering::Acquire) > 1 {
+        let sigkill = crate::process::signal::default::Signal::SIGKILL.number();
+        pcb.for_each_thread_ptr(|thread_ptr| {
+            if thread_ptr == survivor_ptr {
+                return;
+            }
+            // SAFETY: `thread_ptr` stays valid until reaped from `REAPER_QUEUE`.
+            let t = unsafe { &mut *thread_ptr };
+            t.join_result.store(0, Ordering::Release);
+            t.join_done.store(true, Ordering::Release);
+            crate::scheduler::timer::sleep::cancel_sleep_timer_for_tcb(&t.sched_tcb);
+            crate::process::signal::delivery::send_signal_to_tcb(
+                t,
+                sigkill,
+                crate::process::signal::queue::SigInfo::kernel(sigkill),
+            );
+        });
+        crate::process::thread::join::wake_joiners();
+
+        for _ in 0..8192 {
+            if pcb.thread_count.load(Ordering::Acquire) <= 1 {
+                break;
+            }
+            unsafe {
+                crate::scheduler::core::switch::cooperative_reschedule();
+            }
+        }
+    }
+    pcb.set_main_thread_ptr(survivor_ptr);
+}
+
 pub fn do_execve(
     thread: &mut ProcessThread,
     pcb: &ProcessControlBlock,
@@ -220,9 +264,10 @@ pub fn do_execve(
     if pcb.is_exiting() {
         return Err(ExecError::ProcessExiting);
     }
-    if pcb.thread_count.load(Ordering::Acquire) != 1 {
+    if (pcb.flags.fetch_or(process_flags::EXECING, Ordering::AcqRel) & process_flags::EXECING) != 0 {
         return Err(ExecError::ThreadGroupNotSingle);
     }
+    let _exec_guard = ExecFlagGuard(pcb);
     if pcb.pid.0 != 0 {
         let ctx = crate::security::zero_trust::context_for_caller(pcb.pid.0, 0);
         if crate::security::zero_trust::verify_syscall(
@@ -337,6 +382,9 @@ pub fn do_execve(
         );
     }
 
+    // Terminate sibling threads before mutating shared FD/signal state (POSIX execve).
+    terminate_other_threads_for_exec(pcb, thread);
+
     // Close O_CLOEXEC fds.
     let closed_handles = {
         let mut files = pcb.files.lock();
@@ -393,7 +441,8 @@ pub fn do_execve(
     // Update thread addresses.
     // FIX P2-03: compute and propagate stack_base and stack_size instead of 0
     const PAGE_SIZE_U64: u64 = crate::memory::core::PAGE_SIZE as u64;
-    const DEFAULT_STACK_SIZE: u64 = crate::memory::core::layout::USER_STACK_BOOTSTRAP_SIZE as u64;
+    const DEFAULT_STACK_SIZE: u64 =
+        crate::memory::core::layout::USER_STACK_DEFAULT_SIZE as u64 - PAGE_SIZE_U64;
 
     let stack_top = elf_result.initial_stack_top;
     let stack_base = (stack_top.saturating_sub(DEFAULT_STACK_SIZE)) & !(PAGE_SIZE_U64 - 1);

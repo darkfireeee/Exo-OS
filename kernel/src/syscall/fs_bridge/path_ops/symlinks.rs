@@ -28,7 +28,7 @@ pub fn fs_symlink(target: &[u8], linkpath: &[u8], pid: u32) -> Result<i64, FsBri
 
     let (parent_path, leaf) = split_parent_and_leaf(&normalized_link)?;
     ensure_directory_exists(&parent_path)?;
-    let blob_id = blob_id_for_path(&normalized_link)?;
+    let blob_id = allocate_fresh_file_blob(&normalized_link)?;
     BLOB_CACHE
         .insert(blob_id, target.to_vec())
         .map_err(exofs_to_bridge_error)?;
@@ -49,10 +49,8 @@ pub fn fs_symlinkat(
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);
     }
-    if dirfd == AT_FDCWD || linkpath.starts_with(b"/") {
-        return fs_symlink(target, linkpath, pid);
-    }
-    Err(FsBridgeError::Invalid)
+    let resolved = resolve_dirfd_path(dirfd, linkpath, pid)?;
+    fs_symlink(target, &resolved, pid)
 }
 
 /// `readlink(path, buf, bufsize)`.
@@ -94,8 +92,6 @@ pub fn fs_readlinkat(
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);
     }
-    if dirfd == AT_FDCWD || path.starts_with(b"/") {
-        return fs_readlink(path, buf, bufsize, pid);
-    }
-    Err(FsBridgeError::Invalid)
+    let resolved = resolve_dirfd_path(dirfd, path, pid)?;
+    fs_readlink(&resolved, buf, bufsize, pid)
 }

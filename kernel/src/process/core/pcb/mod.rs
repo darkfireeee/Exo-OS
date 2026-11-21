@@ -15,11 +15,12 @@ pub mod types;
 
 pub use file_table::{FileDescriptor, OpenFileTable};
 pub use types::{
-    process_flags, Credentials, ProcessFlags, ProcessState, DEFAULT_UMASK, MAX_THREADS_PER_PROCESS,
-    PROCESS_NAME_LEN,
+    process_flags, Credentials, ProcessFlags, ProcessState, DEFAULT_UMASK, PROCESS_NAME_LEN,
 };
 
 use alloc::boxed::Box;
+use alloc::sync::Arc;
+use alloc::vec::Vec;
 use core::sync::atomic::{AtomicPtr, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use crate::process::core::pid::Pid;
 use crate::process::signal::default::SigHandlerTable;
@@ -62,17 +63,16 @@ pub struct ProcessControlBlock {
     pub thread_count: AtomicU32,
     /// Main thread ID (TID = PID in the POSIX sense).
     pub main_thread: ThreadId,
-    /// Bounded register of process threads, used by exit_group().
-    pub thread_slots:
-        [AtomicPtr<crate::process::core::tcb::ProcessThread>; MAX_THREADS_PER_PROCESS],
+    /// Dynamic register of process threads, used by signal delivery, reap, and exit_group().
+    pub threads: SpinLock<Vec<*mut crate::process::core::tcb::ProcessThread>>,
 
     // ── Resources ─────────────────────────────────────────────────────────────
     /// Credentials (uid/gid...).
     pub creds: SpinLock<Credentials>,
     /// Lock-free effective UID mirror for syscall/audit hot paths.
     pub euid_atomic: AtomicU32,
-    /// Open file table.
-    pub files: SpinLock<OpenFileTable>,
+    /// Open file table (sharable across `CLONE_FILES`).
+    pub files: Arc<SpinLock<OpenFileTable>>,
 
     // ── Virtual memory ────────────────────────────────────────────────────────
     /// Opaque pointer to virtual address space (managed by memory/virt/).
@@ -177,11 +177,10 @@ impl ProcessControlBlock {
             umask: AtomicU32::new(DEFAULT_UMASK),
             thread_count: AtomicU32::new(1),
             main_thread,
-            thread_slots: [const { AtomicPtr::new(core::ptr::null_mut()) };
-                MAX_THREADS_PER_PROCESS],
+            threads: SpinLock::new(Vec::new()),
             creds: SpinLock::new(creds),
             euid_atomic: AtomicU32::new(creds.euid),
-            files: SpinLock::new(files),
+            files: Arc::new(SpinLock::new(files)),
             address_space: AtomicUsize::new(addr_space),
             as_lock: SpinLock::new(()),
             cr3: AtomicU64::new(cr3),
@@ -509,54 +508,78 @@ impl ProcessControlBlock {
         self.main_thread_rawptr.load(Ordering::Acquire)
     }
 
-    /// Registers a thread in the bounded register of the process.
+    /// Registers a thread in the dynamic register of the process.
     pub fn register_thread_ptr(&self, ptr: *mut crate::process::core::tcb::ProcessThread) -> bool {
         if ptr.is_null() {
             return false;
         }
-        for slot in &self.thread_slots {
-            if slot.load(Ordering::Acquire) == ptr {
-                return true;
-            }
+        let mut threads = self.threads.lock();
+        if !threads.contains(&ptr) {
+            threads.push(ptr);
         }
-        for slot in &self.thread_slots {
-            if slot
-                .compare_exchange(
-                    core::ptr::null_mut(),
-                    ptr,
-                    Ordering::AcqRel,
-                    Ordering::Acquire,
-                )
-                .is_ok()
-            {
-                return true;
-            }
-        }
-        false
+        true
     }
 
-    /// Removes a thread from the bounded register.
+    /// Removes a thread from the dynamic register.
     pub fn unregister_thread_ptr(&self, ptr: *mut crate::process::core::tcb::ProcessThread) {
         if ptr.is_null() {
             return;
         }
-        for slot in &self.thread_slots {
-            let _ = slot.compare_exchange(
-                ptr,
+        let mut threads = self.threads.lock();
+        threads.retain(|&p| p != ptr);
+    }
+
+    /// Atomically unregisters and returns the `ProcessThread` matching `tid`.
+    /// Also clears `main_thread_rawptr` if that thread was the main thread.
+    pub fn take_thread_by_tid(
+        &self,
+        tid: crate::process::core::pid::Tid,
+    ) -> *mut crate::process::core::tcb::ProcessThread {
+        let mut found = core::ptr::null_mut();
+        {
+            let mut threads = self.threads.lock();
+            if let Some(idx) = threads
+                .iter()
+                .position(|&p| !p.is_null() && unsafe { (*p).tid == tid })
+            {
+                found = threads.swap_remove(idx);
+            }
+        }
+        if !found.is_null() {
+            let _ = self.main_thread_rawptr.compare_exchange(
+                found,
                 core::ptr::null_mut(),
                 Ordering::AcqRel,
                 Ordering::Acquire,
             );
+            return found;
         }
+        let main_ptr = self.main_thread_rawptr.load(Ordering::Acquire);
+        if !main_ptr.is_null()
+            && unsafe { (*main_ptr).tid == tid }
+            && self
+                .main_thread_rawptr
+                .compare_exchange(
+                    main_ptr,
+                    core::ptr::null_mut(),
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                )
+                .is_ok()
+        {
+            return main_ptr;
+        }
+        core::ptr::null_mut()
     }
 
-    /// Iterates over known process threads.
+    /// Iterates over known process threads without holding the list lock across `f`.
     pub fn for_each_thread_ptr<F>(&self, mut f: F)
     where
         F: FnMut(*mut crate::process::core::tcb::ProcessThread),
     {
-        for slot in &self.thread_slots {
-            let ptr = slot.load(Ordering::Acquire);
+        let snapshot: Vec<*mut crate::process::core::tcb::ProcessThread> =
+            self.threads.lock().clone();
+        for ptr in snapshot {
             if !ptr.is_null() {
                 f(ptr);
             }
@@ -570,37 +593,44 @@ impl ProcessControlBlock {
         tid: crate::process::core::pid::Tid,
     ) -> *mut crate::process::core::tcb::ProcessThread {
         let main_ptr = self.main_thread_rawptr.load(Ordering::Acquire);
-        if !main_ptr.is_null() {
-            // SAFETY: main_ptr points to a ProcessThread owned by this PCB.
-            if unsafe { (*main_ptr).tid == tid } {
-                return main_ptr;
-            }
+        if !main_ptr.is_null() && unsafe { (*main_ptr).tid == tid } {
+            return main_ptr;
         }
-        for slot in &self.thread_slots {
-            let ptr = slot.load(Ordering::Acquire);
-            if !ptr.is_null() {
-                // SAFETY: ptr points to a ProcessThread registered in this PCB.
-                if unsafe { (*ptr).tid == tid } {
-                    return ptr;
-                }
+        let threads = self.threads.lock();
+        for &ptr in threads.iter() {
+            if !ptr.is_null() && unsafe { (*ptr).tid == tid } {
+                return ptr;
             }
         }
         core::ptr::null_mut()
     }
 
-    /// Returns a living thread able to receive a signal.
+    #[inline]
+    fn is_thread_alive(ptr: *mut crate::process::core::tcb::ProcessThread) -> bool {
+        if ptr.is_null() {
+            return false;
+        }
+        !matches!(
+            unsafe { (&*ptr).state() },
+            crate::scheduler::core::task::TaskState::Zombie
+                | crate::scheduler::core::task::TaskState::Dead
+        )
+    }
+
+    /// Returns a living thread able to receive a signal (prefers main thread if alive, else any alive sibling).
     #[inline]
     pub fn find_alive_thread(&self) -> *mut crate::process::core::tcb::ProcessThread {
-        let ptr = self.main_thread_ptr();
-        if ptr.is_null() {
-            return core::ptr::null_mut();
+        let main_ptr = self.main_thread_ptr();
+        if Self::is_thread_alive(main_ptr) {
+            return main_ptr;
         }
-        let state = unsafe { (&*ptr).state() };
-        match state {
-            crate::scheduler::core::task::TaskState::Zombie
-            | crate::scheduler::core::task::TaskState::Dead => core::ptr::null_mut(),
-            _ => ptr,
+        let threads = self.threads.lock();
+        for &ptr in threads.iter() {
+            if Self::is_thread_alive(ptr) {
+                return ptr;
+            }
         }
+        core::ptr::null_mut()
     }
 
     /// Sets the pointer to the main thread.
@@ -615,9 +645,9 @@ impl ProcessControlBlock {
     /// Cleans up all threads registered in this PCB.
     pub fn cleanup_all_threads(&self) {
         let main_ptr = self.main_thread_rawptr.swap(core::ptr::null_mut(), Ordering::AcqRel);
+        let ptrs = core::mem::take(&mut *self.threads.lock());
 
-        for slot in &self.thread_slots {
-            let ptr = slot.swap(core::ptr::null_mut(), Ordering::AcqRel);
+        for ptr in ptrs {
             if !ptr.is_null() && ptr != main_ptr {
                 // SAFETY: secondary thread allocated by Box::into_raw.
                 // Thread is Dead and removed from any runqueue.

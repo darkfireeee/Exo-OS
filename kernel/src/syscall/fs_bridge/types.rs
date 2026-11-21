@@ -74,6 +74,20 @@ pub enum FsBridgeError {
     IllegalSeek,
     /// Buffer too small for result (ERANGE).
     Range,
+    /// Inappropriate ioctl for device (ENOTTY).
+    NotTty,
+    /// Protocol/socket option not available (ENOPROTOOPT).
+    NoProtoOpt,
+    /// Connection refused (ECONNREFUSED).
+    ConnRefused,
+    /// Address already in use (EADDRINUSE).
+    AddrInUse,
+    /// Message too long (EMSGSIZE).
+    MsgSize,
+    /// Operation not supported (EOPNOTSUPP).
+    OpNotSupp,
+    /// Transport endpoint is already connected (EISCONN).
+    IsConn,
 }
 
 impl FsBridgeError {
@@ -101,6 +115,13 @@ impl FsBridgeError {
             FsBridgeError::NotConnected => -107, // ENOTCONN
             FsBridgeError::IllegalSeek => -29, // ESPIPE
             FsBridgeError::Range => -34,      // ERANGE
+            FsBridgeError::NotTty => -25,     // ENOTTY
+            FsBridgeError::NoProtoOpt => -92, // ENOPROTOOPT
+            FsBridgeError::ConnRefused => -111, // ECONNREFUSED
+            FsBridgeError::AddrInUse => -98,  // EADDRINUSE
+            FsBridgeError::MsgSize => -90,    // EMSGSIZE
+            FsBridgeError::OpNotSupp => -95,  // EOPNOTSUPP
+            FsBridgeError::IsConn => -106,    // EISCONN
         }
     }
 }
@@ -157,9 +178,13 @@ pub const POLLIN: i16 = 0x0001;
 
 pub const POLLOUT: i16 = 0x0004;
 
+pub const POLLERR: i16 = 0x0008;
+
 pub const POLLHUP: i16 = 0x0010;
 
 pub const POLLNVAL: i16 = 0x0020;
+
+pub const POLLRDHUP: i16 = 0x2000;
 
 pub const EPOLL_CLOEXEC: u32 = O_CLOEXEC;
 
@@ -169,7 +194,17 @@ pub const EPOLL_CTL_DEL: i32 = 2;
 
 pub const EPOLL_CTL_MOD: i32 = 3;
 
+pub const EPOLLIN: u32 = 0x0001;
+pub const EPOLLOUT: u32 = 0x0004;
+pub const EPOLLERR: u32 = 0x0008;
+pub const EPOLLHUP: u32 = 0x0010;
+pub const EPOLLRDHUP: u32 = 0x2000;
+pub const EPOLLONESHOT: u32 = 1 << 30;
+pub const EPOLLET: u32 = 1 << 31;
+
 pub const FIONREAD: u64 = 0x541B;
+
+pub const FIONBIO: u64 = 0x5421;
 
 pub const FALLOC_FL_KEEP_SIZE: u32 = 0x01;
 
@@ -236,6 +271,8 @@ pub const PSEUDO_INOTIFY_TAG: u8 = 0x1D;
 
 pub const PSEUDO_SOCKET_TAG: u8 = 0x5C;
 
+pub const PSEUDO_NET_SOCKET_TAG: u8 = 0x5E;
+
 pub const PSEUDO_MEMFD_TAG: u8 = 0xFD;
 
 pub const SOCKET_HEADER_LEN: usize = 32;
@@ -295,6 +332,7 @@ pub fn errno_to_fs_error(errno: i64) -> FsBridgeError {
         -13 => FsBridgeError::PermDenied,
         -14 => FsBridgeError::Fault,
         -22 => FsBridgeError::Invalid,
+        -25 => FsBridgeError::NotTty,
         -32 => FsBridgeError::BrokenPipe,
         _ => FsBridgeError::Io,
     }
@@ -419,7 +457,7 @@ pub struct LinuxStat {
 
 const _: () = assert!(size_of::<LinuxStat>() == 144);
 
-#[repr(C)]
+#[repr(C, packed)]
 #[derive(Clone, Copy, Default)]
 pub struct LinuxDirent64 {
     pub d_ino: u64,
@@ -429,6 +467,32 @@ pub struct LinuxDirent64 {
 }
 
 pub const DIRENT64_HEADER_SIZE: usize = size_of::<LinuxDirent64>();
+const _: () = assert!(DIRENT64_HEADER_SIZE == 19);
+
+/// Blobs unlinked/overwritten while still referenced by open file descriptors
+/// (POSIX deferred unlink): cleaned up once `OBJECT_TABLE.open_count_for(&blob_id) == 0`.
+pub static DEFERRED_UNLINK_BLOBS: Mutex<Vec<(BlobId, bool)>> = Mutex::new(Vec::new());
+pub static NEXT_UNLINK_GEN: AtomicU64 = AtomicU64::new(1);
+
+pub fn mark_deferred_unlink(blob_id: BlobId, is_symlink: bool) {
+    let mut list = DEFERRED_UNLINK_BLOBS.lock();
+    if list.iter().any(|(b, _)| *b == blob_id) {
+        return;
+    }
+    if list.try_reserve(1).is_ok() {
+        list.push((blob_id, is_symlink));
+    }
+}
+
+pub fn is_deferred_unlink(blob_id: &BlobId) -> bool {
+    DEFERRED_UNLINK_BLOBS.lock().iter().any(|(b, _)| b == blob_id)
+}
+
+pub fn take_deferred_unlink(blob_id: &BlobId) -> Option<bool> {
+    let mut list = DEFERRED_UNLINK_BLOBS.lock();
+    let pos = list.iter().position(|(b, _)| b == blob_id)?;
+    Some(list.swap_remove(pos).1)
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -480,14 +544,14 @@ pub struct LinuxPollFd {
 
 const _: () = assert!(size_of::<LinuxPollFd>() == 8);
 
-#[repr(C)]
+#[repr(C, packed)]
 #[derive(Clone, Copy, Default)]
 pub struct LinuxEpollEvent {
     pub events: u32,
     pub data: u64,
 }
 
-const _: () = assert!(size_of::<LinuxEpollEvent>() == 16);
+const _: () = assert!(size_of::<LinuxEpollEvent>() == 12);
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -761,7 +825,7 @@ pub fn dup_handle_for_fork(handle: u64) -> Option<u64> {
         return Some(handle);
     }
     if handle <= u32::MAX as u64 {
-        if let Ok(dup_fd) = OBJECT_TABLE.dup(handle as u32) {
+        if let Ok(dup_fd) = OBJECT_TABLE.dup_checked_for_owner(handle as u32, 0) {
             return Some(dup_fd as u64);
         }
     }

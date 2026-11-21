@@ -27,7 +27,7 @@ use crate::fs::exofs::core::{DiskOffset, EpochId, ExofsError, ExofsResult, Objec
 use crate::fs::exofs::epoch::epoch_barriers::{
     nvme_barrier_after_data, nvme_barrier_after_record, nvme_barrier_after_root,
 };
-use crate::fs::exofs::epoch::epoch_commit_lock::EPOCH_COMMIT_LOCK;
+use crate::fs::exofs::epoch::epoch_commit_lock::{CommitActiveGuard, EPOCH_COMMIT_LOCK};
 use crate::fs::exofs::epoch::epoch_record::EpochRecord;
 use crate::fs::exofs::epoch::epoch_root::EpochRootInMemory;
 use crate::fs::exofs::epoch::epoch_stats::EPOCH_STATS;
@@ -117,18 +117,27 @@ pub struct CommitInput<'a> {
 /// - `Ok(CommitResult)` : epoch committé, superblock mis à jour.
 /// - `Err(ExofsError::CommitInProgress)` : lock déjà tenu.
 /// - Autres erreurs : I/O failure, overflow, OOM, etc.
+fn record_commit_abort() {
+    let mut lock = EPOCH_COMMIT_LOCK.lock();
+    lock.aborted_commits = lock.aborted_commits.saturating_add(1);
+    EPOCH_STATS.inc_commits_aborted();
+}
+
 pub fn commit_epoch(input: CommitInput<'_>) -> ExofsResult<CommitResult> {
     let t_start = (input.callbacks.get_tsc)();
 
-    // ── Acquisition de EPOCH_COMMIT_LOCK (règle EPOCH-03) ──────────────────
-    let mut lock = EPOCH_COMMIT_LOCK.lock();
-    lock.commit_seq = lock.commit_seq.wrapping_add(1);
+    // Serialize concurrent commits atomically without holding a `SpinLock`
+    // (`PreemptGuard`) across blocking NVMe flushes and superblock I/O.
+    let _active_commit = CommitActiveGuard::try_begin()?;
+    {
+        let mut lock = EPOCH_COMMIT_LOCK.lock();
+        lock.commit_seq = lock.commit_seq.wrapping_add(1);
+    }
 
     // Calcul du prochain EpochId.
     let current_epoch = (input.callbacks.get_current_epoch)();
     let next_epoch = current_epoch.next().ok_or_else(|| {
-        lock.aborted_commits = lock.aborted_commits.saturating_add(1);
-        EPOCH_STATS.inc_commits_aborted();
+        record_commit_abort();
         ExofsError::OffsetOverflow
     })?;
 
@@ -136,23 +145,23 @@ pub fn commit_epoch(input: CommitInput<'_>) -> ExofsResult<CommitResult> {
     // Le payload a été écrit par l'appelant AVANT cet appel.
     // RÈGLE EPOCH-01 Phase 1 : nvme_flush() ← OBLIGATOIRE.
     if let Err(e) = nvme_barrier_after_data() {
-        lock.aborted_commits = lock.aborted_commits.saturating_add(1);
-        EPOCH_STATS.inc_commits_aborted();
+        record_commit_abort();
         EPOCH_STATS.inc_barrier_failures();
         return Err(e);
     }
     EPOCH_STATS.inc_barriers_data();
+    crate::scheduler::core::switch::maybe_yield_kthread();
 
     // ── Phase 2 : BARRIÈRE après EpochRoot ─────────────────────────────────
     // L'EpochRoot a été sérialisé et écrit AVANT cet appel.
     // RÈGLE EPOCH-01 Phase 2 : nvme_flush() ← OBLIGATOIRE.
     if let Err(e) = nvme_barrier_after_root() {
-        lock.aborted_commits = lock.aborted_commits.saturating_add(1);
-        EPOCH_STATS.inc_commits_aborted();
+        record_commit_abort();
         EPOCH_STATS.inc_barrier_failures();
         return Err(e);
     }
     EPOCH_STATS.inc_barriers_root();
+    crate::scheduler::core::switch::maybe_yield_kthread();
 
     // ── Phase 3 : Écriture de l'EpochRecord dans le slot ──────────────────
     let object_count = input.root.total_entries() as u32;
@@ -185,15 +194,14 @@ pub fn commit_epoch(input: CommitInput<'_>) -> ExofsResult<CommitResult> {
     // Écriture physique dans le slot.
     let bytes_written =
         (input.callbacks.write_fn)(&record_bytes, input.slot_offset).map_err(|e| {
-            lock.aborted_commits = lock.aborted_commits.saturating_add(1);
-            EPOCH_STATS.inc_commits_aborted();
+            record_commit_abort();
             e
         })?;
+    crate::scheduler::core::switch::maybe_yield_kthread();
 
     // Vérification bytes_written (RÈGLE WRITE-01).
     if bytes_written != 104 {
-        lock.aborted_commits = lock.aborted_commits.saturating_add(1);
-        EPOCH_STATS.inc_commits_aborted();
+        record_commit_abort();
         EPOCH_STATS.inc_partial_commits();
         return Err(ExofsError::PartialWrite);
     }
@@ -202,18 +210,17 @@ pub fn commit_epoch(input: CommitInput<'_>) -> ExofsResult<CommitResult> {
     if let Err(e) = nvme_barrier_after_record() {
         // Le record est écrit mais la barrière a échoué : état ambigu.
         // Le commit est considéré comme avorté.
-        lock.aborted_commits = lock.aborted_commits.saturating_add(1);
-        EPOCH_STATS.inc_commits_aborted();
+        record_commit_abort();
         EPOCH_STATS.inc_barrier_failures();
         return Err(e);
     }
     EPOCH_STATS.inc_barriers_record();
+    crate::scheduler::core::switch::maybe_yield_kthread();
 
     // ── Avancement du superblock ────────────────────────────────────────────
     // Injecté via callback — RÈGLE DAG-01.
     (input.callbacks.advance_epoch)(next_epoch).map_err(|e| {
-        lock.aborted_commits = lock.aborted_commits.saturating_add(1);
-        EPOCH_STATS.inc_commits_aborted();
+        record_commit_abort();
         e
     })?;
 
@@ -226,9 +233,10 @@ pub fn commit_epoch(input: CommitInput<'_>) -> ExofsResult<CommitResult> {
     if input.root.flags.contains(EpochFlags::HAS_DELETIONS) {
         EPOCH_STATS.inc_roots_with_deletions();
     }
-    lock.total_commits = lock.total_commits.saturating_add(1);
-
-    drop(lock);
+    {
+        let mut lock = EPOCH_COMMIT_LOCK.lock();
+        lock.total_commits = lock.total_commits.saturating_add(1);
+    }
 
     Ok(CommitResult {
         epoch_id: next_epoch,

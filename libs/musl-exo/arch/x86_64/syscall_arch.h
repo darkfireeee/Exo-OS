@@ -83,21 +83,9 @@ static __inline long __syscall6(long n, long a1, long a2, long a3, long a4, long
  *   Retourne : struct linux_dirent64 (compatible musl x86_64 64-bit)
  * ─────────────────────────────────────────────────────────────── */
 
-/* open() : redirigé vers le syscall combiné ExoFS Ring0 */
-#undef  __NR_open
-#define __NR_open       519
-
-/* openat() : même handler — AT_FDCWD ignoré (ExoFS résout depuis la racine) */
-#undef  __NR_openat
-#define __NR_openat     519
-
-/* creat() alias vers open() avec O_CREAT|O_WRONLY|O_TRUNC */
-#undef  __NR_creat
-#define __NR_creat      519
-
-/* getdents / getdents64 : redirigés vers SYS_EXOFS_READDIR */
-#undef  __NR_getdents
-#define __NR_getdents   520
-
-#undef  __NR_getdents64
-#define __NR_getdents64 520
+/* PHASE-3 FIX: les overrides 519/520 ont été retirés.
+ *  - openat(dirfd, path, flags, mode) a 4 arguments ; SYS_EXOFS_OPEN_BY_PATH (519)
+ *    n'en prend que 3 (path, flags, mode) et cassait tout appelant d'openat().
+ *  - Le noyau route SYS_OPEN(2), SYS_CREAT(85), SYS_OPENAT(257), SYS_GETDENTS(78)
+ *    et SYS_GETDENTS64(217) vers fs_bridge (struct linux_dirent64 standard).
+ * musl utilise donc les vrais numéros Linux x86_64 (voir bits/syscall.h.in). */

@@ -426,6 +426,10 @@ impl<'a> ElfKernel<'a> {
     /// Retourne virt_base (pour calcul des offsets de relocation).
     #[inline]
     pub fn virt_base(&self) -> u64 { self.virt_base }
+
+    /// Retourne virt_end (borne haute de l'image ELF pour validation des relocations).
+    #[inline]
+    pub fn virt_end(&self) -> u64 { self.virt_end }
 }
 
 fn cstr_eq(raw: &[u8], expected: &[u8]) -> bool {

@@ -24,6 +24,7 @@ mod raw_sys {
     pub const SYS_RECVFROM: u64 = 45;
     pub const SYS_SENDMSG: u64 = 46;
     pub const SYS_RECVMSG: u64 = 47;
+    pub const SYS_GETSOCKOPT: u64 = 55;
     pub const SYS_FCNTL: u64 = 72;
     pub const SYS_FLOCK: u64 = 73;
     pub const SYS_EPOLL_WAIT: u64 = 232;
@@ -93,6 +94,33 @@ mod raw_sys {
                 in("rsi") a2,
                 in("rdx") a3,
                 in("r10") a4,
+                lateout("rcx") _,
+                lateout("r11") _,
+                options(nostack)
+            );
+        }
+        ret
+    }
+
+    #[inline(always)]
+    pub unsafe fn syscall5(
+        nr: u64,
+        a1: u64,
+        a2: u64,
+        a3: u64,
+        a4: u64,
+        a5: u64,
+    ) -> i64 {
+        let ret: i64;
+        unsafe {
+            core::arch::asm!(
+                "syscall",
+                inlateout("rax") nr => ret,
+                in("rdi") a1,
+                in("rsi") a2,
+                in("rdx") a3,
+                in("r10") a4,
+                in("r8") a5,
                 lateout("rcx") _,
                 lateout("r11") _,
                 options(nostack)
@@ -485,6 +513,7 @@ pub mod net {
         use super::*;
         use crate::process::{Gid, Pid, Uid};
 
+        #[repr(C)]
         #[derive(Copy, Clone, Debug)]
         pub struct Ucred {
             pub pid: Pid,
@@ -492,16 +521,35 @@ pub mod net {
             pub gid: Gid,
         }
 
-        pub fn socket_peercred<Fd: AsFd>(_fd: Fd) -> crate::io::Result<Ucred> {
-            Ok(Ucred {
+        pub fn socket_peercred<Fd: AsFd>(fd: Fd) -> crate::io::Result<Ucred> {
+            const SOL_SOCKET: u64 = 1;
+            const SO_PEERCRED: u64 = 17;
+            let mut cred = Ucred {
                 pid: Pid(0),
                 uid: Uid(0),
                 gid: Gid(0),
-            })
+            };
+            let mut len = core::mem::size_of::<Ucred>() as u32;
+            let ret = unsafe {
+                raw_sys::syscall5(
+                    raw_sys::SYS_GETSOCKOPT,
+                    fd.as_fd().as_raw_fd() as u64,
+                    SOL_SOCKET,
+                    SO_PEERCRED,
+                    &mut cred as *mut Ucred as u64,
+                    &mut len as *mut u32 as u64,
+                )
+            };
+            raw_sys::decode(ret)?;
+            if len as usize >= core::mem::size_of::<Ucred>() {
+                Ok(cred)
+            } else {
+                Err(crate::io::Errno::INVAL)
+            }
         }
 
         pub fn set_socket_nosigpipe<Fd: AsFd>(_fd: Fd, _val: bool) -> crate::io::Result<()> {
-            Ok(())
+            Err(crate::io::Errno::NOSYS)
         }
     }
 }
@@ -524,6 +572,12 @@ pub mod event {
             const ERR = 0x0008;
             const HUP = 0x0010;
             const NVAL = 0x0020;
+            const RDNORM = 0x0040;
+            const RDBAND = 0x0080;
+            const WRNORM = 0x0100;
+            const WRBAND = 0x0200;
+            const MSG = 0x0400;
+            const RDHUP = 0x2000;
         }
     }
 
@@ -589,6 +643,14 @@ pub mod event {
                 const OUT = 0x0004;
                 const ERR = 0x0008;
                 const HUP = 0x0010;
+                const RDNORM = 0x0040;
+                const RDBAND = 0x0080;
+                const WRNORM = 0x0100;
+                const WRBAND = 0x0200;
+                const MSG = 0x0400;
+                const RDHUP = 0x2000;
+                const WAKEUP = 1 << 29;
+                const ONESHOT = 1 << 30;
                 const ET = 1 << 31;
             }
         }
@@ -632,6 +694,9 @@ pub mod event {
             data: u64,
         }
 
+        #[cfg(target_os = "exo")]
+        const _: () = assert!(core::mem::size_of::<RawEpollEvent>() == 16);
+
         pub fn create(flags: CreateFlags) -> crate::io::Result<OwnedFd> {
             let ret = unsafe {
                 raw_sys::syscall1(raw_sys::SYS_EPOLL_CREATE1, flags.bits() as u64)
@@ -662,6 +727,28 @@ pub mod event {
             raw_sys::decode(ret).map(|_| ())
         }
 
+        pub fn modify<EpFd: AsFd, Fd: AsFd>(
+            epfd: EpFd,
+            source: Fd,
+            data: EventData,
+            event_flags: EventFlags,
+        ) -> crate::io::Result<()> {
+            let raw_ev = RawEpollEvent {
+                events: event_flags.bits(),
+                data: data.u64(),
+            };
+            let ret = unsafe {
+                raw_sys::syscall4(
+                    raw_sys::SYS_EPOLL_CTL,
+                    epfd.as_fd().as_raw_fd() as u64,
+                    EPOLL_CTL_MOD,
+                    source.as_fd().as_raw_fd() as u64,
+                    &raw_ev as *const RawEpollEvent as u64,
+                )
+            };
+            raw_sys::decode(ret).map(|_| ())
+        }
+
         pub fn delete<EpFd: AsFd, Fd: AsFd>(epfd: EpFd, source: Fd) -> crate::io::Result<()> {
             let ret = unsafe {
                 raw_sys::syscall4(
@@ -680,13 +767,18 @@ pub mod event {
             event_list: crate::buffer::SpareCapacity<'_, Event>,
             timeout: Option<&Timespec>,
         ) -> crate::io::Result<()> {
-            let cap = event_list.0.capacity().max(16).min(64);
+            let avail = event_list
+                .0
+                .capacity()
+                .saturating_sub(event_list.0.len())
+                .max(16)
+                .min(1024);
             let mut raw_events = vec![
                 RawEpollEvent {
                     events: 0,
                     data: 0
                 };
-                cap
+                avail
             ];
             let timeout_ms: i32 = match timeout {
                 Some(ts) => (ts.tv_sec.saturating_mul(1000) + ts.tv_nsec / 1_000_000) as i32,
@@ -697,7 +789,7 @@ pub mod event {
                     raw_sys::SYS_EPOLL_WAIT,
                     epfd.as_fd().as_raw_fd() as u64,
                     raw_events.as_mut_ptr() as u64,
-                    cap as u64,
+                    avail as u64,
                     timeout_ms as i64 as u64,
                 )
             };
@@ -794,11 +886,15 @@ pub mod fs {
         #[derive(Copy, Clone, Debug, PartialEq, Eq)]
         pub struct MemfdFlags: u32 {
             const CLOEXEC = 0x0001;
+            const ALLOW_SEALING = 0x0002;
+            const HUGETLB = 0x0004;
+            const NOEXEC_SEAL = 0x0008;
+            const EXEC = 0x0010;
         }
     }
 
     pub fn memfd_create<P: AsRef<CStr>>(name: P, flags: MemfdFlags) -> crate::io::Result<OwnedFd> {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "exo"))]
         {
             let ret = unsafe {
                 raw_sys::syscall2(
@@ -810,7 +906,7 @@ pub mod fs {
             let fd = raw_sys::decode(ret)? as RawFd;
             Ok(unsafe { OwnedFd::from_raw_fd(fd) })
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "exo")))]
         {
             Err(crate::io::Errno::NOSYS)
         }

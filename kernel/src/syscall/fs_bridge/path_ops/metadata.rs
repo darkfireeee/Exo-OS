@@ -211,8 +211,16 @@ pub fn fs_fchmod(fd: u32, mode: u32, pid: u32) -> Result<i64, FsBridgeError> {
     let entry = OBJECT_TABLE
         .get(resolve_fd(pid, fd)?.handle)
         .map_err(exofs_to_bridge_error)?;
-    let is_dir = blob_is_directory_by_id(&entry.blob_id);
-    let type_bits = if is_dir { S_IFDIR } else { S_IFREG };
+    let type_bits = stored_mode(&entry.blob_id)
+        .map(|m| m & S_IFMT)
+        .filter(|&t| t != 0)
+        .unwrap_or_else(|| {
+            if blob_is_directory_by_id(&entry.blob_id) {
+                S_IFDIR
+            } else {
+                S_IFREG
+            }
+        });
     upsert_mode(entry.blob_id, type_bits | (mode & 0o7777));
     Ok(0)
 }
@@ -246,7 +254,7 @@ pub fn fs_mknod(path: &[u8], mode: u32, dev: u64, pid: u32) -> Result<i64, FsBri
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);
     }
-    let _ = (dev, pid);
+    let _ = dev;
     let kind = mode & S_IFMT;
     if kind != 0 && kind != S_IFREG && kind != S_IFIFO {
         return Err(FsBridgeError::Invalid);
@@ -257,6 +265,14 @@ pub fn fs_mknod(path: &[u8], mode: u32, dev: u64, pid: u32) -> Result<i64, FsBri
         mode,
         pid,
     )? as u32;
+    if kind == S_IFIFO {
+        if let Ok(resolved) = resolve_fd(pid, fd) {
+            if let Ok(entry) = OBJECT_TABLE.get(resolved.handle) {
+                let effective = S_IFIFO | apply_umask(mode, 0o666, pid);
+                upsert_mode(entry.blob_id, effective);
+            }
+        }
+    }
     let _ = fs_close(fd, pid);
     Ok(0)
 }
@@ -270,10 +286,11 @@ pub fn fs_mknodat(
     dev: u64,
     pid: u32,
 ) -> Result<i64, FsBridgeError> {
-    if dirfd == AT_FDCWD || path.starts_with(b"/") {
-        return fs_mknod(path, mode, dev, pid);
+    if !is_fs_ready() {
+        return Err(FsBridgeError::NotReady);
     }
-    Err(FsBridgeError::Invalid)
+    let resolved = resolve_dirfd_path(dirfd, path, pid)?;
+    fs_mknod(&resolved, mode, dev, pid)
 }
 
 /// `sync_file_range(fd, offset, nbytes, flags)`.
@@ -380,11 +397,9 @@ pub fn fs_statx(
         return Err(FsBridgeError::NotFound);
     }
 
-    if dirfd != AT_FDCWD && !path.starts_with(b"/") {
-        return Err(FsBridgeError::Invalid);
-    }
+    let resolved_path = resolve_dirfd_path(dirfd, path, pid)?;
     let follow = flags & AT_SYMLINK_NOFOLLOW == 0;
-    let normalized_path = resolve_path_with_symlinks(path, follow, false)?;
+    let normalized_path = resolve_path_with_symlinks(&resolved_path, follow, false)?;
     let (blob_id, kind) = path_entry(&normalized_path)?;
     let statx = linux_statx_for_blob_meta(
         blob_id,
@@ -429,11 +444,9 @@ pub fn fs_utimensat(
             if p.is_empty() {
                 return Err(FsBridgeError::NotFound);
             }
-            if dirfd != AT_FDCWD && !p.starts_with(b"/") {
-                return Err(FsBridgeError::Invalid);
-            }
+            let resolved_path = resolve_dirfd_path(dirfd, p, pid)?;
             let follow = (flags & AT_SYMLINK_NOFOLLOW) == 0;
-            let normalized = resolve_path_with_symlinks(p, follow, false)?;
+            let normalized = resolve_path_with_symlinks(&resolved_path, follow, false)?;
             let (bid, _) = path_entry(&normalized)?;
             bid
         }

@@ -44,20 +44,66 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@master
         with:
-          components: rust-src
+          toolchain: nightly-2026-03-19
+          components: rust-src, llvm-tools
           targets: x86_64-unknown-none,x86_64-unknown-uefi
       - run: |
-          cargo check --manifest-path exo-boot/Cargo.toml \
+          cmp -s x86_64-unknown-exo.json targets/x86_64-unknown-exo.json
+          bash scripts/prepare_exo_rust_src.sh "$PWD/target/exo-rust-src/library"
+          export __CARGO_TESTS_ONLY_SRC_ROOT="$PWD/target/exo-rust-src/library"
+          STD_FLAGS=(
+            -Z json-target-spec
+            -Z build-std=core,alloc,std,panic_abort
+            -Z build-std-features=compiler-builtins-mem
+            --config "patch.crates-io.libc.path=\"$PWD/libs/vendors/libc\""
+          )
+
+          cargo check --locked --manifest-path exo-boot/Cargo.toml \
             --target x86_64-unknown-uefi \
-            --features "uefi-boot,dev-skip-sig"
-          cargo check --manifest-path loader/Cargo.toml --all-targets
-          cargo check -p exo-os-kernel \
+            -Z build-std=core,alloc,compiler_builtins \
+            -Z build-std-features=compiler-builtins-mem \
+            --features "uefi-boot"
+          cargo check --locked --manifest-path loader/Cargo.toml --all-targets
+          cargo check --locked -p exo-loader --features dynamic_linking \
+            --target x86_64-exo-loader.json \
+            -Z json-target-spec \
+            -Z build-std=core,alloc,compiler_builtins \
+            -Z build-std-features=compiler-builtins-mem
+          cargo check --locked -p exo-os-kernel \
             -Z build-std=core,alloc,compiler_builtins \
             -Z build-std-features=compiler-builtins-mem \
             --target x86_64-unknown-none
+          cargo check --locked \
+            -p exo-init-server -p exo-ipc-router -p exo-memory-server -p exo-vfs-server \
+            -p exo-crypto-server -p exo-device-server -p exo-virtio-drivers -p exo-e1000-driver \
+            -p exo-virtio-net-driver -p exo-loopback-driver -p exo-network-server \
+            -p exo-scheduler-server -p exo-input-server -p exo-fb-server -p exo-tty-server \
+            -p exo-ps2-input -p exo-shield -p exo-fat-server -p exo-ext-server -p exo-audio-server \
+            -p exo-usb-server \
+            -F exo-network-server/baremetal-bin \
+            --target x86_64-exo-userspace.json \
+            -Z json-target-spec \
+            -Z build-std=core,alloc,compiler_builtins \
+            -Z build-std-features=compiler-builtins-mem
+          cargo check --locked -p exo-exosh \
+            --target targets/x86_64-unknown-exo.json "${STD_FLAGS[@]}"
+          cargo check --locked --manifest-path userspace/apps/coreutils/Cargo.toml \
+            --bins --target-dir target \
+            --target targets/x86_64-unknown-exo.json "${STD_FLAGS[@]}"
+          cargo check --locked --manifest-path tests/exo-compliance/Cargo.toml \
+            --bins --target-dir target \
+            --target targets/x86_64-unknown-exo.json "${STD_FLAGS[@]}"
+          cargo check --locked --manifest-path tests/exo-compliance/Cargo.toml \
+            --bins --target-dir target \
+            --target targets/x86_64-unknown-exo-pie.json "${STD_FLAGS[@]}"
+          cargo check --locked --manifest-path libs/wayland-rs/Cargo.toml \
+            -p rustix@1.0.2 -p wayland-client -p wayland-protocols -p wayland-cursor \
+            --target targets/x86_64-unknown-exo.json "${STD_FLAGS[@]}"
           for manifest in servers/*/Cargo.toml; do
-            cargo check --manifest-path "$manifest"
+            [ "$manifest" = "servers/exosh/Cargo.toml" ] && continue
+            cargo check --locked --manifest-path "$manifest"
           done
-          cargo check --manifest-path userspace/Cargo.toml --workspace --all-targets
+          cargo check --locked --manifest-path userspace/Cargo.toml --workspace --all-targets
+          cargo check --locked --manifest-path libs/Cargo.toml

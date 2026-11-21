@@ -6,6 +6,10 @@ use crate::path::{Path, PathBuf};
 pub mod common;
 
 cfg_select! {
+    target_os = "exo" => {
+        mod exo;
+        use exo as imp;
+    }
     any(target_family = "unix", target_os = "wasi") => {
         mod unix;
         use unix as imp;
@@ -33,10 +37,6 @@ cfg_select! {
         mod motor;
         use motor as imp;
     }
-    target_os = "exo" => {
-        mod exo;
-        use exo as imp;
-    }
     target_os = "solid_asp3" => {
         mod solid;
         use solid as imp;
@@ -56,7 +56,7 @@ cfg_select! {
 }
 
 // FIXME: Replace this with platform-specific path conversion functions.
-#[cfg(not(any(target_family = "unix", target_os = "windows", target_os = "wasi")))]
+#[cfg(any(not(any(target_family = "unix", target_os = "windows", target_os = "wasi")), target_os = "exo"))]
 #[inline]
 pub fn with_native_path<T>(path: &Path, f: &dyn Fn(&Path) -> io::Result<T>) -> io::Result<T> {
     f(path)
@@ -124,7 +124,7 @@ pub fn set_permissions(path: &Path, perm: FilePermissions) -> io::Result<()> {
     with_native_path(path, &|path| imp::set_perm(path, perm.clone()))
 }
 
-#[cfg(all(unix, not(target_os = "vxworks")))]
+#[cfg(all(unix, not(any(target_os = "vxworks", target_os = "exo"))))]
 pub fn set_permissions_nofollow(path: &Path, perm: crate::fs::Permissions) -> io::Result<()> {
     use crate::fs::OpenOptions;
 
@@ -141,7 +141,7 @@ pub fn set_permissions_nofollow(path: &Path, perm: crate::fs::Permissions) -> io
     options.open(path)?.set_permissions(perm)
 }
 
-#[cfg(any(not(unix), target_os = "vxworks"))]
+#[cfg(any(not(unix), target_os = "vxworks", target_os = "exo"))]
 pub fn set_permissions_nofollow(_path: &Path, _perm: crate::fs::Permissions) -> io::Result<()> {
     crate::unimplemented!(
         "`set_permissions_nofollow` is currently only implemented on Unix platforms"

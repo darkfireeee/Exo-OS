@@ -210,7 +210,7 @@ fn reap_zombie_child(parent_pid: Pid, wait_pid: i32, opts: WaitOptions) -> Optio
     let addr_space_ptr = pcb_box.address_space.load(Ordering::Acquire);
     let pcb_flags = pcb_box.flags.load(Ordering::Acquire);
     let is_vfork_shared = pcb_flags & crate::process::core::pcb::process_flags::VFORK_SHARED_AS != 0;
-    {
+    if alloc::sync::Arc::strong_count(&pcb_box.files) == 1 {
         let mut files = pcb_box.files.lock();
         files.close_all_noalloc();
     }

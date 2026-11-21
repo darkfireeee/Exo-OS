@@ -328,6 +328,7 @@ pub fn write_at_offset(offset: DiskOffset, data: &[u8]) -> ExofsResult<usize> {
             device.write_block(lba, &block)?;
             written = written.saturating_add(chunk);
             lba = lba.saturating_add(1);
+            crate::fs::exofs::syscall::object_store::maybe_yield_io();
         }
         Ok(written)
     })
@@ -361,6 +362,7 @@ pub fn read_at_offset(offset: DiskOffset, len: usize) -> ExofsResult<Vec<u8>> {
             out.extend_from_slice(&block[off..off + chunk]);
             read = read.saturating_add(chunk);
             lba = lba.saturating_add(1);
+            crate::fs::exofs::syscall::object_store::maybe_yield_io();
         }
         Ok(out)
     })

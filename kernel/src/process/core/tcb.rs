@@ -24,7 +24,7 @@ use crate::scheduler::core::task::{
 };
 use alloc::alloc::{alloc, dealloc, Layout};
 use alloc::boxed::Box;
-use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize};
 
 fn try_box_new<T>(value: T) -> Option<Box<T>> {
     let layout = Layout::new::<T>();
@@ -91,6 +91,7 @@ fn try_process_thread_box(
         core::ptr::addr_of_mut!((*raw).join_done).write(AtomicBool::new(false));
         core::ptr::addr_of_mut!((*raw).join_result).write(AtomicU64::new(0));
         core::ptr::addr_of_mut!((*raw).clear_child_tid).write(AtomicU64::new(0));
+        core::ptr::addr_of_mut!((*raw).in_handler).write(AtomicU32::new(0));
         core::ptr::addr_of_mut!((*raw).name)
             .write(crate::scheduler::sync::spinlock::SpinLock::new([0u8; 16]));
         SigQueue::init_at(core::ptr::addr_of_mut!((*raw).sig_queue));
@@ -171,10 +172,14 @@ pub struct ThreadAddress {
 }
 
 impl ThreadAddress {
-    /// Address of top of sigaltstack (base + size).
+    /// Address of top of sigaltstack (base + size), or 0 if disabled.
     #[inline(always)]
     pub fn sigaltstack_top(&self) -> u64 {
-        self.sigaltstack_base.saturating_add(self.sigaltstack_size)
+        if self.sigaltstack_base == 0 || self.sigaltstack_size == 0 {
+            0
+        } else {
+            self.sigaltstack_base.saturating_add(self.sigaltstack_size)
+        }
     }
 }
 
@@ -429,6 +434,8 @@ pub struct ProcessThread {
     pub join_result: AtomicU64,
     /// Userspace address cleared and woken via futex upon thread exit (`CLONE_CHILD_CLEARTID` / `set_tid_address`).
     pub clear_child_tid: AtomicU64,
+    /// Per-thread signal handler nesting flag (0 = outside handler, 1 = inside handler).
+    pub in_handler: AtomicU32,
     /// Per-thread name (16 bytes max, set via `prctl(PR_SET_NAME)`).
     pub name: crate::scheduler::sync::spinlock::SpinLock<[u8; 16]>,
 

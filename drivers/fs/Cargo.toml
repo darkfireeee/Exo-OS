@@ -2,6 +2,8 @@
 name    = "exo-os-driver-fs"
 version = "0.1.0"
 edition = "2021"
+license.workspace = true
+publish = false
 
 [lib]
 name       = "exo_os_driver_fs"

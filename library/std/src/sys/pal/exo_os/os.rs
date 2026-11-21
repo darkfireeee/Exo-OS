@@ -9,15 +9,20 @@ use crate::{fmt, io};
 use super::{cstr_bytes, map_exo_err, syscall};
 
 pub fn getcwd() -> io::Result<PathBuf> {
-    let mut buf = [0u8; 512];
-    match syscall::getcwd(&mut buf) {
-        Ok(n) if n > 0 => {
-            let end = buf[..n].iter().position(|&b| b == 0).unwrap_or(n);
-            Ok(PathBuf::from(OsString::from_vec(buf[..end].to_vec())))
+    for cap in [512usize, 1024, 4096] {
+        let mut buf = crate::vec![0u8; cap];
+        match syscall::getcwd(&mut buf) {
+            Ok(n) if n > 0 => {
+                let end = buf[..n].iter().position(|&b| b == 0).unwrap_or(n);
+                buf.truncate(end);
+                return Ok(PathBuf::from(OsString::from_vec(buf)));
+            }
+            Ok(_) => return Err(io::Error::from_raw_os_error(syscall::SysError::ENOENT.errno())),
+            Err(e) if e == syscall::SysError::ERANGE && cap < 4096 => continue,
+            Err(e) => return Err(map_exo_err(e)),
         }
-        Ok(_) => Ok(PathBuf::from("/")),
-        Err(e) => Err(map_exo_err(e)),
     }
+    Err(map_exo_err(syscall::SysError::ERANGE))
 }
 
 pub fn chdir(path: &path::Path) -> io::Result<()> {
@@ -76,6 +81,17 @@ impl fmt::Display for JoinPathsError {
 impl StdError for JoinPathsError {}
 
 pub fn current_exe() -> io::Result<PathBuf> {
+    let execfn = super::runtime::at_execfn_ptr();
+    if !execfn.is_null() {
+        let mut len = 0usize;
+        while unsafe { *execfn.add(len) } != 0 {
+            len += 1;
+        }
+        if len > 0 {
+            let slice = unsafe { core::slice::from_raw_parts(execfn, len) };
+            return Ok(PathBuf::from(OsStr::from_bytes(slice)));
+        }
+    }
     let (argc, argv, _) = super::runtime::saved_args();
     if argc > 0 && !argv.is_null() {
         let p0 = unsafe { *argv };
@@ -84,11 +100,13 @@ pub fn current_exe() -> io::Result<PathBuf> {
             while unsafe { *p0.add(len) } != 0 {
                 len += 1;
             }
-            let slice = unsafe { core::slice::from_raw_parts(p0, len) };
-            return Ok(PathBuf::from(OsStr::from_bytes(slice)));
+            if len > 0 {
+                let slice = unsafe { core::slice::from_raw_parts(p0, len) };
+                return Ok(PathBuf::from(OsStr::from_bytes(slice)));
+            }
         }
     }
-    Ok(PathBuf::from("/bin/exosh"))
+    Err(io::Error::from(io::ErrorKind::NotFound))
 }
 
 pub fn temp_dir() -> PathBuf {

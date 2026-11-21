@@ -3,6 +3,10 @@
 #![forbid(unsafe_op_in_unsafe_fn)]
 
 cfg_select! {
+    target_os = "exo" => {
+        mod exo;
+        pub use exo::*;
+    }
     any(target_family = "unix", target_os = "wasi") => {
         mod unix;
         pub use unix::*;
@@ -14,10 +18,6 @@ cfg_select! {
     target_os = "motor" => {
         mod motor;
         pub use motor::*;
-    }
-    target_os = "exo" => {
-        mod exo;
-        pub use exo::*;
     }
     all(target_vendor = "fortanix", target_env = "sgx") => {
         mod sgx;

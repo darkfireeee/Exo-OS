@@ -234,6 +234,6 @@ pub fn load_vfs_namespace_if_disk() -> ExofsResult<bool> {
 
 pub fn persist_vfs_namespace_if_disk() -> ExofsResult<bool> {
     let data = serialize_vfs_namespace()?;
-    object_store::persist_blob_data_if_disk(vfs_namespace_blob_id(), &data, true)
+    object_store::persist_blob_data_if_disk(vfs_namespace_blob_id(), &data, false)
 }
 

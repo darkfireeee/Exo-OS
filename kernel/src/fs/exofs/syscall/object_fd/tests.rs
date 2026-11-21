@@ -232,3 +232,29 @@ fn test_open_flags_can_read_write() {
     assert!(!open_flags::can_read(open_flags::O_WRONLY));
     assert!(open_flags::can_write(open_flags::O_WRONLY));
 }
+
+#[test]
+fn test_scm_rights_owner_transfer_and_close_promotion() {
+    let t = fresh_table();
+    let blob = make_blob(21);
+    let sender_fd = ok(t.open(blob, open_flags::O_RDWR, 4096, 1, 20));
+    let staged_fd = ok(t.dup_checked_for_owner(sender_fd, 0));
+    assert_eq!(ok(t.get(staged_fd)).owner_uid, 0);
+
+    let receiver_fd = ok(t.dup_transferred(staged_fd, 9));
+    assert_eq!(ok(t.get(receiver_fd)).owner_uid, 9);
+    assert_eq!(ok(t.get(sender_fd)).owner_uid, 20);
+    // Reject transfer of an active per-process handle that was not staged (`owner_uid != 0`).
+    assert!(t.dup_transferred(receiver_fd, 33).is_err());
+
+    // Closing the staged handle and canonical sender handle promotes receiver_fd
+    // while preserving its owner_uid = 9.
+    assert!(t.close(staged_fd));
+    assert!(t.close(sender_fd));
+    let survived = ok(t.get(receiver_fd));
+    assert_eq!(survived.owner_uid, 9);
+    assert_eq!(survived.blob_id, blob);
+    assert_eq!(t.open_count_for(&blob), 1);
+    assert!(t.close(receiver_fd));
+    assert_eq!(t.open_count(), 0);
+}

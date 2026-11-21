@@ -125,37 +125,93 @@ pub fn set_process_fd_flags(pid: u32, fd: u32, flags: u32) -> bool {
 }
 
 #[inline]
-pub fn fd_readiness(fd: u32, pid: u32) -> Result<(bool, bool), FsBridgeError> {
+pub fn fd_readiness_mask(fd: u32, pid: u32) -> Result<u32, FsBridgeError> {
     let resolved = resolve_fd(pid, fd)?;
     if is_tty_handle(resolved.handle) {
-        return Ok((
-            fd_can_read_flags(resolved.flags),
-            fd_can_write_flags(resolved.flags),
-        ));
+        let mut mask = 0u32;
+        if fd_can_read_flags(resolved.flags) {
+            mask |= EPOLLIN;
+        }
+        if fd_can_write_flags(resolved.flags) {
+            mask |= EPOLLOUT;
+        }
+        return Ok(mask);
     }
     let entry = OBJECT_TABLE
         .get(resolved.handle)
         .map_err(exofs_to_bridge_error)?;
-    let mut readable = entry.can_read();
-    let writable = entry.can_write();
 
-    if readable && is_pseudo_blob(&entry.blob_id, PSEUDO_PIPE_TAG) {
-        readable = blob_len(&entry.blob_id) != 0
-            || OBJECT_TABLE.open_count_for(&entry.blob_id)
-                <= OBJECT_TABLE.readable_count_for(&entry.blob_id);
-    } else if readable && is_pseudo_blob(&entry.blob_id, PSEUDO_EVENTFD_TAG) {
-        readable = eventfd_state(entry.blob_id)
-            .map(|(value, _)| value != 0)
-            .unwrap_or(false);
-    } else if readable && is_pseudo_blob(&entry.blob_id, PSEUDO_INOTIFY_TAG) {
-        readable = false;
-    } else if readable && is_pseudo_blob(&entry.blob_id, PSEUDO_SOCKET_TAG) {
-        readable = socket_is_readable(entry.blob_id);
-    } else if readable && is_pseudo_blob(&entry.blob_id, PSEUDO_EPOLL_TAG) {
-        readable = epoll_has_ready_watch(entry.blob_id, pid);
+    if is_pseudo_blob(&entry.blob_id, PSEUDO_PIPE_TAG) {
+        let mut mask = 0u32;
+        let len = blob_len(&entry.blob_id);
+        let open_cnt = OBJECT_TABLE.open_count_for(&entry.blob_id);
+        let read_cnt = OBJECT_TABLE.readable_count_for(&entry.blob_id);
+        let no_writers = open_cnt <= read_cnt;
+        if entry.can_read() {
+            if len != 0 || no_writers {
+                mask |= EPOLLIN;
+            }
+            if no_writers {
+                mask |= EPOLLHUP;
+            }
+        }
+        if entry.can_write() {
+            if read_cnt == 0 {
+                mask |= EPOLLERR;
+            } else if len < PIPE_MAX_CAPACITY {
+                mask |= EPOLLOUT;
+            }
+        }
+        return Ok(mask);
     }
 
-    Ok((readable, writable))
+    if is_pseudo_blob(&entry.blob_id, PSEUDO_EVENTFD_TAG) {
+        let mut mask = 0u32;
+        if let Ok((value, _)) = eventfd_state(entry.blob_id) {
+            if entry.can_read() && value != 0 {
+                mask |= EPOLLIN;
+            }
+            if entry.can_write() && value < u64::MAX - 1 {
+                mask |= EPOLLOUT;
+            }
+        }
+        return Ok(mask);
+    }
+
+    if is_pseudo_blob(&entry.blob_id, PSEUDO_INOTIFY_TAG) {
+        return Ok(0);
+    }
+
+    if is_pseudo_blob(&entry.blob_id, PSEUDO_SOCKET_TAG) {
+        return Ok(socket_readiness_mask(entry.blob_id));
+    }
+
+    if is_pseudo_blob(&entry.blob_id, PSEUDO_NET_SOCKET_TAG) {
+        return Ok(crate::syscall::net_bridge::net_poll_mask_for_blob(entry.blob_id));
+    }
+
+    if is_pseudo_blob(&entry.blob_id, PSEUDO_EPOLL_TAG) {
+        let mut mask = 0u32;
+        if entry.can_read() && epoll_has_ready_watch(entry.blob_id, pid) {
+            mask |= EPOLLIN;
+        }
+        return Ok(mask);
+    }
+
+    let mut mask = 0u32;
+    if entry.can_read() {
+        mask |= EPOLLIN;
+    }
+    if entry.can_write() {
+        mask |= EPOLLOUT;
+    }
+    Ok(mask)
+}
+
+#[inline]
+pub fn fd_readiness(fd: u32, pid: u32) -> Result<(bool, bool), FsBridgeError> {
+    let mask = fd_readiness_mask(fd, pid)?;
+    Ok(((mask & EPOLLIN) != 0, (mask & EPOLLOUT) != 0))
 }
 
 #[inline]
@@ -172,16 +228,63 @@ pub fn flock_range_from_abi(fl: LinuxFlock) -> Result<(u64, u64), FsBridgeError>
     Ok((start, len))
 }
 
+static LOCK_WAIT_GEN: AtomicU64 = AtomicU64::new(0);
+static LOCK_WAITERS: Mutex<Vec<u64>> = Mutex::new(Vec::new());
+
+/// Wakes all threads blocked on `F_SETLKW` or blocking `flock`.
+pub fn notify_lock_waiters() {
+    LOCK_WAIT_GEN.fetch_add(1, Ordering::AcqRel);
+    let to_wake: Vec<u64> = {
+        let mut waiters = LOCK_WAITERS.lock();
+        let mut out = Vec::new();
+        core::mem::swap(&mut out, &mut *waiters);
+        out
+    };
+    for tcb_raw in to_wake {
+        crate::scheduler::timer::sleep::wake_sleeping_tcb(tcb_raw);
+    }
+}
+
+fn wait_for_lock_event(observed_gen: u64) -> Result<(), FsBridgeError> {
+    let tcb = crate::scheduler::core::switch::current_thread_raw() as u64;
+    if tcb == 0 {
+        return Err(FsBridgeError::WouldBlock);
+    }
+    {
+        let mut waiters = LOCK_WAITERS.lock();
+        if LOCK_WAIT_GEN.load(Ordering::Acquire) != observed_gen {
+            return Ok(());
+        }
+        if !waiters.contains(&tcb) {
+            let _ = waiters.try_reserve(1);
+            if waiters.capacity() > waiters.len() {
+                waiters.push(tcb);
+            }
+        }
+    }
+    let ok = crate::scheduler::timer::sleep::sleep_ns_if(100_000_000, || {
+        LOCK_WAIT_GEN.load(Ordering::Acquire) == observed_gen
+    });
+    {
+        let mut waiters = LOCK_WAITERS.lock();
+        if let Some(pos) = waiters.iter().position(|&w| w == tcb) {
+            waiters.swap_remove(pos);
+        }
+    }
+    if !ok {
+        return Err(FsBridgeError::Interrupted);
+    }
+    Ok(())
+}
+
 /// Close an `OBJECT_TABLE` handle and clean up any pseudo-blob when its last reference drops.
 #[inline]
 pub fn close_object_handle_with_cleanup(obj_fd: u32) -> bool {
-    let maybe_blob = OBJECT_TABLE.get(obj_fd).ok().map(|e| e.blob_id);
-    if OBJECT_TABLE.close(obj_fd) {
-        if let Some(blob_id) = maybe_blob {
-            if OBJECT_TABLE.open_count_for(&blob_id) == 0 {
-                cleanup_closed_blob(blob_id);
-            }
+    if let Some(blob_id) = OBJECT_TABLE.close_for_cleanup(obj_fd) {
+        if OBJECT_TABLE.open_count_for(&blob_id) == 0 {
+            cleanup_closed_blob(blob_id);
         }
+        notify_io_event(Some(blob_id));
         true
     } else {
         false
@@ -209,7 +312,19 @@ pub fn fs_close(fd: u32, pid: u32) -> Result<i64, FsBridgeError> {
     if removed_from_pcb.is_none() && pid != 0 && entry.owner_uid != 0 && entry.owner_uid != pid as u64 {
         return Err(FsBridgeError::BadFd);
     }
+    let closed_blob = entry.blob_id;
     if close_object_handle_with_cleanup(obj_fd) {
+        // POSIX: closing any fd referencing an inode releases the process's fcntl/flock locks on it.
+        let object_id = inode_from_blob_id(&closed_blob);
+        let _ = crate::fs::exofs::posix_bridge::fcntl_lock::FCNTL_LOCK_TABLE.release(
+            object_id,
+            pid as u64,
+            0,
+            0,
+            u64::MAX,
+        );
+        notify_lock_waiters();
+        notify_io_event(Some(closed_blob));
         Ok(0)
     } else {
         Err(FsBridgeError::BadFd)
@@ -359,6 +474,7 @@ pub fn fs_fcntl(fd: u32, cmd: u32, arg: u64, pid: u32) -> Result<i64, FsBridgeEr
             })
         }
         F_SETFD => {
+            let _ = resolve_fd(pid, fd)?;
             if arg & !FD_CLOEXEC != 0 {
                 return Err(FsBridgeError::Invalid);
             }
@@ -385,25 +501,23 @@ pub fn fs_fcntl(fd: u32, cmd: u32, arg: u64, pid: u32) -> Result<i64, FsBridgeEr
             }
         }
         F_SETFL => {
-            let supported = (open_flags::O_APPEND | O_NONBLOCK) as u64;
-            if arg & !supported != 0 {
-                return Err(FsBridgeError::Invalid);
-            }
+            // POSIX: F_SETFL ignores file access mode (O_ACCMODE) and file creation flags,
+            // updating only mutable file status flags (O_APPEND | O_NONBLOCK).
             let resolved = resolve_fd(pid, fd)?;
+            let mutable = (arg as u32) & (open_flags::O_APPEND | O_NONBLOCK);
             if is_tty_handle(resolved.handle) {
-                let access = resolved.flags & 0x3;
-                let flags = access | ((arg as u32) & O_NONBLOCK);
+                let access = resolved.flags & (0x3 | O_CLOEXEC);
+                let flags = access | (mutable & O_NONBLOCK);
                 let _ = set_process_fd_flags(pid, fd, flags);
-                Ok(flags as i64)
+                Ok(0)
             } else {
                 let flags = OBJECT_TABLE
-                    .set_status_flags(resolved.handle, (arg as u32) & !O_NONBLOCK)
+                    .set_status_flags(resolved.handle, mutable)
                     .map_err(exofs_to_bridge_error)?;
                 let descriptor_flags = (resolved.flags & (0x3 | O_CLOEXEC))
-                    | (flags & open_flags::O_APPEND)
-                    | ((arg as u32) & O_NONBLOCK);
+                    | (flags & (open_flags::O_APPEND | O_NONBLOCK));
                 let _ = set_process_fd_flags(pid, fd, descriptor_flags);
-                Ok((flags | (descriptor_flags & O_NONBLOCK)) as i64)
+                Ok(0)
             }
         }
         F_SETLK | F_SETLKW => {
@@ -426,10 +540,25 @@ pub fn fs_fcntl(fd: u32, cmd: u32, arg: u64, pid: u32) -> Result<i64, FsBridgeEr
             if kind != LockKind::Unlock {
                 validate_lock(&lock).map_err(exofs_to_bridge_error)?;
             }
-            FCNTL_LOCK_TABLE
-                .acquire(lock)
-                .map(|_| 0)
-                .map_err(exofs_to_bridge_error)
+            loop {
+                let gen = LOCK_WAIT_GEN.load(Ordering::Acquire);
+                match FCNTL_LOCK_TABLE.acquire(lock) {
+                    Ok(()) => {
+                        if kind == LockKind::Unlock {
+                            notify_lock_waiters();
+                        }
+                        return Ok(0);
+                    }
+                    Err(ExofsError::PermissionDenied) => {
+                        if cmd == F_SETLKW && kind != LockKind::Unlock {
+                            wait_for_lock_event(gen)?;
+                            continue;
+                        }
+                        return Err(FsBridgeError::WouldBlock);
+                    }
+                    Err(err) => return Err(exofs_to_bridge_error(err)),
+                }
+            }
         }
         F_GETLK => {
             let mut fl = read_user_typed::<LinuxFlock>(arg).map_err(|_| FsBridgeError::Fault)?;
@@ -499,14 +628,32 @@ pub fn fs_flock(fd: u32, operation: u32, pid: u32) -> Result<i64, FsBridgeError>
         _ => return Err(FsBridgeError::Invalid),
     };
     let object_id = inode_from_blob_id(&entry.blob_id);
-    use crate::fs::exofs::posix_bridge::fcntl_lock::{make_lock, validate_lock, FCNTL_LOCK_TABLE};
+    let nonblock = (operation & LOCK_NB) != 0;
+    use crate::fs::exofs::posix_bridge::fcntl_lock::{
+        make_lock, validate_lock, LockKind, FCNTL_LOCK_TABLE,
+    };
     let lock = make_lock(object_id, pid as u64, 0, 0, u64::MAX, kind);
-    if kind != crate::fs::exofs::posix_bridge::fcntl_lock::LockKind::Unlock {
+    if kind != LockKind::Unlock {
         validate_lock(&lock).map_err(exofs_to_bridge_error)?;
     }
-    FCNTL_LOCK_TABLE
-        .acquire(lock)
-        .map(|_| 0)
-        .map_err(exofs_to_bridge_error)
+    loop {
+        let gen = LOCK_WAIT_GEN.load(Ordering::Acquire);
+        match FCNTL_LOCK_TABLE.acquire(lock) {
+            Ok(()) => {
+                if kind == LockKind::Unlock {
+                    notify_lock_waiters();
+                }
+                return Ok(0);
+            }
+            Err(ExofsError::PermissionDenied) => {
+                if !nonblock && kind != LockKind::Unlock {
+                    wait_for_lock_event(gen)?;
+                    continue;
+                }
+                return Err(FsBridgeError::WouldBlock);
+            }
+            Err(err) => return Err(exofs_to_bridge_error(err)),
+        }
+    }
 }
 

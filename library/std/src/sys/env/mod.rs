@@ -16,6 +16,10 @@
 mod common;
 
 cfg_select! {
+    target_os = "exo" => {
+        mod exo;
+        pub use exo::*;
+    }
     target_family = "unix" => {
         mod unix;
         pub use unix::*;
@@ -31,10 +35,6 @@ cfg_select! {
     target_os = "motor" => {
         mod motor;
         pub use motor::*;
-    }
-    target_os = "exo" => {
-        mod exo;
-        pub use exo::*;
     }
     all(target_vendor = "fortanix", target_env = "sgx") => {
         mod sgx;

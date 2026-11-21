@@ -327,11 +327,17 @@ pub fn ack_irq_canonical(
         return Ok(());
     }
 
+    let remaining = prev - 1;
     if is_stale {
+        if remaining == 0 {
+            route.handled_count.store(0, Ordering::Release);
+            route.overflow_count.store(0, Ordering::Relaxed);
+            route.masked_since.store(0, Ordering::Release);
+            route.masked.store(false, Ordering::Release);
+            route.soft_alarmed.store(false, Ordering::Relaxed);
+        }
         return Ok(());
     }
-
-    let remaining = prev - 1;
     if remaining == 0 {
         let all_not_mine = route.handled_count.load(Ordering::Acquire) == 0;
 
