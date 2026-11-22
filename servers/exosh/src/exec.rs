@@ -248,6 +248,16 @@ pub fn run_external_or_report(line: &[u8], state: &mut ShellState) {
 }
 
 pub fn run_external(line: &[u8], state: &mut ShellState) -> Result<(), ()> {
+    run_external_with_pledge(line, state, None)
+}
+
+/// Executes an external binary, optionally confining the child via `SYS_EXO_PLEDGE (324)`
+/// immediately before `execve` (used by `exo compat run`, S2.3).
+pub fn run_external_with_pledge(
+    line: &[u8],
+    state: &mut ShellState,
+    pledge: Option<(u64, u64)>,
+) -> Result<(), ()> {
     let mut arg_storage = [[0u8; EXEC_ARG_MAX]; EXEC_MAX_ARGS];
     let mut argv = [0u64; EXEC_MAX_ARGS + 1];
     let mut argc = 0usize;
@@ -448,6 +458,24 @@ pub fn run_external(line: &[u8], state: &mut ShellState) -> Result<(), ()> {
                 unsafe {
                     let _ = syscall::syscall2(syscall::SYS_DUP2, fd as u64, STDERR);
                     let _ = syscall::syscall1(syscall::SYS_CLOSE, fd as u64);
+                }
+            }
+        }
+
+        // S2.3: Apply `SYS_EXO_PLEDGE (324)` confinement right before `execve` when launched
+        // via `exo compat run`.
+        if let Some((promises, pledge_flags)) = pledge {
+            let p_rc = unsafe { syscall::syscall2(syscall::SYS_EXO_PLEDGE, promises, pledge_flags) };
+            if p_rc < 0 {
+                write_all(b"exo compat run: SYS_EXO_PLEDGE failed: errno ");
+                write_i64(p_rc);
+                write_all(b"\n");
+                unsafe {
+                    let _ = syscall::syscall1(syscall::SYS_EXIT, 126);
+                    let _ = syscall::syscall1(syscall::SYS_EXIT_GROUP, 126);
+                }
+                loop {
+                    core::hint::spin_loop();
                 }
             }
         }

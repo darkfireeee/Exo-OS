@@ -540,10 +540,12 @@ pub fn cleanup_closed_blob(blob_id: BlobId) {
     } else if is_pseudo_blob(&blob_id, PSEUDO_EPOLL_TAG) {
         remove_epoll_watches_for_blob(blob_id);
         BLOB_CACHE.invalidate(&blob_id);
+    } else if is_pseudo_blob(&blob_id, PSEUDO_MEMFD_TAG) {
+        remove_memfd_seals(&blob_id);
+        BLOB_CACHE.invalidate(&blob_id);
     } else if is_pseudo_blob(&blob_id, PSEUDO_PIPE_TAG)
         || is_pseudo_blob(&blob_id, PSEUDO_EVENTFD_TAG)
         || is_pseudo_blob(&blob_id, PSEUDO_INOTIFY_TAG)
-        || is_pseudo_blob(&blob_id, PSEUDO_MEMFD_TAG)
     {
         BLOB_CACHE.invalidate(&blob_id);
     } else if let Some(is_symlink) = take_deferred_unlink(&blob_id) {
@@ -636,7 +638,7 @@ pub fn on_socket_blob_closed(blob_id: BlobId) {
                 let mut i = 0;
                 while i < q.len() {
                     if q[i].0 == s_blob {
-                        let (_, dup_handle, _) = q.remove(i);
+                        let (_, dup_handle, _, _) = q.remove(i);
                         if ancillary_handles.try_reserve(1).is_ok() {
                             ancillary_handles.push(dup_handle);
                         } else {
@@ -776,7 +778,9 @@ pub fn socket_read_to_user(
 
 pub const SOCKET_MAX_CAPACITY: usize = 131072;
 pub const PIPE_MAX_CAPACITY: usize = 65536;
-const MAX_ANCILLARY_FDS_PER_SOCKET: usize = 256;
+/// S3 strict inflight ancillary FD quotas (anti-DoS / anti-FD-exhaustion).
+pub const MAX_INFLIGHT_FDS_PER_SOCKET: usize = 16;
+pub const MAX_INFLIGHT_FDS_PER_PID: usize = 64;
 const MAX_DGRAM_QUEUE_PACKETS: usize = 64;
 const MAX_DGRAM_PACKET_SIZE: usize = 65536;
 
@@ -1206,7 +1210,8 @@ pub struct UnixDgramPacket {
 pub static UNIX_LISTENERS: Mutex<Vec<UnixListenerEntry>> = Mutex::new(Vec::new());
 pub static UNIX_DGRAM_ENDPOINTS: Mutex<Vec<(Vec<u8>, BlobId)>> = Mutex::new(Vec::new());
 pub static UNIX_DGRAM_QUEUES: Mutex<Vec<(BlobId, Vec<UnixDgramPacket>)>> = Mutex::new(Vec::new());
-pub static SOCKET_ANCILLARY_FDS: Mutex<Vec<(BlobId, u32, u32)>> = Mutex::new(Vec::new());
+/// Queued `SCM_RIGHTS` FDs: `(target_socket_blob, dup_obj_handle, fd_flags, sender_pid)`.
+pub static SOCKET_ANCILLARY_FDS: Mutex<Vec<(BlobId, u32, u32, u32)>> = Mutex::new(Vec::new());
 
 #[inline]
 pub fn socket_is_dgram(blob_id: BlobId) -> bool {
@@ -1439,7 +1444,7 @@ pub fn socket_readiness_mask(blob_id: BlobId) -> u32 {
     let has_ancillary = SOCKET_ANCILLARY_FDS
         .lock()
         .iter()
-        .any(|(b, _, _)| *b == blob_id);
+        .any(|(b, _, _, _)| *b == blob_id);
 
     if has_data || has_ancillary || peer_closed || shut_rd || peer_shut_wr {
         mask |= EPOLLIN;
@@ -1465,6 +1470,49 @@ pub fn socket_is_readable(blob_id: BlobId) -> bool {
 
 fn is_abstract_unix_addr(addr: &[u8]) -> bool {
     !addr.is_empty() && addr[0] == 0
+}
+
+/// S3: Confinement of Linux abstract `AF_UNIX` namespace (`sun_path[0] == 0`):
+/// - Denied (`-EACCES`) by default for processes restricted via `SYS_EXO_PLEDGE`
+///   without explicit `pledge_flags::UNIX_ABSTRACT` opt-in (`NO_UNIX_ABSTRACT`).
+/// - Partitioned by `(pid_ns, net_ns)` so confined namespaces cannot contact
+///   abstract endpoints outside their own domain.
+fn check_and_scope_abstract_unix_addr(
+    pid: u32,
+    normalized: &mut Vec<u8>,
+    syscall_nr: u32,
+) -> Result<(), FsBridgeError> {
+    if !is_abstract_unix_addr(normalized) {
+        return Ok(());
+    }
+    let restrictions = crate::security::zero_trust::process_restrictions(pid);
+    if (restrictions & crate::security::zero_trust::restriction_flags::NO_UNIX_ABSTRACT) != 0 {
+        crate::security::shield_feed::push_event(
+            pid,
+            crate::security::shield_feed::event_type::SYSCALL,
+            crate::security::shield_feed::severity::MEDIUM,
+            syscall_nr,
+            restrictions,
+            0xAB57_8AC7,
+        );
+        return Err(FsBridgeError::PermDenied);
+    }
+    if let Some(pcb) =
+        crate::process::core::registry::PROCESS_REGISTRY.find_by_pid(crate::process::core::pid::Pid(pid))
+    {
+        if pcb.pid_ns != 0 || pcb.net_ns != 0 {
+            let mut scoped = Vec::new();
+            scoped
+                .try_reserve_exact(normalized.len() + 9)
+                .map_err(|_| FsBridgeError::NoMemory)?;
+            scoped.push(0);
+            scoped.extend_from_slice(&pcb.pid_ns.to_le_bytes());
+            scoped.extend_from_slice(&pcb.net_ns.to_le_bytes());
+            scoped.extend_from_slice(&normalized[1..]);
+            *normalized = scoped;
+        }
+    }
+    Ok(())
 }
 
 fn parse_sockaddr_un_path(addr_ptr: u64, addr_len: u64) -> Result<Vec<u8>, FsBridgeError> {
@@ -1550,7 +1598,8 @@ pub fn fs_unix_bind(
     if !is_pseudo_blob(&entry.blob_id, PSEUDO_SOCKET_TAG) {
         return Err(FsBridgeError::Invalid);
     }
-    let normalized = parse_sockaddr_un_path(addr_ptr, addr_len)?;
+    let mut normalized = parse_sockaddr_un_path(addr_ptr, addr_len)?;
+    check_and_scope_abstract_unix_addr(pid, &mut normalized, crate::syscall::numbers::SYS_BIND as u32)?;
     let is_abstract = is_abstract_unix_addr(&normalized);
     let is_dgram = socket_is_dgram(entry.blob_id);
 
@@ -1666,7 +1715,8 @@ pub fn fs_unix_connect(
     if !is_pseudo_blob(&entry.blob_id, PSEUDO_SOCKET_TAG) {
         return Err(FsBridgeError::Invalid);
     }
-    let normalized = parse_sockaddr_un_path(addr_ptr, addr_len)?;
+    let mut normalized = parse_sockaddr_un_path(addr_ptr, addr_len)?;
+    check_and_scope_abstract_unix_addr(pid, &mut normalized, crate::syscall::numbers::SYS_BIND as u32)?;
     let is_abstract = is_abstract_unix_addr(&normalized);
 
     if socket_is_dgram(entry.blob_id) {
@@ -2195,7 +2245,12 @@ pub fn fs_unix_sendto(
             return Err(FsBridgeError::BrokenPipe);
         }
         let target_blob = if addr_ptr != 0 {
-            let normalized = parse_sockaddr_un_path(addr_ptr, addr_len)?;
+            let mut normalized = parse_sockaddr_un_path(addr_ptr, addr_len)?;
+            check_and_scope_abstract_unix_addr(
+                pid,
+                &mut normalized,
+                crate::syscall::numbers::SYS_SENDTO as u32,
+            )?;
             let is_abstract = is_abstract_unix_addr(&normalized);
             let found = UNIX_DGRAM_ENDPOINTS
                 .lock()
@@ -2294,10 +2349,110 @@ struct UnixCmsghdr {
     cmsg_type: i32,
 }
 
-fn rollback_staged_ancillary(staged: &[(BlobId, u32, u32)]) {
-    for &(_, h, _) in staged {
+fn rollback_staged_ancillary(staged: &[(BlobId, u32, u32, u32)]) {
+    for &(_, h, _, _) in staged {
         let _ = close_object_handle_with_cleanup(h);
     }
+}
+
+/// S3 Zero-Trust policy enforcement for `SCM_RIGHTS` FD delegation:
+/// - Rejects non-delegatable FDs (`FD_NO_DELEGATE`), TTY/hardware handles,
+///   epoll/inotify control handles, and recursive `AF_UNIX` socket FDs (anti-cycle).
+/// - Verifies `ExoCordon` (`ipc_policy`) and Zero-Trust `TrustLevel` between sender & receiver.
+fn check_scm_rights_allowed(
+    sender_pid: u32,
+    peer_blob: BlobId,
+    src_res: &ResolvedFd,
+) -> Result<(), FsBridgeError> {
+    let push_alert = |code: u64| {
+        crate::security::shield_feed::push_event(
+            sender_pid,
+            crate::security::shield_feed::event_type::SYSCALL,
+            crate::security::shield_feed::severity::MEDIUM,
+            crate::syscall::numbers::SYS_SENDMSG as u32,
+            src_res.handle as u64,
+            code,
+        );
+    };
+
+    // 1. Hardware / TTY / non-delegatable FDs are strictly forbidden in SCM_RIGHTS.
+    if is_tty_handle(src_res.handle) || (src_res.flags & FD_NO_DELEGATE) != 0 {
+        push_alert(0x5C01);
+        return Err(FsBridgeError::OpNotPermitted);
+    }
+    let src_entry = OBJECT_TABLE
+        .get(src_res.handle)
+        .map_err(exofs_to_bridge_error)?;
+    if (src_entry.flags & FD_NO_DELEGATE) != 0 {
+        push_alert(0x5C02);
+        return Err(FsBridgeError::OpNotPermitted);
+    }
+
+    // 2. Anti-cycle: forbid passing an AF_UNIX socket FD over AF_UNIX (eliminates Ring 0 cycles).
+    if is_pseudo_blob(&src_entry.blob_id, PSEUDO_SOCKET_TAG) {
+        push_alert(0x5C03);
+        return Err(FsBridgeError::OpNotPermitted);
+    }
+
+    // 3. Forbid kernel control descriptors (epoll / inotify).
+    if is_pseudo_blob(&src_entry.blob_id, PSEUDO_EPOLL_TAG)
+        || is_pseudo_blob(&src_entry.blob_id, PSEUDO_INOTIFY_TAG)
+    {
+        push_alert(0x5C04);
+        return Err(FsBridgeError::OpNotPermitted);
+    }
+
+    // 4. CapToken / Zero-Trust / ExoCordon check between sender and receiver.
+    let receiver_pid = UNIX_SOCKET_META
+        .lock()
+        .iter()
+        .find(|m| m.blob_id == peer_blob)
+        .map(|m| m.cred_pid)
+        .unwrap_or(sender_pid);
+
+    let sender_trust = crate::security::zero_trust::trust_for_pid(sender_pid);
+    let receiver_trust = crate::security::zero_trust::trust_for_pid(receiver_pid);
+    if sender_trust == crate::security::zero_trust::TrustLevel::Untrusted
+        || receiver_trust == crate::security::zero_trust::TrustLevel::Untrusted
+    {
+        push_alert(0x5C05);
+        return Err(FsBridgeError::OpNotPermitted);
+    }
+
+    if sender_pid != receiver_pid {
+        use crate::security::ipc_policy::{check_direct_ipc, service_class_of, IpcPolicyResult, ServiceClass};
+        let sender_class = service_class_of(crate::process::core::pid::Pid(sender_pid));
+        let receiver_class = service_class_of(crate::process::core::pid::Pid(receiver_pid));
+        if sender_class != ServiceClass::Unknown
+            && receiver_class != ServiceClass::Unknown
+            && check_direct_ipc(
+                crate::process::core::pid::Pid(sender_pid),
+                crate::process::core::pid::Pid(receiver_pid),
+            ) != IpcPolicyResult::Allowed
+        {
+            push_alert(0x5C06);
+            return Err(FsBridgeError::OpNotPermitted);
+        }
+        let sender_restrictions = crate::security::zero_trust::process_restrictions(sender_pid);
+        if (sender_restrictions
+            & (crate::security::zero_trust::restriction_flags::PLEDGE_ACTIVE
+                | crate::security::zero_trust::restriction_flags::NO_RING1_CRITICAL_IPC))
+            != 0
+            && matches!(
+                receiver_class,
+                ServiceClass::InitServer
+                    | ServiceClass::CryptoServer
+                    | ServiceClass::MemoryServer
+                    | ServiceClass::DeviceServer
+                    | ServiceClass::ExoShield
+            )
+        {
+            push_alert(0x5C07);
+            return Err(FsBridgeError::OpNotPermitted);
+        }
+    }
+
+    Ok(())
 }
 
 fn rollback_received_fds(pid: u32, received: &[(i32, u32)], has_fd_table: bool) {
@@ -2378,8 +2533,8 @@ pub fn fs_unix_sendmsg(
         }
     }
 
-    // Validate and duplicate all SCM_RIGHTS ancillary FDs atomically before queuing.
-    let mut staged_fds: Vec<(BlobId, u32, u32)> = Vec::new();
+    // Validate and duplicate all SCM_RIGHTS ancillary FDs atomically before queuing (S3).
+    let mut staged_fds: Vec<(BlobId, u32, u32, u32)> = Vec::new();
     if msg.msg_control != 0 && msg.msg_controllen >= 16 {
         let ctrl_len = (msg.msg_controllen as usize).min(4096);
         let ctrl_bytes = read_user_bytes(msg.msg_control, ctrl_len)?;
@@ -2395,6 +2550,18 @@ pub fn fs_unix_sendmsg(
             if hdr.cmsg_level == 1 && hdr.cmsg_type == 1 {
                 let fd_bytes = hdr.cmsg_len - 16;
                 let fd_count = fd_bytes / 4;
+                if staged_fds.len().saturating_add(fd_count) > MAX_INFLIGHT_FDS_PER_SOCKET {
+                    rollback_staged_ancillary(&staged_fds);
+                    crate::security::shield_feed::push_event(
+                        pid,
+                        crate::security::shield_feed::event_type::SYSCALL,
+                        crate::security::shield_feed::severity::MEDIUM,
+                        crate::syscall::numbers::SYS_SENDMSG as u32,
+                        fd_count as u64,
+                        0x5C10,
+                    );
+                    return Err(FsBridgeError::TooManyFds);
+                }
                 for i in 0..fd_count {
                     let pos = off + 16 + i * 4;
                     let raw_fd = i32::from_ne_bytes([
@@ -2411,6 +2578,10 @@ pub fn fs_unix_sendmsg(
                         rollback_staged_ancillary(&staged_fds);
                         return Err(FsBridgeError::BadFd);
                     };
+                    if let Err(err) = check_scm_rights_allowed(pid, peer, &src_res) {
+                        rollback_staged_ancillary(&staged_fds);
+                        return Err(err);
+                    }
                     let Ok(dup_handle) = OBJECT_TABLE.dup_checked_for_owner(src_res.handle, 0) else {
                         rollback_staged_ancillary(&staged_fds);
                         return Err(FsBridgeError::BadFd);
@@ -2420,7 +2591,7 @@ pub fn fs_unix_sendmsg(
                         rollback_staged_ancillary(&staged_fds);
                         return Err(FsBridgeError::NoMemory);
                     }
-                    staged_fds.push((peer, dup_handle, src_res.flags));
+                    staged_fds.push((peer, dup_handle, src_res.flags, pid));
                 }
             }
             off += (hdr.cmsg_len + 7) & !7;
@@ -2445,9 +2616,20 @@ pub fn fs_unix_sendmsg(
             append_socket_payload_locked(peer, &payload)
         } else {
             let mut q = SOCKET_ANCILLARY_FDS.lock();
-            let existing = q.iter().filter(|(b, _, _)| *b == peer).count();
-            if existing + staged_fds.len() > MAX_ANCILLARY_FDS_PER_SOCKET {
-                Err(FsBridgeError::WouldBlock)
+            let existing_sock = q.iter().filter(|(b, _, _, _)| *b == peer).count();
+            let existing_pid = q.iter().filter(|(_, _, _, sp)| *sp == pid).count();
+            if existing_sock.saturating_add(staged_fds.len()) > MAX_INFLIGHT_FDS_PER_SOCKET
+                || existing_pid.saturating_add(staged_fds.len()) > MAX_INFLIGHT_FDS_PER_PID
+            {
+                crate::security::shield_feed::push_event(
+                    pid,
+                    crate::security::shield_feed::event_type::SYSCALL,
+                    crate::security::shield_feed::severity::MEDIUM,
+                    crate::syscall::numbers::SYS_SENDMSG as u32,
+                    (existing_sock.max(existing_pid)) as u64,
+                    0x5C11,
+                );
+                Err(FsBridgeError::TooManyFds)
             } else if q.try_reserve(staged_fds.len()).is_err() {
                 Err(FsBridgeError::NoMemory)
             } else {
@@ -2533,8 +2715,8 @@ pub fn fs_unix_recvmsg(
         let matching: Vec<(u32, u32)> = {
             let q = SOCKET_ANCILLARY_FDS.lock();
             q.iter()
-                .filter(|(b, _, _)| *b == entry.blob_id)
-                .map(|&(_, h, f)| (h, f))
+                .filter(|(b, _, _, _)| *b == entry.blob_id)
+                .map(|&(_, h, f, _)| (h, f))
                 .collect()
         };
         if data.is_empty() && matching.is_empty() {
@@ -2701,7 +2883,7 @@ pub fn fs_unix_recvmsg(
                     let mut removed = 0usize;
                     while i < q.len() && removed < delivered_fd_count {
                         if q[i].0 == entry.blob_id {
-                            let (_, obj_handle, _) = q.remove(i);
+                            let (_, obj_handle, _, _) = q.remove(i);
                             if to_close.try_reserve(1).is_ok() {
                                 to_close.push(obj_handle);
                             } else {

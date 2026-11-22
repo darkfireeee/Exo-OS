@@ -25,6 +25,13 @@ pub const MAX_SHM_POOLS: usize = 16;
 pub const MAX_WL_BUFFERS: usize = 32;
 pub const CLIENT_OWNER_BASE: u32 = 0x8000_0000;
 pub const MAX_WAYLAND_CLIENTS: usize = 8;
+/// S5A: Strict per-client Wayland resource quotas (prevent DoS against `fb_server`).
+pub const MAX_OBJECTS_PER_CLIENT: usize = 32;
+pub const MAX_POOLS_PER_CLIENT: usize = 4;
+pub const MAX_SHM_BYTES_PER_CLIENT: u64 = 16 * 1024 * 1024;
+const F_ADD_SEALS: u64 = 1033;
+const F_GET_SEALS: u64 = 1034;
+const F_SEAL_SHRINK: u64 = 0x0002;
 pub const WL_CLIENT_RX_CAP: usize = 2048;
 pub const WL_CLIENT_TX_CAP: usize = 2048;
 pub const WL_CLIENT_FD_CAP: usize = 16;
@@ -317,6 +324,7 @@ pub struct WaylandState {
     pub selected_app: u8,
     pub focused_surface_idx: u8,
     pub next_configure_serial: u32,
+    pub client_protocol_error: bool,
 }
 
 const fn init_bytes_32<const N: usize>(src: &[u8; N]) -> [u8; 32] {
@@ -373,6 +381,7 @@ impl WaylandState {
             selected_app: 0,
             focused_surface_idx: 0,
             next_configure_serial: 1,
+            client_protocol_error: false,
         }
     }
 
@@ -419,6 +428,42 @@ impl WaylandState {
         fallback
     }
 
+    fn client_object_count(&self, owner_pid: u32) -> usize {
+        let mut count = 0usize;
+        let mut i = 0usize;
+        while i < MAX_WAYLAND_OBJECTS {
+            if self.objects[i].kind != WlObjectKind::Free && self.objects[i].owner_pid == owner_pid {
+                count += 1;
+            }
+            i += 1;
+        }
+        count
+    }
+
+    fn client_pool_count(&self, owner_pid: u32) -> usize {
+        let mut count = 0usize;
+        let mut i = 0usize;
+        while i < MAX_SHM_POOLS {
+            if self.pools[i].active && self.pools[i].owner_pid == owner_pid {
+                count += 1;
+            }
+            i += 1;
+        }
+        count
+    }
+
+    fn client_mapped_shm_bytes(&self, owner_pid: u32) -> u64 {
+        let mut total = 0u64;
+        let mut i = 0usize;
+        while i < MAX_SHM_POOLS {
+            if self.pools[i].active && self.pools[i].owner_pid == owner_pid {
+                total = total.saturating_add(self.pools[i].mapped_len);
+            }
+            i += 1;
+        }
+        total
+    }
+
     fn register_object(
         &mut self,
         id: u32,
@@ -442,6 +487,10 @@ impl WaylandState {
             }
             i += 1;
         }
+        if owner_pid >= CLIENT_OWNER_BASE && self.client_object_count(owner_pid) >= MAX_OBJECTS_PER_CLIENT {
+            self.client_protocol_error = true;
+            return false;
+        }
         i = 0;
         while i < MAX_WAYLAND_OBJECTS {
             if self.objects[i].kind == WlObjectKind::Free {
@@ -454,6 +503,9 @@ impl WaylandState {
                 return true;
             }
             i += 1;
+        }
+        if owner_pid >= CLIENT_OWNER_BASE {
+            self.client_protocol_error = true;
         }
         false
     }
@@ -1102,16 +1154,29 @@ impl WaylandState {
         let mut sy = 0u32;
         while sy < clip_h {
             let dy = content_y + sy;
-            let row_src = src_base.saturating_add((sy as usize).saturating_mul(src_stride));
+            // S5A: Strict checked bounds validation `(buffer_offset + sy * src_stride + clip_w * src_bpp) <= buf_size_bytes`.
+            let Some(row_stride_off) = (sy as u64).checked_mul(src_stride as u64) else {
+                break;
+            };
+            let Some(row_rel_off) = (s.buffer_offset as u64).checked_add(row_stride_off) else {
+                break;
+            };
+            let Some(row_bytes) = (clip_w as u64).checked_mul(src_bpp as u64) else {
+                break;
+            };
+            let Some(row_end) = row_rel_off.checked_add(row_bytes) else {
+                break;
+            };
+            if row_end > s.buf_size_bytes {
+                break;
+            }
+            let Some(row_src_u64) = s.virt_addr.checked_add(row_rel_off) else {
+                break;
+            };
+            let row_src = row_src_u64 as usize;
             let row_dst = base
                 .saturating_add((dy as usize).saturating_mul(dst_stride))
                 .saturating_add((content_x as usize).saturating_mul(bpp));
-
-            if (row_src as u64).saturating_sub(s.virt_addr) + (clip_w as u64) * (src_bpp as u64)
-                > s.buf_size_bytes.max((s.height as u64) * (src_stride as u64))
-            {
-                break;
-            }
 
             let mut col = 0usize;
             while col < clip_w as usize {
@@ -1480,6 +1545,7 @@ impl WaylandState {
                 break;
             }
             let payload = &bytes[offset + 8..offset + raw_size];
+            self.client_protocol_error = false;
             if let Some((y0, y1)) = self.handle_single_wire_msg(
                 sender_pid,
                 object_id,
@@ -1495,6 +1561,10 @@ impl WaylandState {
                 if y1 > dirty_max {
                     dirty_max = y1;
                 }
+            }
+            if self.client_protocol_error && sender_pid >= CLIENT_OWNER_BASE {
+                self.client_protocol_error = false;
+                return (usize::MAX, processed, None);
             }
             offset += raw_size;
             processed += 1;
@@ -1670,13 +1740,47 @@ impl WaylandState {
                 } else {
                     (-1, read_u32(payload, 4))
                 };
-                if pool_id != 0 {
+                let size_aligned = (size as u64).checked_add(4095).map(|v| v & !4095).unwrap_or(u64::MAX);
+                let quota_exceeded = sender_pid >= CLIENT_OWNER_BASE
+                    && (size == 0
+                        || (size as u64) > MAX_SHM_BYTES_PER_CLIENT
+                        || self.client_pool_count(sender_pid) >= MAX_POOLS_PER_CLIENT
+                        || self
+                            .client_mapped_shm_bytes(sender_pid)
+                            .saturating_add(size_aligned)
+                            > MAX_SHM_BYTES_PER_CLIENT);
+                if pool_id != 0 && !quota_exceeded {
                     let (local_addr, mapped_len) = map_shm_fd(fd, size);
-                    let _ = self.register_object(pool_id, WlObjectKind::ShmPool, sender_pid, 0xFF);
-                    self.register_pool(pool_id, sender_pid, fd, size, local_addr, mapped_len);
-                } else if fd >= 0 && sender_pid >= CLIENT_OWNER_BASE {
-                    unsafe {
-                        let _ = syscall::syscall1(syscall::SYS_CLOSE, fd as u64);
+                    if sender_pid >= CLIENT_OWNER_BASE && (local_addr == 0 || mapped_len < size as u64) {
+                        if fd >= 0 {
+                            unsafe {
+                                let _ = syscall::syscall1(syscall::SYS_CLOSE, fd as u64);
+                            }
+                        }
+                        self.client_protocol_error = true;
+                    } else if self.register_object(pool_id, WlObjectKind::ShmPool, sender_pid, 0xFF) {
+                        self.register_pool(pool_id, sender_pid, fd, size, local_addr, mapped_len);
+                    } else {
+                        if local_addr != 0 && mapped_len != 0 {
+                            unsafe {
+                                let _ = syscall::syscall2(syscall::SYS_MUNMAP, local_addr, mapped_len);
+                            }
+                        }
+                        if fd >= 0 && sender_pid >= CLIENT_OWNER_BASE {
+                            unsafe {
+                                let _ = syscall::syscall1(syscall::SYS_CLOSE, fd as u64);
+                            }
+                        }
+                        self.client_protocol_error = true;
+                    }
+                } else {
+                    if fd >= 0 && sender_pid >= CLIENT_OWNER_BASE {
+                        unsafe {
+                            let _ = syscall::syscall1(syscall::SYS_CLOSE, fd as u64);
+                        }
+                    }
+                    if sender_pid >= CLIENT_OWNER_BASE {
+                        self.client_protocol_error = true;
                     }
                 }
             }
@@ -1690,28 +1794,48 @@ impl WaylandState {
             // wl_shm_pool.create_buffer(new_id buffer, offset, width, height, stride, format)
             (WlObjectKind::ShmPool, 0) => {
                 let buf_id = read_u32(payload, 0);
-                if buf_id != 0 {
-                    let _ = self.register_object(buf_id, WlObjectKind::Buffer, sender_pid, 0xFF);
-                    if payload.len() >= 24 {
-                        let buf_offset = read_u32(payload, 4);
-                        let width = read_u32(payload, 8);
-                        let height = read_u32(payload, 12);
-                        let stride = read_u32(payload, 16);
-                        let format = read_u32(payload, 20);
-                        let encoding = ShmPixelEncoding::from_wl_shm_format(format);
-                        let min_stride = width.saturating_mul(encoding.bytes_per_pixel());
-                        if (1..=1920).contains(&width) && (1..=1080).contains(&height) {
-                            self.register_buffer(
-                                buf_id,
-                                sender_pid,
-                                object_id,
-                                buf_offset,
-                                width,
-                                height,
-                                stride.max(min_stride),
-                                encoding,
-                            );
+                if buf_id == 0 || payload.len() < 24 {
+                    if sender_pid >= CLIENT_OWNER_BASE {
+                        self.client_protocol_error = true;
+                    }
+                } else {
+                    let buf_offset = read_u32(payload, 4);
+                    let width = read_u32(payload, 8);
+                    let height = read_u32(payload, 12);
+                    let stride = read_u32(payload, 16);
+                    let format = read_u32(payload, 20);
+                    let encoding = ShmPixelEncoding::from_wl_shm_format(format);
+                    let valid_dims = (1..=1920).contains(&width) && (1..=1080).contains(&height);
+                    let valid_bounds = if valid_dims {
+                        let min_stride = width.checked_mul(encoding.bytes_per_pixel());
+                        let total_rows = (height as u64).checked_mul(stride as u64);
+                        let end_off = total_rows.and_then(|r| (buf_offset as u64).checked_add(r));
+                        let pool_limit = self
+                            .find_pool(sender_pid, object_id)
+                            .map(|p| (p.size as u64).min(p.mapped_len))
+                            .unwrap_or(0);
+                        match (min_stride, end_off) {
+                            (Some(ms), Some(end)) if stride >= ms && end <= pool_limit => true,
+                            _ => false,
                         }
+                    } else {
+                        false
+                    };
+                    if !valid_bounds {
+                        if sender_pid >= CLIENT_OWNER_BASE {
+                            self.client_protocol_error = true;
+                        }
+                    } else if self.register_object(buf_id, WlObjectKind::Buffer, sender_pid, 0xFF) {
+                        self.register_buffer(
+                            buf_id,
+                            sender_pid,
+                            object_id,
+                            buf_offset,
+                            width,
+                            height,
+                            stride,
+                            encoding,
+                        );
                     }
                 }
             }
@@ -1740,19 +1864,40 @@ impl WaylandState {
             (WlObjectKind::ShmPool, 2) => {
                 let new_sz = read_u32(payload, 0);
                 let mut remapped_addr: Option<(u64, u32)> = None;
+                let cur_total = self.client_mapped_shm_bytes(sender_pid);
+                let mut resize_err = false;
                 if let Some(p) = self.find_pool_mut(sender_pid, object_id) {
-                    if new_sz as u64 > p.mapped_len && p.fd >= 0 {
-                        if p.local_addr != 0 && p.mapped_len != 0 {
-                            unsafe {
-                                let _ = syscall::syscall2(syscall::SYS_MUNMAP, p.local_addr, p.mapped_len);
-                            }
-                        }
+                    let new_aligned = (new_sz as u64).checked_add(4095).map(|v| v & !4095).unwrap_or(u64::MAX);
+                    let delta = new_aligned.saturating_sub(p.mapped_len);
+                    if new_sz < p.size
+                        || (new_sz as u64) > MAX_SHM_BYTES_PER_CLIENT
+                        || (sender_pid >= CLIENT_OWNER_BASE
+                            && cur_total.saturating_add(delta) > MAX_SHM_BYTES_PER_CLIENT)
+                    {
+                        resize_err = true;
+                    } else if new_sz as u64 > p.mapped_len && p.fd >= 0 {
                         let (new_addr, new_map_len) = map_shm_fd(p.fd, new_sz);
-                        p.local_addr = new_addr;
-                        p.mapped_len = new_map_len;
-                        remapped_addr = Some((new_addr, new_sz));
+                        if new_addr == 0 || new_map_len < new_sz as u64 {
+                            resize_err = true;
+                        } else {
+                            if p.local_addr != 0 && p.mapped_len != 0 {
+                                unsafe {
+                                    let _ = syscall::syscall2(syscall::SYS_MUNMAP, p.local_addr, p.mapped_len);
+                                }
+                            }
+                            p.local_addr = new_addr;
+                            p.mapped_len = new_map_len;
+                            p.size = new_sz;
+                            remapped_addr = Some((new_addr, new_sz));
+                        }
+                    } else {
+                        p.size = new_sz;
                     }
-                    p.size = new_sz;
+                } else {
+                    resize_err = true;
+                }
+                if resize_err && sender_pid >= CLIENT_OWNER_BASE {
+                    self.client_protocol_error = true;
                 }
                 if let Some((new_addr, sz)) = remapped_addr {
                     let mut si = 1usize;
@@ -2231,10 +2376,48 @@ impl WlTxBuf {
 }
 
 fn map_shm_fd(fd: i32, size: u32) -> (u64, u64) {
-    if fd < 0 || size == 0 {
+    if fd < 0 || size == 0 || (size as u64) > MAX_SHM_BYTES_PER_CLIENT {
         return (0, 0);
     }
-    let capped = (size as u64).min(64 * 1024 * 1024).max(4096);
+    // S5A: Verify backing file size via `fstat` (offset 48 = i64 st_size in 144-byte LinuxStat).
+    let mut stat_buf = [0u8; 144];
+    let st_rc = unsafe {
+        syscall::syscall2(syscall::SYS_FSTAT, fd as u64, stat_buf.as_mut_ptr() as u64)
+    };
+    if st_rc < 0 {
+        return (0, 0);
+    }
+    let st_size = i64::from_le_bytes([
+        stat_buf[48],
+        stat_buf[49],
+        stat_buf[50],
+        stat_buf[51],
+        stat_buf[52],
+        stat_buf[53],
+        stat_buf[54],
+        stat_buf[55],
+    ]);
+    if st_size <= 0 || (size as i64) > st_size {
+        return (0, 0);
+    }
+
+    // S5A: Enforce `F_SEAL_SHRINK` on `memfd` SHM descriptors before mapping.
+    let seals = unsafe { syscall::syscall3(syscall::SYS_FCNTL, fd as u64, F_GET_SEALS, 0) };
+    if seals >= 0 && ((seals as u64) & F_SEAL_SHRINK) == 0 {
+        let add_rc = unsafe {
+            syscall::syscall3(syscall::SYS_FCNTL, fd as u64, F_ADD_SEALS, F_SEAL_SHRINK)
+        };
+        if add_rc < 0 {
+            // Re-verify: reject unsealed memfds when sealing was locked without F_SEAL_SHRINK.
+            let seals2 =
+                unsafe { syscall::syscall3(syscall::SYS_FCNTL, fd as u64, F_GET_SEALS, 0) };
+            if seals2 < 0 || ((seals2 as u64) & F_SEAL_SHRINK) == 0 {
+                return (0, 0);
+            }
+        }
+    }
+
+    let capped = (size as u64).min(MAX_SHM_BYTES_PER_CLIENT).max(4096);
     let aligned = (capped + 4095) & !4095;
     let rc = unsafe {
         syscall::syscall6(

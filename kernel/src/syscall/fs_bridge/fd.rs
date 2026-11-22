@@ -607,6 +607,39 @@ pub fn fs_fcntl(fd: u32, cmd: u32, arg: u64, pid: u32) -> Result<i64, FsBridgeEr
             write_user_typed(arg, fl).map_err(|_| FsBridgeError::Fault)?;
             Ok(0)
         }
+        F_GET_SEALS => {
+            let resolved = resolve_fd(pid, fd)?;
+            if is_tty_handle(resolved.handle) {
+                return Err(FsBridgeError::Invalid);
+            }
+            let entry = OBJECT_TABLE
+                .get(resolved.handle)
+                .map_err(exofs_to_bridge_error)?;
+            if !is_pseudo_blob(&entry.blob_id, PSEUDO_MEMFD_TAG) {
+                return Err(FsBridgeError::Invalid);
+            }
+            Ok(get_memfd_seals(&entry.blob_id) as i64)
+        }
+        F_ADD_SEALS => {
+            let resolved = resolve_fd(pid, fd)?;
+            if is_tty_handle(resolved.handle) {
+                return Err(FsBridgeError::Invalid);
+            }
+            let entry = OBJECT_TABLE
+                .get(resolved.handle)
+                .map_err(exofs_to_bridge_error)?;
+            if !is_pseudo_blob(&entry.blob_id, PSEUDO_MEMFD_TAG) {
+                return Err(FsBridgeError::Invalid);
+            }
+            if !open_flags::can_write(entry.flags) {
+                return Err(FsBridgeError::OpNotPermitted);
+            }
+            if arg > u32::MAX as u64 {
+                return Err(FsBridgeError::Invalid);
+            }
+            add_memfd_seals(entry.blob_id, arg as u32)?;
+            Ok(0)
+        }
         _ => Err(FsBridgeError::Invalid),
     }
 }

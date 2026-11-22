@@ -1,0 +1,20 @@
+[package]
+name              = "exo-compositor"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish           = false
+description       = "Exo-OS isolated Strate 2 Wayland compositor (std, zero MMIO, ExoCordon SurfaceGrant -> fb_server)"
+
+[[bin]]
+name = "exo-compositor"
+path = "src/main.rs"
+test = true
+bench = false
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("exo"))'] }
+
+[dependencies]
+exo-syscall-abi = { path = "../syscall_abi" }

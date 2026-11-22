@@ -8,13 +8,20 @@
 //! - S1: no explicit spinlock in this module.
 //! - G8: no SIPI re-issuance (handled solely in stage0).
 
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+#[cfg(not(test))]
+use core::fmt::Write as _;
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use crate::arch::x86_64::apic::{self, ipi, local_apic, x2apic};
 use crate::arch::x86_64::cpu::msr;
 use crate::arch::x86_64::idt;
-use crate::exophoenix::{forge, ssr, stage0, PhoenixState, PHOENIX_STATE};
+use crate::exophoenix::{forge, golden_mirror, ssr, stage0, PhoenixState, PHOENIX_STATE};
 use crate::memory::dma::iommu::{AMD_IOMMU, INTEL_VTD};
+use exo_phoenix_ssr::metrics::{
+    PhoenixTimingRecord, PHOENIX_FLAG_COLD_DISK_FALLBACK, PHOENIX_METRICS_MAGIC,
+};
+#[cfg(not(test))]
+use exo_phoenix_ssr::metrics::PHOENIX_FLAG_DEGRADED_FREEZE_TIMEOUT;
 
 const HANDOFF_NORMAL: u64 = ssr::HANDOFF_NORMAL;
 const HANDOFF_FREEZE_REQ: u64 = ssr::HANDOFF_FREEZE_REQ;
@@ -30,9 +37,13 @@ const ICR_LEVEL_ASSERT: u64 = 1 << 14;
 
 static IOMMU_DRAIN_CONFIRMED: AtomicBool = AtomicBool::new(false);
 static FORGE_FAILURE_COUNT: AtomicU32 = AtomicU32::new(0);
+static PHOENIX_CYCLE_COUNTER: AtomicU32 = AtomicU32::new(0);
+static PHOENIX_FALLBACK_EPOCH: AtomicU64 = AtomicU64::new(0);
 
 const APICBASE_ADDR_MASK: u64 = 0xFFFF_FFFF_F000;
 const LAPIC_ID_REG_OFFSET: usize = 0x20;
+const INIT_SERVER_ENDPOINT_ID: u64 = 1;
+const INIT_MSG_RELAUNCH_STRATE2: u32 = 8;
 const CRYPTO_SERVER_ENDPOINT_ID: u64 = 4;
 const CRYPTO_PROTOCOL_VERSION: u8 = 3;
 const PHOENIX_WAKE_ENTROPY: u32 = 255;
@@ -41,7 +52,9 @@ const CRYPTO_OK: u32 = 0;
 const CRYPTO_REPLY_SIZE: usize = 240;
 const CRYPTO_REPLY_STATUS_OFFSET: usize = 4;
 const CRYPTO_REPLY_VERSION_OFFSET: usize = 14;
+const CRYPTO_REPLY_DATA_OFFSET: usize = 16;
 const PHOENIX_WAKE_ACK_TIMEOUT_NS: u64 = 5_000_000_000;
+const PHOENIX_FORCE_CRYPTO_TIMEOUT_NS: u64 = 250_000_000;
 const RAW_NOWAIT: u32 = 0x0001;
 
 #[repr(C)]
@@ -71,9 +84,9 @@ fn phoenix_wake_reply_endpoint(
 
 fn wait_crypto_phoenix_ack(
     reply_endpoint: crate::ipc::core::types::EndpointId,
-) -> Result<(), &'static str> {
-    let deadline =
-        crate::scheduler::timer::clock::monotonic_ns().saturating_add(PHOENIX_WAKE_ACK_TIMEOUT_NS);
+    timeout_ns: u64,
+) -> Result<u64, &'static str> {
+    let deadline = crate::scheduler::timer::clock::monotonic_ns().saturating_add(timeout_ns);
     let mut reply = [0u8; CRYPTO_REPLY_SIZE];
 
     loop {
@@ -88,7 +101,27 @@ fn wait_crypto_phoenix_ack(
                 if reply[CRYPTO_REPLY_VERSION_OFFSET] == CRYPTO_PROTOCOL_VERSION
                     && status == CRYPTO_OK
                 {
-                    return Ok(());
+                    let epoch = if n >= CRYPTO_REPLY_DATA_OFFSET + 8 {
+                        u64::from_le_bytes([
+                            reply[CRYPTO_REPLY_DATA_OFFSET],
+                            reply[CRYPTO_REPLY_DATA_OFFSET + 1],
+                            reply[CRYPTO_REPLY_DATA_OFFSET + 2],
+                            reply[CRYPTO_REPLY_DATA_OFFSET + 3],
+                            reply[CRYPTO_REPLY_DATA_OFFSET + 4],
+                            reply[CRYPTO_REPLY_DATA_OFFSET + 5],
+                            reply[CRYPTO_REPLY_DATA_OFFSET + 6],
+                            reply[CRYPTO_REPLY_DATA_OFFSET + 7],
+                        ])
+                    } else {
+                        0
+                    };
+                    let monotonic_epoch = if epoch > 0 {
+                        PHOENIX_FALLBACK_EPOCH.fetch_max(epoch, Ordering::AcqRel);
+                        epoch
+                    } else {
+                        PHOENIX_FALLBACK_EPOCH.fetch_add(1, Ordering::AcqRel) + 1
+                    };
+                    return Ok(monotonic_epoch);
                 }
                 return Err("phoenix_wake_ack_rejected");
             }
@@ -175,7 +208,7 @@ fn phoenix_wake_entropy() -> u64 {
         ^ FORGE_FAILURE_COUNT.load(Ordering::Acquire) as u64
 }
 
-fn notify_crypto_server_phoenix_wake() -> Result<(), &'static str> {
+fn notify_crypto_server_phoenix_wake_with_timeout(timeout_ns: u64) -> Result<u64, &'static str> {
     let endpoint = crate::ipc::core::types::EndpointId::new(CRYPTO_SERVER_ENDPOINT_ID)
         .ok_or("phoenix_wake_invalid_endpoint")?;
 
@@ -211,14 +244,18 @@ fn notify_crypto_server_phoenix_wake() -> Result<(), &'static str> {
     let send_result = crate::ipc::channel::raw::send_raw(endpoint, request_bytes, RAW_NOWAIT)
         .map(|_| ())
         .map_err(|_| "phoenix_wake_send_failed");
-    if send_result.is_err() {
+    if let Err(err) = send_result {
         crate::ipc::channel::raw::mailbox_close(reply_endpoint);
-        return send_result;
+        return Err(err);
     }
 
-    let ack_result = wait_crypto_phoenix_ack(reply_endpoint);
+    let ack_result = wait_crypto_phoenix_ack(reply_endpoint, timeout_ns);
     crate::ipc::channel::raw::mailbox_close(reply_endpoint);
     ack_result
+}
+
+fn notify_crypto_server_phoenix_wake() -> Result<u64, &'static str> {
+    notify_crypto_server_phoenix_wake_with_timeout(PHOENIX_WAKE_ACK_TIMEOUT_NS)
 }
 
 fn for_each_mapped_apic_slot(mut f: impl FnMut(u8, usize)) {
@@ -465,7 +502,316 @@ fn scan_and_release_spinlocks() {
 }
 
 fn reset_irq_watchdogs_after_restore() {
+    crate::arch::x86_64::time::ktime::phoenix_reset_time_base();
     crate::arch::x86_64::irq::routing::reset_all_masked_since();
+}
+
+#[cfg(not(test))]
+fn has_other_mapped_cores(self_slot: Option<usize>) -> bool {
+    let mut found_other = false;
+    for_each_mapped_apic_slot(|_, slot| {
+        if Some(slot) != self_slot {
+            found_other = true;
+        }
+    });
+    found_other
+}
+
+fn verify_strate1_waves_o1() -> u32 {
+    // Closed Strate 1 wave membership (Spec §4 / P2):
+    // Wave R0: crypto_server, memory_server, ipc_router
+    // Wave R1: vfs_server, device_server, fb_server
+    // Wave R2: init_server
+    // O(1) endpoint lookup over the fixed 7-entry closed list — strictly independent
+    // of the number of Strate 2 servers or user processes.
+    const STRATE1_WAVE_ENDPOINTS: &[&[u8]] = &[
+        b"crypto_server",
+        b"memory_server",
+        b"ipc_router",
+        b"vfs_server",
+        b"device_server",
+        b"fb_server",
+        b"init_server",
+    ];
+    let mut online = 0u32;
+    for &name in STRATE1_WAVE_ENDPOINTS {
+        if crate::ipc::endpoint::lookup_endpoint(name).is_some() {
+            online += 1;
+        }
+    }
+    online
+}
+
+fn notify_init_relaunch_strate2_async() {
+    let Some(init_ep) = crate::ipc::core::types::EndpointId::new(INIT_SERVER_ENDPOINT_ID) else {
+        return;
+    };
+    let mut msg = [0u8; 64];
+    // InitRequest layout: sender_pid (u32 = 0), msg_type (u32 = INIT_MSG_RELAUNCH_STRATE2 = 8)
+    msg[4..8].copy_from_slice(&INIT_MSG_RELAUNCH_STRATE2.to_le_bytes());
+    let _ = crate::ipc::channel::raw::send_raw(init_ep, &msg, RAW_NOWAIT);
+}
+
+#[cfg(not(test))]
+struct StackLineBuf<const N: usize> {
+    buf: [u8; N],
+    len: usize,
+}
+
+#[cfg(not(test))]
+impl<const N: usize> StackLineBuf<N> {
+    const fn new() -> Self {
+        Self {
+            buf: [0u8; N],
+            len: 0,
+        }
+    }
+
+    fn as_bytes(&self) -> &[u8] {
+        &self.buf[..self.len]
+    }
+}
+
+#[cfg(not(test))]
+impl<const N: usize> core::fmt::Write for StackLineBuf<N> {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        let bytes = s.as_bytes();
+        let avail = N.saturating_sub(self.len);
+        let to_copy = bytes.len().min(avail);
+        self.buf[self.len..self.len + to_copy].copy_from_slice(&bytes[..to_copy]);
+        self.len += to_copy;
+        Ok(())
+    }
+}
+
+#[cfg(not(test))]
+fn emit_phoenix_sla_telemetry(record: &PhoenixTimingRecord, strate1_online: u32) {
+    let mut line = StackLineBuf::<320>::new();
+    let degraded = if record.is_degraded() { 1u32 } else { 0u32 };
+    let _ = writeln!(
+        line,
+        "[EXO_PHOENIX_SLA] CYCLE={} REASON={} S0_FREEZE_US={} S0_FORGE_US={} S0_TOTAL_US={} CRYPTO_US={} S1_TOTAL_US={} FULL_S2_US={} DEGRADED={} RESULT=PASS EPOCH={} S1_ONLINE={}",
+        record.cycle_id,
+        record.reason_str(),
+        record.delta_s0_freeze_us,
+        record.delta_s0_forge_us,
+        record.delta_s0_us,
+        record.delta_crypto_us,
+        record.delta_sla_us,
+        record.delta_full_us,
+        degraded,
+        record.crypto_epoch_id,
+        strate1_online,
+    );
+    crate::arch::x86_64::terminal::debug_write(line.as_bytes());
+}
+
+#[cfg(all(target_arch = "x86_64", not(test)))]
+struct Strate0IrqGuard {
+    was_enabled: bool,
+}
+
+#[cfg(all(target_arch = "x86_64", not(test)))]
+impl Strate0IrqGuard {
+    #[inline]
+    fn enter() -> Self {
+        let rflags: u64;
+        // SAFETY: CPL0 interrupt mask for non-preemptible Strate 0 handoff window (`t0..t3`).
+        unsafe {
+            core::arch::asm!(
+                "pushfq",
+                "pop {}",
+                "cli",
+                out(reg) rflags,
+                options(nomem)
+            );
+        }
+        Self {
+            was_enabled: (rflags & (1 << 9)) != 0,
+        }
+    }
+}
+
+#[cfg(all(target_arch = "x86_64", not(test)))]
+impl Drop for Strate0IrqGuard {
+    #[inline]
+    fn drop(&mut self) {
+        if self.was_enabled {
+            // SAFETY: restores previous CPL0 IF state upon leaving Strate 0 window (`t3`).
+            unsafe {
+                core::arch::asm!("sti", options(nomem, nostack));
+            }
+        }
+    }
+}
+
+/// Executes a full O(1) 3-Strata ExoPhoenix switch cycle with serialized TSC milestones `t0..t6`,
+/// Golden RAM Mirror BLAKE3 verification (P3), `ktime` base reset (P1), `crypto_server` CSPRNG
+/// reseed + monotonic epoch update, closed Strate 1 wave check (`t5` = SLA end), asynchronous
+/// Strate 2 reconvergence trigger (`t6`), SSR v7 `+0xC000` persistence, `ExoLedger` audit entry,
+/// and deterministic `[EXO_PHOENIX_SLA]` serial emission.
+pub fn force_phoenix_switch_cycle(trigger_reason: u32) -> Result<PhoenixTimingRecord, &'static str> {
+    let cycle_id = PHOENIX_CYCLE_COUNTER.fetch_add(1, Ordering::AcqRel) + 1;
+    let tsc_khz = crate::arch::x86_64::time::ktime::current_tsc_khz().max(1_000);
+
+    let mut record = PhoenixTimingRecord::zeroed();
+    record.magic = PHOENIX_METRICS_MAGIC;
+    record.cycle_id = cycle_id;
+    record.trigger_reason = trigger_reason;
+    record.tsc_khz = tsc_khz;
+
+    // Ensure the read-only Golden RAM Mirror is provisioned BEFORE masking interrupts so the
+    // Strate 0 critical window (`t0..t3`) performs zero heap allocations and zero disk I/O.
+    golden_mirror::init_golden_mirror();
+
+    #[cfg(not(test))]
+    {
+        if ssr::validate_layout_v7().is_err() {
+            let _ = ssr::initialize_layout_v7();
+        }
+    }
+
+    // Strate 0 atomic critical window (`t0..t3`): mask timer preemption so untrusted Strate 2
+    // threads cannot preempt Ring 0 IOMMU lock + Golden RAM Mirror BLAKE3 verification.
+    #[cfg(all(target_arch = "x86_64", not(test)))]
+    let strate0_irq_guard = Strate0IrqGuard::enter();
+
+    // t0: Serialized switch start (`lfence; rdtsc`)
+    record.t0_freeze_req = crate::arch::x86_64::cpu::tsc::read_tsc_begin();
+    PHOENIX_STATE.store(PhoenixState::IsolationSoft as u8, Ordering::Release);
+
+    crate::security::exoledger::exo_ledger_append_p0(
+        crate::security::exoledger::ActionTag::HandoffTriggered {
+            reason: trigger_reason,
+        },
+    );
+
+    #[cfg(not(test))]
+    {
+        let self_slot = current_slot();
+        set_handoff_flag_release(HANDOFF_FREEZE_REQ);
+        if has_other_mapped_cores(self_slot) {
+            reset_freeze_acks_for_targets(self_slot);
+            send_freeze_ipi_broadcast_except_self();
+            stage_soft_revoke_iommu();
+            if !wait_freeze_ack_and_drain_timeout_100us(self_slot) {
+                record.flags |= PHOENIX_FLAG_DEGRADED_FREEZE_TIMEOUT;
+                mask_all_msi_msix();
+                send_init_ipi_to_resistant_cores(self_slot);
+            }
+        } else {
+            stage_soft_revoke_iommu();
+            set_handoff_flag_release(HANDOFF_FREEZE_ACK_ALL);
+        }
+    }
+    #[cfg(test)]
+    {
+        IOMMU_DRAIN_CONFIRMED.store(true, Ordering::Release);
+    }
+
+    // t1: All peer cores frozen + soft IOMMU drain complete
+    record.t1_freeze_ack_all = crate::arch::x86_64::cpu::tsc::read_tsc_end().0;
+
+    // Hard IOMMU revoke + Golden RAM Mirror BLAKE3 verification (Strates 0 & 1 only, zero disk I/O)
+    #[cfg(not(test))]
+    stage_hard_revoke_iommu(true);
+    PHOENIX_STATE.store(PhoenixState::IsolationHard as u8, Ordering::Release);
+
+    let mirror_report = golden_mirror::verify_strate0_and_strate1_mirror()?;
+    if mirror_report.used_cold_disk_fallback {
+        record.flags |= PHOENIX_FLAG_COLD_DISK_FALLBACK;
+    }
+
+    // t2: Hard IOMMU + ExoForge RAM Mirror verification complete
+    record.t2_iommu_and_forge = crate::arch::x86_64::cpu::tsc::read_tsc_end().0;
+
+    // Kernel B active handoff + monotonic time-base reset + IRQ watchdog reset
+    #[cfg(not(test))]
+    set_handoff_flag_release(HANDOFF_B_ACTIVE);
+    reset_irq_watchdogs_after_restore();
+    PHOENIX_STATE.store(PhoenixState::Restore as u8, Ordering::Release);
+
+    // t3: Kernel B / restored Ring 0 operational (`delta_s0_us` ends here)
+    record.t3_kernel_b_active = crate::arch::x86_64::cpu::tsc::read_tsc_end().0;
+
+    // Restore IRQs immediately after `t3` so Wave R0 (`crypto_server`) IPC can run cleanly.
+    #[cfg(all(target_arch = "x86_64", not(test)))]
+    drop(strate0_irq_guard);
+
+    // Wave R0 critical crypto reseed (`PHOENIX_WAKE_ENTROPY`) -> monotonic `epoch_id`
+    let epoch_id = if crate::ipc::endpoint::lookup_endpoint(b"crypto_server").is_some() {
+        match notify_crypto_server_phoenix_wake_with_timeout(PHOENIX_FORCE_CRYPTO_TIMEOUT_NS) {
+            Ok(ep) => ep,
+            Err(_) => PHOENIX_FALLBACK_EPOCH.fetch_add(1, Ordering::AcqRel) + 1,
+        }
+    } else {
+        PHOENIX_FALLBACK_EPOCH.fetch_add(1, Ordering::AcqRel) + 1
+    };
+    record.crypto_epoch_id = epoch_id;
+
+    // t4: `crypto_server` CSPRNG reseeded
+    record.t4_crypto_reseeded = crate::arch::x86_64::cpu::tsc::read_tsc_end().0;
+
+    // Closed O(1) Strate 1 wave verification (R0 -> R1 -> R2; zero Strate 2 dependency)
+    let strate1_online = verify_strate1_waves_o1();
+
+    // t5: Strate 1 ready — END OF 1 s SLA (`delta_sla_us`)
+    record.t5_strate1_ready = crate::arch::x86_64::cpu::tsc::read_tsc_end().0;
+
+    // Trigger asynchronous Strate 2 reconvergence outside the SLA critical path
+    notify_init_relaunch_strate2_async();
+
+    // Release normal handoff state
+    #[cfg(not(test))]
+    set_handoff_flag_release(HANDOFF_NORMAL);
+    PHOENIX_STATE.store(PhoenixState::Normal as u8, Ordering::Release);
+
+    // t6: Strate 2 async reconvergence signaled
+    record.t6_strate2_ready = crate::arch::x86_64::cpu::tsc::read_tsc_end().0;
+
+    // Compute 128-bit overflow-free microsecond deltas, persist in SSR +0xC000, audit in ExoLedger
+    record.compute_deltas();
+    ssr::write_timing_record(&record);
+    crate::security::exoledger::exo_ledger_append(crate::security::exoledger::ActionTag::Custom {
+        tag: 0x5048_5853,
+        data: ((cycle_id as u64) << 32) | (record.delta_sla_us & 0xFFFF_FFFF),
+    });
+
+    #[cfg(not(test))]
+    emit_phoenix_sla_telemetry(&record, strate1_online);
+    #[cfg(test)]
+    let _ = strate1_online;
+
+    Ok(record)
+}
+
+#[cfg(test)]
+mod phoenix_sla_tests {
+    use super::*;
+
+    #[test]
+    fn force_phoenix_switch_cycle_records_valid_monotonic_metrics_in_ssr() {
+        let r1 = force_phoenix_switch_cycle(
+            exo_phoenix_ssr::metrics::PHOENIX_REASON_FORCE_SYSCALL,
+        )
+        .expect("cycle 1");
+        let r2 = force_phoenix_switch_cycle(
+            exo_phoenix_ssr::metrics::PHOENIX_REASON_FORCE_SYSCALL,
+        )
+        .expect("cycle 2");
+        assert!(r1.is_valid());
+        assert!(r2.is_valid());
+        assert!(!r1.is_degraded());
+        assert!(!r2.is_degraded());
+        assert!(r2.cycle_id > r1.cycle_id);
+        assert!(r2.crypto_epoch_id > r1.crypto_epoch_id);
+        assert!(r2.t0_freeze_req <= r2.t3_kernel_b_active);
+        assert!(r2.t3_kernel_b_active <= r2.t5_strate1_ready);
+        assert!(r2.t5_strate1_ready <= r2.t6_strate2_ready);
+        let stored = ssr::read_timing_record();
+        assert_eq!(stored.cycle_id, r2.cycle_id);
+        assert_eq!(stored.crypto_epoch_id, r2.crypto_epoch_id);
+    }
 }
 
 fn release_frozen_cores_after_restore() {

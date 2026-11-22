@@ -49,8 +49,53 @@ pub const SYS_UTIMENSAT: u64 = 280;
 pub const SYS_EVENTFD2: u64 = 290;
 pub const SYS_EPOLL_CREATE1: u64 = 291;
 pub const SYS_GETRANDOM: u64 = 318;
+pub const SYS_EXECVE: u64 = 59;
 pub const SYS_MEMFD_CREATE: u64 = 319;
+pub const SYS_EXO_IPC_LOOKUP: u64 = 306;
+pub const SYS_EXO_PLEDGE: u64 = 324;
 pub const SYS_EXO_LOG: u64 = 350;
+pub const SYS_PHOENIX_FORCE: u64 = 523;
+pub const SYS_EXOPHOENIX_TEST: u64 = 524;
+
+pub const PROT_EXEC: u64 = 4;
+pub const MAP_SHARED: u64 = 0x01;
+pub const MAP_FIXED: u64 = 0x10;
+
+pub const MFD_ALLOW_SEALING: u64 = 0x0002;
+pub const F_ADD_SEALS: u64 = 1033;
+pub const F_GET_SEALS: u64 = 1034;
+pub const F_SEAL_SHRINK: u64 = 0x0002;
+
+pub const EPERM: i64 = -1;
+pub const EACCES: i64 = -13;
+pub const EMFILE: i64 = -24;
+pub const ENOSPC: i64 = -28;
+
+pub const PHOENIX_METRICS_MAGIC: u32 = 0x504D_4554;
+
+#[repr(C, align(64))]
+#[derive(Clone, Copy, Default)]
+pub struct PhoenixTimingRecordWire {
+    pub magic: u32,
+    pub cycle_id: u32,
+    pub trigger_reason: u32,
+    pub flags: u32,
+    pub tsc_khz: u64,
+    pub t0_freeze_req: u64,
+    pub t1_freeze_ack_all: u64,
+    pub t2_iommu_and_forge: u64,
+    pub t3_kernel_b_active: u64,
+    pub t4_crypto_reseeded: u64,
+    pub t5_strate1_ready: u64,
+    pub t6_strate2_ready: u64,
+    pub delta_s0_freeze_us: u64,
+    pub delta_s0_forge_us: u64,
+    pub delta_s0_us: u64,
+    pub delta_crypto_us: u64,
+    pub delta_sla_us: u64,
+    pub delta_full_us: u64,
+    pub crypto_epoch_id: u64,
+}
 
 pub const LINUX_REBOOT_MAGIC1: u64 = 0xfee1_dead;
 pub const LINUX_REBOOT_MAGIC2: u64 = 672_274_793;

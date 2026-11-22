@@ -76,6 +76,32 @@ pub fn resize_regular_blob(blob_id: BlobId, length: u64) -> Result<(), FsBridgeE
         return Err(FsBridgeError::IsDir);
     }
 
+    // S5A: Enforce `memfd` seals (`F_SEAL_SHRINK`, `F_SEAL_GROW`, `F_SEAL_WRITE`) and
+    // structurally block shrinking a `memfd` that is currently `MAP_SHARED` by another
+    // process (prevents SIGBUS DoS against `fb_server` / `exo_compositor`).
+    if is_pseudo_blob(&blob_id, PSEUDO_MEMFD_TAG) {
+        let cur_len = blob_len(&blob_id) as u64;
+        let seals = get_memfd_seals(&blob_id);
+        if (seals & F_SEAL_WRITE) != 0 && length != cur_len {
+            return Err(FsBridgeError::OpNotPermitted);
+        }
+        if length < cur_len {
+            if (seals & F_SEAL_SHRINK) != 0 {
+                return Err(FsBridgeError::OpNotPermitted);
+            }
+            let caller_pid = crate::syscall::fast_path::syscall_current_pid();
+            let shared_by_other = SHARED_BLOB_FRAMES.lock().iter().any(|p| {
+                p.blob_id == blob_id && (p.multi_mapped || (p.first_mapper_pid != 0 && p.first_mapper_pid != caller_pid))
+            });
+            if shared_by_other {
+                return Err(FsBridgeError::OpNotPermitted);
+            }
+        }
+        if length > cur_len && (seals & F_SEAL_GROW) != 0 {
+            return Err(FsBridgeError::OpNotPermitted);
+        }
+    }
+
     BLOB_CACHE
         .resize(blob_id, length as usize)
         .map_err(exofs_to_bridge_error)?;
@@ -87,6 +113,8 @@ pub struct SharedBlobPage {
     pub blob_id: BlobId,
     pub page_idx: u64,
     pub frame: crate::memory::core::Frame,
+    pub first_mapper_pid: u32,
+    pub multi_mapped: bool,
 }
 
 pub static SHARED_BLOB_FRAMES: Mutex<Vec<SharedBlobPage>> = Mutex::new(Vec::new());
@@ -94,12 +122,18 @@ pub static SHARED_BLOB_FRAMES: Mutex<Vec<SharedBlobPage>> = Mutex::new(Vec::new(
 pub fn get_or_alloc_shared_blob_frame(
     blob_id: BlobId,
     page_idx: u64,
+    mapper_pid: u32,
 ) -> Result<crate::memory::core::Frame, crate::memory::virt::mmap::MmapError> {
     let mut table = SHARED_BLOB_FRAMES.lock();
     if let Some(entry) = table
-        .iter()
+        .iter_mut()
         .find(|p| p.blob_id == blob_id && p.page_idx == page_idx)
     {
+        if mapper_pid != 0 && entry.first_mapper_pid != 0 && entry.first_mapper_pid != mapper_pid {
+            entry.multi_mapped = true;
+        } else if entry.first_mapper_pid == 0 {
+            entry.first_mapper_pid = mapper_pid;
+        }
         return Ok(entry.frame);
     }
 
@@ -129,6 +163,8 @@ pub fn get_or_alloc_shared_blob_frame(
         blob_id,
         page_idx,
         frame,
+        first_mapper_pid: mapper_pid,
+        multi_mapped: false,
     });
     Ok(frame)
 }
@@ -187,6 +223,67 @@ pub fn sync_blob_write_to_shared_frames(blob_id: &BlobId, start: usize, bytes: &
     }
 }
 
+/// Verifies Zero-Trust execution integrity (`S2`) for a file-backed `mmap(..., PROT_EXEC)` request.
+fn verify_file_exec_mapping(blob_id: &BlobId, prot: u32, pid: u32) -> Result<(), crate::memory::virt::mmap::MmapError> {
+    use crate::memory::virt::mmap::MmapError;
+
+    let deny = |reason: u32| -> Result<(), MmapError> {
+        let oid = inode_from_blob_id(blob_id);
+        crate::security::exoledger::exo_ledger_append(
+            crate::security::exoledger::ActionTag::AccessDenied { oid, rights: prot },
+        );
+        crate::security::shield_feed::push_event(
+            pid,
+            crate::security::shield_feed::event_type::MEMORY,
+            crate::security::shield_feed::severity::HIGH,
+            reason,
+            oid,
+            prot as u64,
+        );
+        Err(MmapError::PermissionDenied)
+    };
+
+    // Never execute anonymous in-memory blobs (memfd/pipe/socket).
+    if is_pseudo_blob(blob_id, PSEUDO_MEMFD_TAG)
+        || is_pseudo_blob(blob_id, PSEUDO_PIPE_TAG)
+        || is_pseudo_blob(blob_id, PSEUDO_SOCKET_TAG)
+    {
+        return deny(0xE001);
+    }
+
+    let policy = blob_exec_policy_flags(blob_id);
+    // Reject files coming from external `noexec` mounts (e.g., `/mnt/usb`).
+    if (policy & BLOB_EXEC_NOEXEC_MOUNT) != 0 {
+        return deny(0xE002);
+    }
+
+    // Reject unsigned / runtime-written files or files outside verified read-only system trees.
+    let untrusted_file = (policy & BLOB_EXEC_WRITTEN_RUNTIME) != 0
+        || (policy & BLOB_EXEC_TRUSTED_SYSTEM) == 0;
+    if untrusted_file {
+        return deny(0xE003);
+    }
+
+    // Enforce ExoSeal trust chain when verified at boot.
+    if crate::security::is_chain_verified() {
+        if crate::security::check_chain_of_trust().is_err() {
+            #[cfg(feature = "strict_exec_signatures")]
+            {
+                return deny(0xE004);
+            }
+            #[cfg(not(feature = "strict_exec_signatures"))]
+            {
+                let oid = inode_from_blob_id(blob_id);
+                crate::security::exoledger::exo_ledger_append(
+                    crate::security::exoledger::ActionTag::AccessDenied { oid, rights: prot },
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Maps a file or `memfd` descriptor into the current process's virtual address space.
 pub fn fs_mmap_file(
     addr: u64,
@@ -197,7 +294,10 @@ pub fn fs_mmap_file(
     off: u64,
     pid: u32,
 ) -> Result<usize, crate::memory::virt::mmap::MmapError> {
-    use crate::memory::virt::mmap::{do_mmap, do_mmap_shared_frames, do_mprotect, do_munmap, MmapError};
+    use crate::memory::virt::mmap::{
+        do_mmap, do_mmap_shared_frames, do_mprotect, do_mprotect_verified_file_exec, do_munmap,
+        MmapError,
+    };
 
     if prot & !0x7 != 0 {
         return Err(MmapError::InvalidAddress);
@@ -222,6 +322,20 @@ pub fn fs_mmap_file(
         }
     }
 
+    // S5A: Reject writable `MAP_SHARED` mapping on a write-sealed `memfd`.
+    if is_pseudo_blob(&entry.blob_id, PSEUDO_MEMFD_TAG)
+        && (flags & 0x01) != 0
+        && (prot & 0x02) != 0
+        && (get_memfd_seals(&entry.blob_id) & F_SEAL_WRITE) != 0
+    {
+        return Err(MmapError::PermissionDenied);
+    }
+
+    // S2: Verify file signature / trust policy on every executable mapping (`PROT_EXEC`).
+    if (prot & 0x4) != 0 {
+        verify_file_exec_mapping(&entry.blob_id, prot, pid)?;
+    }
+
     let n_pages = (len + 4095) / 4096;
     if flags & 0x01 != 0 {
         let mut frames = Vec::new();
@@ -230,7 +344,8 @@ pub fn fs_mmap_file(
             .map_err(|_| MmapError::AllocFailed)?;
         let base_page = off / 4096;
         for i in 0..n_pages {
-            let frame = get_or_alloc_shared_blob_frame(entry.blob_id, base_page + i as u64)?;
+            let frame =
+                get_or_alloc_shared_blob_frame(entry.blob_id, base_page + i as u64, pid)?;
             frames.push(frame);
         }
         return do_mmap_shared_frames(addr, len, prot, flags, &frames);
@@ -251,7 +366,12 @@ pub fn fs_mmap_file(
         }
     }
     if prot != (temp_prot & 0x3) {
-        if let Err(err) = do_mprotect(va as u64, len, prot) {
+        let res = if (prot & 0x4) != 0 {
+            do_mprotect_verified_file_exec(va as u64, len, prot)
+        } else {
+            do_mprotect(va as u64, len, prot)
+        };
+        if let Err(err) = res {
             let _ = do_munmap(va as u64, len);
             return Err(err);
         }
@@ -308,6 +428,12 @@ pub fn write_blob_at(
 
     let input = read_user_bytes(buf_ptr, count)?;
 
+    if is_pseudo_blob(&blob_id, PSEUDO_MEMFD_TAG) && (get_memfd_seals(&blob_id) & F_SEAL_WRITE) != 0
+    {
+        return Err(FsBridgeError::OpNotPermitted);
+    }
+    update_blob_exec_policy(blob_id, BLOB_EXEC_WRITTEN_RUNTIME, BLOB_EXEC_TRUSTED_SYSTEM);
+
     let start = offset as usize;
     BLOB_CACHE
         .write_at(blob_id, start, &input)
@@ -342,6 +468,11 @@ pub fn write_blob_bytes_at(blob_id: BlobId, offset: u64, bytes: &[u8]) -> Result
     if offset > usize::MAX as u64 {
         return Err(FsBridgeError::Invalid);
     }
+    if is_pseudo_blob(&blob_id, PSEUDO_MEMFD_TAG) && (get_memfd_seals(&blob_id) & F_SEAL_WRITE) != 0
+    {
+        return Err(FsBridgeError::OpNotPermitted);
+    }
+    update_blob_exec_policy(blob_id, BLOB_EXEC_WRITTEN_RUNTIME, BLOB_EXEC_TRUSTED_SYSTEM);
 
     let start = offset as usize;
     BLOB_CACHE

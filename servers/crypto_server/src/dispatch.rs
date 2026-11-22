@@ -470,13 +470,17 @@ pub fn handle_request(req: &CryptoRequest) -> CryptoReply {
         PHOENIX_WAKE_ENTROPY => {
             // FIX-CS-PHOENIX-01 : Seul le noyau (PID 0) authentifié peut déclencher
             // le réveil Phoenix et la réinitialisation des clés.
+            static PHOENIX_EPOCH_ID: core::sync::atomic::AtomicU64 =
+                core::sync::atomic::AtomicU64::new(1);
             let authenticated_kernel_wake = req.sender_pid == 0 && caller_principal == 0;
             if !authenticated_kernel_wake {
                 reply.status = CRYPTO_ERR_CAP;
             } else if let Some(entropy) = phoenix_wake_entropy_from_request(req, payload) {
                 xchacha20::xchacha20_reseed(entropy);
                 let _ = keystore::revoke_all_pre_phoenix();
+                let new_epoch = PHOENIX_EPOCH_ID.fetch_add(1, Ordering::AcqRel) + 1;
                 reply.status = CRYPTO_OK;
+                reply.write_data(&new_epoch.to_le_bytes());
             } else {
                 reply.status = CRYPTO_ERR_ARGS;
             }

@@ -641,6 +641,83 @@ pub fn verify_ring_integrity() -> Result<usize, LedgerIntegrityError> {
     Ok(valid)
 }
 
+/// Verifies the full cryptographic BLAKE3 chain across both the immutable P0 zone
+/// and the circular ring buffer (which share `GLOBAL_SEQ` and `LAST_HASH`).
+///
+/// Checks:
+/// 1. Every written P0 entry and ring entry matches its recomputed BLAKE3 hash.
+/// 2. When sorted by `seq`, every contiguous pair `(seq, seq + 1)` satisfies
+///    `next.prev_hash == cur.hash` (and `seq == 0` chains from the all-zero genesis).
+/// 3. If any entries exist, the highest-`seq` entry's hash equals `LAST_HASH`.
+pub fn verify_chain_integrity() -> Result<usize, LedgerIntegrityError> {
+    let _guard = P0_CHAIN_LOCK.lock();
+    let p0_count = P0_USED.load(Ordering::Acquire).min(P0_ZONE_ENTRIES);
+    let ring_head = RING_HEAD.load(Ordering::Acquire);
+    let ring_count = ring_head.min(RING_BUFFER_ENTRIES);
+
+    const MAX_COMBINED: usize = P0_ZONE_ENTRIES + RING_BUFFER_ENTRIES;
+    let mut entries: [(u64, [u8; 32], [u8; 32]); MAX_COMBINED] =
+        [(0, [0u8; 32], [0u8; 32]); MAX_COMBINED];
+    let mut total = 0usize;
+
+    for i in 0..p0_count {
+        // SAFETY: i < p0_count <= P0_ZONE_ENTRIES, read-only under P0_CHAIN_LOCK.
+        let entry = unsafe { core::ptr::read_volatile(p0_zone_ptr().add(i) as *const LedgerEntry) };
+        if entry.hash != entry.compute_hash() {
+            return Err(LedgerIntegrityError::HashMismatch { entry_idx: i });
+        }
+        entries[total] = (entry.seq, entry.prev_hash, entry.hash);
+        total += 1;
+    }
+
+    for i in 0..ring_count {
+        // SAFETY: i < ring_count <= RING_BUFFER_ENTRIES, read-only under P0_CHAIN_LOCK.
+        let entry =
+            unsafe { core::ptr::read_volatile(ring_buffer_ptr().add(i) as *const LedgerEntry) };
+        if entry.hash != entry.compute_hash() {
+            return Err(LedgerIntegrityError::HashMismatch {
+                entry_idx: p0_count + i,
+            });
+        }
+        entries[total] = (entry.seq, entry.prev_hash, entry.hash);
+        total += 1;
+    }
+
+    if total == 0 {
+        return Ok(0);
+    }
+
+    // Insertion sort by sequence number (stack-only, bounded <= 112 elements).
+    for i in 1..total {
+        let key = entries[i];
+        let mut j = i;
+        while j > 0 && entries[j - 1].0 > key.0 {
+            entries[j] = entries[j - 1];
+            j -= 1;
+        }
+        entries[j] = key;
+    }
+
+    if entries[0].0 == 0 && entries[0].1 != [0u8; 32] {
+        return Err(LedgerIntegrityError::ChainBroken { entry_idx: 0 });
+    }
+
+    for i in 1..total {
+        if entries[i].0 == entries[i - 1].0.saturating_add(1) && entries[i].1 != entries[i - 1].2 {
+            return Err(LedgerIntegrityError::ChainBroken { entry_idx: i });
+        }
+    }
+
+    let last_hash = load_last_hash();
+    if entries[total - 1].2 != last_hash {
+        return Err(LedgerIntegrityError::ChainBroken {
+            entry_idx: total - 1,
+        });
+    }
+
+    Ok(total)
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Integrity errors
 // ─────────────────────────────────────────────────────────────────────────────

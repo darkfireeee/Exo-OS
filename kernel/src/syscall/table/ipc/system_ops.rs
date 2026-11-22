@@ -240,3 +240,120 @@ pub fn sys_exo_phoenix_state_get(
     stat_inc(SYS_EXO_PHOENIX_STATE_GET);
     crate::exophoenix::state() as u8 as i64
 }
+
+/// `sys_phoenix_force(reason, out_ptr, out_len)` (`SYS_PHOENIX_FORCE = 523`, Spec §6.2).
+///
+/// Triggers a real O(1) 3-Strata ExoPhoenix switch cycle with serialized TSC milestones `t0..t6`,
+/// Golden RAM Mirror verification, `crypto_server` CSPRNG reseed, SSR v7 `+0xC000` persistence,
+/// `ExoLedger` audit entry, and `[EXO_PHOENIX_SLA]` serial emission.
+pub fn sys_phoenix_force(
+    reason: u64,
+    out_ptr: u64,
+    out_len: u64,
+    _a4: u64,
+    _a5: u64,
+    _a6: u64,
+) -> i64 {
+    stat_inc(SYS_PHOENIX_FORCE);
+    if let Err(errno) = ensure_not_full_sandbox() {
+        return errno;
+    }
+
+    let caller = current_pid_u32();
+    if caller > 1 {
+        let restrictions = crate::security::zero_trust::process_restrictions(caller);
+        if (restrictions & crate::security::zero_trust::restriction_flags::NO_RING1_CRITICAL_IPC)
+            != 0
+        {
+            return EPERM;
+        }
+        let class = crate::security::service_class_of(Pid(caller));
+        let privileged_class = matches!(
+            class,
+            crate::security::ServiceClass::InitServer
+                | crate::security::ServiceClass::ExoShield
+                | crate::security::ServiceClass::Exosh
+        );
+        let is_root = PROCESS_REGISTRY
+            .find_by_pid(Pid(caller))
+            .map(|pcb| {
+                let creds = pcb.get_creds();
+                creds.is_root() || creds.euid == 0
+            })
+            .unwrap_or(false);
+        if !privileged_class && !is_root {
+            return EPERM;
+        }
+    }
+
+    let reason_u32 = if reason == 0 {
+        exo_phoenix_ssr::metrics::PHOENIX_REASON_FORCE_SYSCALL
+    } else {
+        reason as u32
+    };
+
+    let record = match crate::exophoenix::handoff::force_phoenix_switch_cycle(reason_u32) {
+        Ok(rec) => rec,
+        Err(_) => return -5, // EIO
+    };
+
+    if out_ptr != 0 {
+        let rec_size = core::mem::size_of::<exo_phoenix_ssr::metrics::PhoenixTimingRecord>();
+        if out_len != 0 && (out_len as usize) < rec_size {
+            return EINVAL;
+        }
+        if UserBuf::validate(out_ptr, rec_size, rec_size).is_err() {
+            return EFAULT;
+        }
+        let src = &record as *const exo_phoenix_ssr::metrics::PhoenixTimingRecord as *const u8;
+        if copy_to_user(out_ptr as *mut u8, src, rec_size).is_err() {
+            return EFAULT;
+        }
+    }
+
+    0
+}
+
+/// `sys_exophoenix_test(subcmd, arg0, arg1)` (`SYS_EXOPHOENIX_TEST = 524`).
+///
+/// - `subcmd == 0`: read latest `PhoenixTimingRecord` from SSR v7 `+0xC000` into `(arg0, arg1)`.
+/// - `subcmd == 1`: verify `ExoLedger` BLAKE3 cryptographic hash chain across P0 + ring buffer.
+pub fn sys_exophoenix_test(
+    subcmd: u64,
+    arg0: u64,
+    arg1: u64,
+    _a4: u64,
+    _a5: u64,
+    _a6: u64,
+) -> i64 {
+    stat_inc(SYS_EXOPHOENIX_TEST);
+    if let Err(errno) = ensure_not_full_sandbox() {
+        return errno;
+    }
+
+    match subcmd {
+        0 => {
+            let rec_size = core::mem::size_of::<exo_phoenix_ssr::metrics::PhoenixTimingRecord>();
+            if arg0 == 0 {
+                return rec_size as i64;
+            }
+            if arg1 != 0 && (arg1 as usize) < rec_size {
+                return EINVAL;
+            }
+            if UserBuf::validate(arg0, rec_size, rec_size).is_err() {
+                return EFAULT;
+            }
+            let record = crate::exophoenix::ssr::read_timing_record();
+            let src = &record as *const exo_phoenix_ssr::metrics::PhoenixTimingRecord as *const u8;
+            if copy_to_user(arg0 as *mut u8, src, rec_size).is_err() {
+                return EFAULT;
+            }
+            rec_size as i64
+        }
+        1 => match crate::security::exoledger::verify_chain_integrity() {
+            Ok(verified_entries) => verified_entries as i64,
+            Err(_) => -5, // EIO: chain integrity violated
+        },
+        _ => EINVAL,
+    }
+}

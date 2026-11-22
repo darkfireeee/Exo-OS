@@ -39,6 +39,7 @@ members = [
     "servers/audio_server",
     "servers/usb_server",
     "servers/exosh",
+    "servers/exo_compositor",
     "servers/exo_shield",
     "servers/fb_server",
     "servers/init_server",

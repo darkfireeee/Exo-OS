@@ -15,6 +15,8 @@ jobs:
         with:
           python-version: "3.12"
       - run: python3 tools/audit_constants.py --fail-on-warn
+      - run: python3 tools/check_service_order.py
+      - run: python3 tools/check_phoenix_strata.py
 
   semgrep:
     runs-on: ubuntu-latest
@@ -87,7 +89,7 @@ jobs:
             -Z json-target-spec \
             -Z build-std=core,alloc,compiler_builtins \
             -Z build-std-features=compiler-builtins-mem
-          cargo check --locked -p exo-exosh \
+          cargo check --locked -p exo-exosh -p exo-compositor \
             --target targets/x86_64-unknown-exo.json "${STD_FLAGS[@]}"
           cargo check --locked --manifest-path userspace/apps/coreutils/Cargo.toml \
             --bins --target-dir target \

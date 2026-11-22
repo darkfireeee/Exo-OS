@@ -88,6 +88,12 @@ pub enum FsBridgeError {
     OpNotSupp,
     /// Transport endpoint is already connected (EISCONN).
     IsConn,
+    /// Operation not permitted (EPERM).
+    OpNotPermitted,
+    /// Too many open/inflight file descriptors (EMFILE).
+    TooManyFds,
+    /// Too many references (ETOOMANYREFS).
+    TooManyRefs,
 }
 
 impl FsBridgeError {
@@ -122,6 +128,9 @@ impl FsBridgeError {
             FsBridgeError::MsgSize => -90,    // EMSGSIZE
             FsBridgeError::OpNotSupp => -95,  // EOPNOTSUPP
             FsBridgeError::IsConn => -106,    // EISCONN
+            FsBridgeError::OpNotPermitted => -1, // EPERM
+            FsBridgeError::TooManyFds => -24, // EMFILE
+            FsBridgeError::TooManyRefs => -109, // ETOOMANYREFS
         }
     }
 }
@@ -372,6 +381,134 @@ pub fn remove_mode(blob_id: &BlobId) {
     if let Some(pos) = table.iter().position(|record| record.blob_id == *blob_id) {
         table.swap_remove(pos);
     }
+    remove_blob_exec_policy(blob_id);
+}
+
+/// S2: Per-blob execution trust & mount policy metadata for `mmap(PROT_EXEC)`.
+pub const BLOB_EXEC_TRUSTED_SYSTEM: u8 = 1 << 0;
+pub const BLOB_EXEC_NOEXEC_MOUNT: u8 = 1 << 1;
+pub const BLOB_EXEC_WRITTEN_RUNTIME: u8 = 1 << 2;
+
+#[derive(Clone, Copy)]
+pub struct BlobExecPolicyRecord {
+    pub blob_id: BlobId,
+    pub flags: u8,
+}
+
+pub static BLOB_EXEC_POLICY: Mutex<Vec<BlobExecPolicyRecord>> = Mutex::new(Vec::new());
+
+pub fn is_noexec_mount_path(path: &[u8]) -> bool {
+    path == b"/mnt/usb"
+        || path.starts_with(b"/mnt/usb/")
+        || path == b"/mnt"
+        || path.starts_with(b"/mnt/")
+}
+
+pub fn is_trusted_system_exec_path(path: &[u8]) -> bool {
+    path.starts_with(b"/bin/")
+        || path.starts_with(b"/sbin/")
+        || path.starts_with(b"/lib/")
+        || path.starts_with(b"/usr/lib/")
+        || path.starts_with(b"/usr/bin/")
+}
+
+pub fn update_blob_exec_policy(blob_id: BlobId, set_bits: u8, clear_bits: u8) {
+    let mut table = BLOB_EXEC_POLICY.lock();
+    if let Some(rec) = table.iter_mut().find(|r| r.blob_id == blob_id) {
+        rec.flags = (rec.flags | set_bits) & !clear_bits;
+        return;
+    }
+    if table.try_reserve(1).is_ok() {
+        table.push(BlobExecPolicyRecord {
+            blob_id,
+            flags: set_bits & !clear_bits,
+        });
+    }
+}
+
+pub fn blob_exec_policy_flags(blob_id: &BlobId) -> u8 {
+    BLOB_EXEC_POLICY
+        .lock()
+        .iter()
+        .find(|r| r.blob_id == *blob_id)
+        .map(|r| r.flags)
+        .unwrap_or(0)
+}
+
+pub fn remove_blob_exec_policy(blob_id: &BlobId) {
+    let mut table = BLOB_EXEC_POLICY.lock();
+    if let Some(pos) = table.iter().position(|r| r.blob_id == *blob_id) {
+        table.swap_remove(pos);
+    }
+}
+
+/// S5A: Linux-compatible `memfd` seal commands and bits.
+pub const F_ADD_SEALS: u32 = 1033;
+pub const F_GET_SEALS: u32 = 1034;
+pub const F_SEAL_SEAL: u32 = 0x0001;
+pub const F_SEAL_SHRINK: u32 = 0x0002;
+pub const F_SEAL_GROW: u32 = 0x0004;
+pub const F_SEAL_WRITE: u32 = 0x0008;
+pub const F_SEAL_ALL: u32 = F_SEAL_SEAL | F_SEAL_SHRINK | F_SEAL_GROW | F_SEAL_WRITE;
+
+pub const MAX_MEMFD_SEALS_ENTRIES: usize = 1024;
+
+#[derive(Clone, Copy)]
+pub struct MemfdSealRecord {
+    pub blob_id: BlobId,
+    pub seals: u32,
+    pub allow_sealing: bool,
+}
+
+pub static MEMFD_SEALS: Mutex<Vec<MemfdSealRecord>> = Mutex::new(Vec::new());
+
+pub fn init_memfd_seals(blob_id: BlobId, allow_sealing: bool) -> Result<(), FsBridgeError> {
+    let mut table = MEMFD_SEALS.lock();
+    if let Some(rec) = table.iter_mut().find(|r| r.blob_id == blob_id) {
+        rec.allow_sealing = allow_sealing;
+        rec.seals = if allow_sealing { 0 } else { F_SEAL_SEAL };
+        return Ok(());
+    }
+    if table.len() >= MAX_MEMFD_SEALS_ENTRIES || table.try_reserve(1).is_err() {
+        return Err(FsBridgeError::NoMemory);
+    }
+    table.push(MemfdSealRecord {
+        blob_id,
+        seals: if allow_sealing { 0 } else { F_SEAL_SEAL },
+        allow_sealing,
+    });
+    Ok(())
+}
+
+pub fn get_memfd_seals(blob_id: &BlobId) -> u32 {
+    MEMFD_SEALS
+        .lock()
+        .iter()
+        .find(|r| r.blob_id == *blob_id)
+        .map(|r| r.seals)
+        .unwrap_or(F_SEAL_SEAL)
+}
+
+pub fn add_memfd_seals(blob_id: BlobId, new_seals: u32) -> Result<(), FsBridgeError> {
+    if (new_seals & !F_SEAL_ALL) != 0 {
+        return Err(FsBridgeError::Invalid);
+    }
+    let mut table = MEMFD_SEALS.lock();
+    if let Some(rec) = table.iter_mut().find(|r| r.blob_id == blob_id) {
+        if !rec.allow_sealing || (rec.seals & F_SEAL_SEAL) != 0 {
+            return Err(FsBridgeError::OpNotPermitted);
+        }
+        rec.seals |= new_seals;
+        return Ok(());
+    }
+    Err(FsBridgeError::Invalid)
+}
+
+pub fn remove_memfd_seals(blob_id: &BlobId) {
+    let mut table = MEMFD_SEALS.lock();
+    if let Some(pos) = table.iter().position(|r| r.blob_id == *blob_id) {
+        table.swap_remove(pos);
+    }
 }
 
 #[repr(C)]
@@ -471,26 +608,49 @@ const _: () = assert!(DIRENT64_HEADER_SIZE == 19);
 
 /// Blobs unlinked/overwritten while still referenced by open file descriptors
 /// (POSIX deferred unlink): cleaned up once `OBJECT_TABLE.open_count_for(&blob_id) == 0`.
-pub static DEFERRED_UNLINK_BLOBS: Mutex<Vec<(BlobId, bool)>> = Mutex::new(Vec::new());
+/// S4 Ring 0 DoS confinement: bounded globally and per PID with explicit `try_reserve`.
+pub const MAX_DEFERRED_UNLINKS_PER_PID: usize = 256;
+pub const MAX_DEFERRED_UNLINKS_GLOBAL: usize = 4096;
+/// Descriptor flag preventing `SCM_RIGHTS` delegation (S3).
+pub const FD_NO_DELEGATE: u32 = 0x8000_0000;
+
+pub static DEFERRED_UNLINK_BLOBS: Mutex<Vec<(BlobId, bool, u32)>> = Mutex::new(Vec::new());
 pub static NEXT_UNLINK_GEN: AtomicU64 = AtomicU64::new(1);
 
-pub fn mark_deferred_unlink(blob_id: BlobId, is_symlink: bool) {
+pub fn mark_deferred_unlink_for_pid(
+    blob_id: BlobId,
+    is_symlink: bool,
+    pid: u32,
+) -> Result<(), FsBridgeError> {
     let mut list = DEFERRED_UNLINK_BLOBS.lock();
-    if list.iter().any(|(b, _)| *b == blob_id) {
-        return;
+    if list.iter().any(|(b, _, _)| *b == blob_id) {
+        return Ok(());
     }
-    if list.try_reserve(1).is_ok() {
-        list.push((blob_id, is_symlink));
+    if list.len() >= MAX_DEFERRED_UNLINKS_GLOBAL {
+        return Err(FsBridgeError::NoSpace);
     }
+    if pid != 0 {
+        let per_pid = list.iter().filter(|(_, _, owner)| *owner == pid).count();
+        if per_pid >= MAX_DEFERRED_UNLINKS_PER_PID {
+            return Err(FsBridgeError::NoSpace);
+        }
+    }
+    list.try_reserve(1).map_err(|_| FsBridgeError::NoMemory)?;
+    list.push((blob_id, is_symlink, pid));
+    Ok(())
+}
+
+pub fn mark_deferred_unlink(blob_id: BlobId, is_symlink: bool) {
+    let _ = mark_deferred_unlink_for_pid(blob_id, is_symlink, 0);
 }
 
 pub fn is_deferred_unlink(blob_id: &BlobId) -> bool {
-    DEFERRED_UNLINK_BLOBS.lock().iter().any(|(b, _)| b == blob_id)
+    DEFERRED_UNLINK_BLOBS.lock().iter().any(|(b, _, _)| b == blob_id)
 }
 
 pub fn take_deferred_unlink(blob_id: &BlobId) -> Option<bool> {
     let mut list = DEFERRED_UNLINK_BLOBS.lock();
-    let pos = list.iter().position(|(b, _)| b == blob_id)?;
+    let pos = list.iter().position(|(b, _, _)| b == blob_id)?;
     Some(list.swap_remove(pos).1)
 }
 

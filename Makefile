@@ -7,9 +7,14 @@
 #   make qemu    → lance QEMU depuis l'ISO (x86_64, 4Go RAM, sortie série stdio)
 #   make run     → alias de qemu
 
-.PHONY: all build build-rootfs-binaries build-musl-exo rootfs-image release iso iso-phoenix-resurrection iso-release-phoenix-resurrection qemu qemu-e1000 qemu-virtio-net qemu-nographic-virtio-net qemu-headless-safe-virtio-net run clean check fmt test test-exofs test-userspace test-drivers test-loader qemu-shell-smoke qemu-compliance info help qemu-headless-safe qemu-phoenix-resurrection qemu-release-phoenix-resurrection keygen-kernel sign-kernel verify-kernel _sign_kernel
+.PHONY: all build build-rootfs-binaries build-musl-exo rootfs-image release iso iso-phoenix-resurrection iso-release-phoenix-resurrection qemu qemu-e1000 qemu-virtio-net qemu-nographic-virtio-net qemu-headless-safe-virtio-net run clean check fmt test test-exofs test-userspace test-drivers test-loader qemu-shell-smoke qemu-compliance qemu-security-audit qemu-phoenix-bench info help qemu-headless-safe qemu-phoenix-resurrection qemu-release-phoenix-resurrection keygen-kernel sign-kernel verify-kernel _sign_kernel
 
-# ── Outils ───────────────────────────────────────────────────────────────────
+# ── Outils & Profils de Sécurité (S1 : 1 dépôt, 2 profils, 0 fork) ───────────
+EXO_PROFILE ?= pure
+ifneq ($(filter pure compat,$(EXO_PROFILE)),$(EXO_PROFILE))
+$(error EXO_PROFILE doit valoir 'pure' (défaut) ou 'compat', reçu : '$(EXO_PROFILE)')
+endif
+
 CARGO          = cargo
 KERNEL_DIR     = kernel
 ISO_WORKDIR    = iso_build
@@ -17,6 +22,18 @@ ISO_OUTPUT     = exo-os.iso
 ISO_EXOFS_DISK ?= target/iso/exofs-root.img
 ISO_EXOFS_DISK_SIZE ?= 64M
 BAREMETAL_TARGET ?= x86_64-unknown-none
+ifeq ($(EXO_PROFILE),pure)
+KERNEL_PROFILE_FEATURES ?= strict_exec_signatures
+else
+KERNEL_PROFILE_FEATURES ?=
+endif
+KERNEL_EXTRA_FEATURES ?=
+KERNEL_ALL_FEATURES = $(strip $(KERNEL_PROFILE_FEATURES) $(KERNEL_EXTRA_FEATURES))
+ifneq ($(KERNEL_ALL_FEATURES),)
+KERNEL_FEATURE_FLAGS = --features "$(KERNEL_ALL_FEATURES)"
+else
+KERNEL_FEATURE_FLAGS =
+endif
 USERSPACE_TARGET_JSON ?= $(abspath x86_64-exo-userspace.json)
 USERSPACE_TARGET_DIR  ?= x86_64-exo-userspace
 EXO_STD_TARGET_JSON   ?= $(abspath x86_64-unknown-exo.json)
@@ -236,11 +253,13 @@ build-rootfs-binaries:
 	@echo "$(BLUE)[rootfs] Compilation serveurs Ring1 pour /sbin, /bin et /lib...$(NC)"
 	@bash scripts/prepare_exo_rust_src.sh "$(CURDIR)/target/exo-rust-src/library"
 	@$(CARGO) build --locked $(ROOTFS_SERVER_PACKAGES) $(ROOTFS_SERVER_FEATURES) --target $(USERSPACE_TARGET_JSON) $(CARGO_USERSPACE_FLAGS)
-	@__CARGO_TESTS_ONLY_SRC_ROOT="$(CURDIR)/target/exo-rust-src/library" $(CARGO) build --locked -p exo-exosh --target $(EXO_STD_TARGET_JSON) $(CARGO_EXO_STD_FLAGS)
+	@__CARGO_TESTS_ONLY_SRC_ROOT="$(CURDIR)/target/exo-rust-src/library" $(CARGO) build --locked -p exo-exosh -p exo-compositor --target $(EXO_STD_TARGET_JSON) $(CARGO_EXO_STD_FLAGS)
 	@__CARGO_TESTS_ONLY_SRC_ROOT="$(CURDIR)/target/exo-rust-src/library" $(CARGO) build --locked --manifest-path $(COREUTILS_MANIFEST) --bins --target-dir target --target $(EXO_STD_TARGET_JSON) $(CARGO_EXO_STD_FLAGS)
-	@$(CARGO) build --locked -p exo-loader --features dynamic_linking --target $(LOADER_TARGET_JSON) $(CARGO_USERSPACE_FLAGS)
+	@if [ "$(EXO_PROFILE)" = "compat" ] || [ -n "$(P3_PROBE)$(COMPLIANCE_PROBE)" ]; then \
+		$(CARGO) build --locked -p exo-loader --features dynamic_linking --target $(LOADER_TARGET_JSON) $(CARGO_USERSPACE_FLAGS); \
+	fi
 	@rm -rf "$(ROOTFS_STAGING_DIR)" 2>/dev/null || (sleep 1 && rm -rf "$(ROOTFS_STAGING_DIR)") || true
-	@mkdir -p "$(ROOTFS_STAGING_DIR)/sbin" "$(ROOTFS_STAGING_DIR)/bin" "$(ROOTFS_STAGING_DIR)/lib" "$(ROOTFS_STAGING_DIR)/mnt/usb" "$(ROOTFS_STAGING_DIR)/tmp" "$(ROOTFS_STAGING_DIR)/apps" "$(ROOTFS_STAGING_DIR)/run" "$(ROOTFS_STAGING_DIR)/etc/exo-desktop" "$(ROOTFS_STAGING_DIR)/usr/share/themes/exo-strata" "$(ROOTFS_STAGING_DIR)/usr/share/icons/exo-strata"
+	@mkdir -p "$(ROOTFS_STAGING_DIR)/sbin" "$(ROOTFS_STAGING_DIR)/bin" "$(ROOTFS_STAGING_DIR)/lib" "$(ROOTFS_STAGING_DIR)/mnt/usb" "$(ROOTFS_STAGING_DIR)/tmp" "$(ROOTFS_STAGING_DIR)/apps" "$(ROOTFS_STAGING_DIR)/run" "$(ROOTFS_STAGING_DIR)/etc/exo-desktop" "$(ROOTFS_STAGING_DIR)/etc/exoshield" "$(ROOTFS_STAGING_DIR)/usr/share/themes/exo-strata" "$(ROOTFS_STAGING_DIR)/usr/share/icons/exo-strata"
 	@printf "[compositor]\nbackend = \"virtio-gpu+vesa-shadow\"\nsocket = \"/run/wayland-0\"\ntheme = \"exo-strata\"\ncursor_size = 64\n" > "$(ROOTFS_STAGING_DIR)/etc/exo-desktop/wayland.conf"
 	@printf "[theme]\nname = \"Exo-Strata Aurora\"\nwallpaper_top = \"#0d2642\"\nwallpaper_mid = \"#113256\"\nwallpaper_bottom = \"#0a1e36\"\naccent = \"#00c5ff\"\nwindow_border = \"#2e77b0\"\n" > "$(ROOTFS_STAGING_DIR)/usr/share/themes/exo-strata/theme.toml"
 	@printf "cursor_pointer_64x64_argb8888\nicon_terminal_32x32\nicon_exodoctor_32x32\nicon_calendar_32x32\nicon_exofs_32x32\n" > "$(ROOTFS_STAGING_DIR)/usr/share/icons/exo-strata/icons.manifest"
@@ -248,6 +267,14 @@ build-rootfs-binaries:
 		cp "$(ROOTFS_RAW_DIR)/$$bin" "$(ROOTFS_STAGING_DIR)/sbin/$$bin"; \
 		if [ "$(STRIP_TOOL)" != ":" ]; then "$(STRIP_TOOL)" --strip-all "$(ROOTFS_STAGING_DIR)/sbin/$$bin" 2>/dev/null || true; fi; \
 	done
+	@# S5B: Stage isolated Strate 2 Wayland compositor (`exo-compositor`, std, zero MMIO)
+	@cp "$(ROOTFS_STD_RAW_DIR)/exo-compositor" "$(ROOTFS_STAGING_DIR)/sbin/exo-compositor"
+	@if [ "$(STRIP_TOOL)" != ":" ]; then "$(STRIP_TOOL)" --strip-all "$(ROOTFS_STAGING_DIR)/sbin/exo-compositor"; fi
+	@if command -v llvm-strip >/dev/null 2>&1; then \
+		llvm-strip --strip-sections "$(ROOTFS_STAGING_DIR)/sbin/exo-compositor"; \
+	elif strip --help 2>/dev/null | grep -q -- '--strip-section-headers'; then \
+		strip --strip-section-headers "$(ROOTFS_STAGING_DIR)/sbin/exo-compositor"; \
+	fi
 	@# std binaries use the large code model: lld keeps one .ltext.<symbol> section per
 	@# function, so .shstrtab alone weighs > 1 MiB. The ELF loader only needs program
 	@# headers, so section headers are dropped (llvm-strip / GNU strip >= 2.41) to shrink the blob.
@@ -263,13 +290,25 @@ build-rootfs-binaries:
 			exit 1; \
 		fi; \
 	done
-	@cp "$(ROOTFS_LOADER_RAW_DIR)/exo-loader" "$(ROOTFS_STAGING_DIR)/lib/ld-exo.so"
-	@if [ "$(STRIP_TOOL)" != ":" ]; then "$(STRIP_TOOL)" --strip-all "$(ROOTFS_STAGING_DIR)/lib/ld-exo.so" 2>/dev/null || true; fi
+	@if [ "$(EXO_PROFILE)" = "compat" ] || [ -n "$(P3_PROBE)$(COMPLIANCE_PROBE)" ]; then \
+		cp "$(ROOTFS_LOADER_RAW_DIR)/exo-loader" "$(ROOTFS_STAGING_DIR)/lib/ld-exo.so"; \
+		if [ "$(STRIP_TOOL)" != ":" ]; then "$(STRIP_TOOL)" --strip-all "$(ROOTFS_STAGING_DIR)/lib/ld-exo.so" 2>/dev/null || true; fi; \
+		printf "# ExoShield default confinement policy for exo compat run\npromises=0x1e45f\npledge = stdio,rpath,wpath,cpath,tmppath,unix,exec,shm,signal,tty,futex\nforbid_inet = true\nforbid_abstract_unix = true\nforbid_ring1_critical_ipc = true\nforbid_endpoints = device_server,crypto_server,memory_server,init_server\n" > "$(ROOTFS_STAGING_DIR)/etc/exoshield/compat_default.policy"; \
+	fi
+	@if [ "$(EXO_PROFILE)" = "compat" ] && [ -z "$(P3_PROBE)$(COMPLIANCE_PROBE)" ]; then \
+		echo "$(BLUE)[rootfs] EXO_PROFILE=compat : compilation musl-exo (/lib/libc.a + /lib/ld-exo.so)$(NC)"; \
+		bash scripts/build_musl_exo.sh && \
+		if [ -f target/musl-exo/sysroot/lib/libc.so ]; then cp target/musl-exo/sysroot/lib/libc.so "$(ROOTFS_STAGING_DIR)/lib/"; fi; \
+	fi
 	@if [ -n "$(P3_PROBE)$(COMPLIANCE_PROBE)" ]; then \
 		echo "$(BLUE)[rootfs] P3_PROBE=1 : sondes Phase 3 (ld-exo.so + musl-exo) dans /bin et /lib$(NC)"; \
 		bash scripts/build_musl_exo.sh && bash scripts/build_p3_probe.sh && \
 		cp target/p3-probe/p3dyn target/p3-probe/p3musl "$(ROOTFS_STAGING_DIR)/bin/" && \
 		cp target/p3-probe/libp3a.so target/p3-probe/libp3b.so target/p3-probe/libp3c.so "$(ROOTFS_STAGING_DIR)/lib/"; \
+	fi
+	@if [ "$(EXO_PROFILE)" = "pure" ] && [ -z "$(P3_PROBE)$(COMPLIANCE_PROBE)" ]; then \
+		rm -f "$(ROOTFS_STAGING_DIR)/lib/libc.a" "$(ROOTFS_STAGING_DIR)/lib/libc.so" "$(ROOTFS_STAGING_DIR)/lib/"crt*.o "$(ROOTFS_STAGING_DIR)/lib/ld-exo.so" "$(ROOTFS_STAGING_DIR)/bin/p3dyn" "$(ROOTFS_STAGING_DIR)/bin/p3musl" "$(ROOTFS_STAGING_DIR)/lib/libp3"*.so; \
+		rm -rf target/rootfs-pure-staging && cp -a "$(ROOTFS_STAGING_DIR)" target/rootfs-pure-staging; \
 	fi
 	@if [ -n "$(COMPLIANCE_PROBE)" ]; then \
 		echo "$(BLUE)[rootfs] COMPLIANCE_PROBE=1 : compilation /bin/exo-compliance-runner + /bin/exo-compliance-pie$(NC)"; \
@@ -299,23 +338,23 @@ rootfs-image: build-rootfs-binaries
 
 ## 1. Build debug du kernel (rapide, symboles complets)
 build:
-	@echo "$(BLUE)[1/2] Compilation Kernel A propre ExoPhoenix (release, image de résurrection)...$(NC)"
+	@echo "$(BLUE)[1/2] Compilation Kernel A propre ExoPhoenix (release, profil=$(EXO_PROFILE))...$(NC)"
 	@mkdir -p target/exophoenix
-	@cd $(KERNEL_DIR) && EXOPHOENIX_BUILD_ROLE=A $(CARGO) build --locked --release --target $(BAREMETAL_TARGET) $(CARGO_BAREMETAL_FLAGS)
+	@cd $(KERNEL_DIR) && EXOPHOENIX_BUILD_ROLE=A $(CARGO) build --locked --release --target $(BAREMETAL_TARGET) $(CARGO_BAREMETAL_FLAGS) $(KERNEL_FEATURE_FLAGS)
 	@cmp -s $(KERNEL_BIN_REL) $(KERNEL_A_DBG) || cp $(KERNEL_BIN_REL) $(KERNEL_A_DBG)
-	@echo "$(BLUE)[2/2] Compilation Kernel B avec image Kernel A injectée (debug)...$(NC)"
-	@cd $(KERNEL_DIR) && KERNEL_A_IMAGE_PATH="$(abspath $(KERNEL_A_DBG))" EXOPHOENIX_RESCUE_TEST="$(EXOPHOENIX_RESCUE_TEST)" $(CARGO) build --locked --target $(BAREMETAL_TARGET) $(CARGO_BAREMETAL_FLAGS)
+	@echo "$(BLUE)[2/2] Compilation Kernel B avec image Kernel A injectée (debug, profil=$(EXO_PROFILE))...$(NC)"
+	@cd $(KERNEL_DIR) && KERNEL_A_IMAGE_PATH="$(abspath $(KERNEL_A_DBG))" EXOPHOENIX_RESCUE_TEST="$(EXOPHOENIX_RESCUE_TEST)" $(CARGO) build --locked --target $(BAREMETAL_TARGET) $(CARGO_BAREMETAL_FLAGS) $(KERNEL_FEATURE_FLAGS)
 	@echo "$(GREEN)[OK] Kernel compilé : $(KERNEL_BIN_DBG)$(NC)"
 	@$(MAKE) --no-print-directory _sign_kernel KERNEL_BIN=$(KERNEL_BIN_DBG)
 
 ## 2. Build release du kernel (optimisé, LTO, plus petit)
 release:
-	@echo "$(BLUE)[1/2] Compilation Kernel A propre ExoPhoenix (release)...$(NC)"
+	@echo "$(BLUE)[1/2] Compilation Kernel A propre ExoPhoenix (release, profil=$(EXO_PROFILE))...$(NC)"
 	@mkdir -p target/exophoenix
-	@cd $(KERNEL_DIR) && EXOPHOENIX_BUILD_ROLE=A $(CARGO) build --locked --release --target $(BAREMETAL_TARGET) $(CARGO_BAREMETAL_FLAGS)
+	@cd $(KERNEL_DIR) && EXOPHOENIX_BUILD_ROLE=A $(CARGO) build --locked --release --target $(BAREMETAL_TARGET) $(CARGO_BAREMETAL_FLAGS) $(KERNEL_FEATURE_FLAGS)
 	@cp $(KERNEL_BIN_REL) $(KERNEL_A_REL)
-	@echo "$(BLUE)[2/2] Compilation Kernel B avec image Kernel A injectée (release)...$(NC)"
-	@cd $(KERNEL_DIR) && KERNEL_A_IMAGE_PATH="$(abspath $(KERNEL_A_REL))" EXOPHOENIX_RESCUE_TEST="$(EXOPHOENIX_RESCUE_TEST)" $(CARGO) build --locked --release --target $(BAREMETAL_TARGET) $(CARGO_BAREMETAL_FLAGS)
+	@echo "$(BLUE)[2/2] Compilation Kernel B avec image Kernel A injectée (release, profil=$(EXO_PROFILE))...$(NC)"
+	@cd $(KERNEL_DIR) && KERNEL_A_IMAGE_PATH="$(abspath $(KERNEL_A_REL))" EXOPHOENIX_RESCUE_TEST="$(EXOPHOENIX_RESCUE_TEST)" $(CARGO) build --locked --release --target $(BAREMETAL_TARGET) $(CARGO_BAREMETAL_FLAGS) $(KERNEL_FEATURE_FLAGS)
 	@echo "$(GREEN)[OK] Kernel compilé : $(KERNEL_BIN_REL)$(NC)"
 	@$(MAKE) --no-print-directory _sign_kernel KERNEL_BIN=$(KERNEL_BIN_REL)
 
@@ -359,11 +398,11 @@ iso-release: release rootfs-image
 
 ## 3c. ISO debug avec autodestruction/résurrection ExoPhoenix activée
 iso-phoenix-resurrection:
-	@$(MAKE) --no-print-directory iso EXOPHOENIX_RESCUE_TEST=1 ISO_OUTPUT=exo-os-phoenix.iso
+	@$(MAKE) --no-print-directory iso EXOPHOENIX_RESCUE_TEST=1 KERNEL_EXTRA_FEATURES=qemu-compliance-exit ISO_OUTPUT=exo-os-phoenix.iso
 
 ## 3d. ISO release avec autodestruction/résurrection ExoPhoenix activée
 iso-release-phoenix-resurrection:
-	@$(MAKE) --no-print-directory iso-release EXOPHOENIX_RESCUE_TEST=1 ISO_OUTPUT=exo-os-phoenix-release.iso
+	@$(MAKE) --no-print-directory iso-release EXOPHOENIX_RESCUE_TEST=1 KERNEL_EXTRA_FEATURES=qemu-compliance-exit ISO_OUTPUT=exo-os-phoenix-release.iso
 
 # Sous-cible interne : assemble l'ISO depuis le KERNEL_BIN fourni en paramètre.
 _make_iso:
@@ -456,6 +495,10 @@ fmt:
 
 ## Tests unitaires (host, pas bare-metal)
 test:
+	@echo "$(BLUE)Verification invariances (audit_constants, service_order, phoenix_strata)...$(NC)"
+	@python3 tools/audit_constants.py --fail-on-warn
+	@python3 tools/check_service_order.py
+	@python3 tools/check_phoenix_strata.py
 	@echo "$(BLUE)Tests unitaires...$(NC)"
 	@cd $(KERNEL_DIR) && EXOPHOENIX_BUILD_ROLE=A $(CARGO) test --locked --lib $(CARGO_TEST_FLAGS) $(HOST_TEST_OVERRIDES)
 
@@ -484,9 +527,20 @@ qemu-shell-smoke: iso $(QEMU_EXOFS_DISK)
 	@bash scripts/qemu/shell_smoke_qmp.sh "$(QEMU_EXOFS_DISK)"
 
 qemu-compliance:
-	@echo "$(CYAN)Matrice de conformite QEMU automatisee (T0 -> T6)$(NC)"
-	@$(MAKE) --no-print-directory iso COMPLIANCE_PROBE=1 P3_PROBE=1
+	@echo "$(CYAN)Matrice de conformite QEMU automatisee (T0 -> T6, profil compat + qemu-compliance-exit)$(NC)"
+	@$(MAKE) --no-print-directory iso EXO_PROFILE=compat COMPLIANCE_PROBE=1 P3_PROBE=1 KERNEL_EXTRA_FEATURES=qemu-compliance-exit
 	@python3 scripts/qemu/run_compliance_matrix.py "$(QEMU_EXOFS_DISK)"
+
+qemu-security-audit:
+	@echo "$(CYAN)Audit de securite adversarial automatise (S0 pure hygiene -> S1..S6 live QEMU)$(NC)"
+	@$(MAKE) --no-print-directory release rootfs-image EXO_PROFILE=pure COMPLIANCE_PROBE= P3_PROBE= KERNEL_EXTRA_FEATURES=
+	@$(MAKE) --no-print-directory iso EXO_PROFILE=compat COMPLIANCE_PROBE=1 P3_PROBE=1 KERNEL_EXTRA_FEATURES=qemu-compliance-exit
+	@python3 scripts/qemu/run_security_audit.py --disk "$(QEMU_EXOFS_DISK)" --iso "$(ISO_OUTPUT)"
+
+qemu-phoenix-bench:
+	@echo "$(CYAN)Benchmark ExoPhoenix 3-Strates O(1) & SLA <= 1s (Cas A vs Cas B)$(NC)"
+	@$(MAKE) --no-print-directory iso-release EXO_PROFILE=compat COMPLIANCE_PROBE=1 P3_PROBE=1 KERNEL_EXTRA_FEATURES=qemu-compliance-exit
+	@python3 scripts/qemu/run_phoenix_bench.py --release --disk "$(QEMU_EXOFS_DISK)" --iso "$(ISO_OUTPUT)"
 
 # ── Nettoyage ─────────────────────────────────────────────────────────────────
 clean:

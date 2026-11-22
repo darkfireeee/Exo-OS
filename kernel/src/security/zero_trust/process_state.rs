@@ -202,7 +202,7 @@ pub fn syscall_restriction_mask(nr: u64) -> u64 {
         numbers::SYS_FORK | numbers::SYS_CLONE | numbers::SYS_VFORK => {
             NO_FORK | NO_PROCESS_CREATE
         }
-        numbers::SYS_EXECVE => NO_EXEC | NO_PROCESS_CREATE,
+        numbers::SYS_EXECVE => NO_EXEC,
         numbers::SYS_SOCKET
         | numbers::SYS_CONNECT
         | numbers::SYS_BIND
@@ -304,13 +304,22 @@ pub fn pledge_promises_to_restrictions(promises: u64) -> u64 {
     if promises & pledge_flags::EXEC == 0 {
         r |= NO_EXEC;
     }
-    if promises & pledge_flags::INET == 0 {
+    if promises & (pledge_flags::INET | pledge_flags::UNIX) == 0 {
         r |= NO_NETWORK;
+    }
+    if promises & pledge_flags::INET == 0 {
+        r |= NO_INET;
     }
     if promises & (pledge_flags::RPATH | pledge_flags::WPATH | pledge_flags::CPATH) == 0 {
         r |= NO_FS;
     } else if promises & (pledge_flags::WPATH | pledge_flags::CPATH) == 0 {
         r |= FS_READONLY;
+    }
+    if promises & pledge_flags::UNIX_ABSTRACT == 0 {
+        r |= NO_UNIX_ABSTRACT;
+    }
+    if promises & pledge_flags::DLOPEN == 0 {
+        r |= NO_DLOPEN;
     }
     r
 }
@@ -415,16 +424,26 @@ mod tests {
         assert!(r & NO_EXEC != 0);
         assert!(r & NO_NETWORK != 0);
 
-        // PROC|EXEC|INET|RPATH|WPATH|CPATH promised → no restriction (on enforced flags).
+        // PROC|EXEC|INET|RPATH|WPATH|CPATH|UNIX_ABSTRACT|DLOPEN promised → no restriction.
         let none = pledge_promises_to_restrictions(
             pledge_flags::PROC
                 | pledge_flags::EXEC
                 | pledge_flags::INET
                 | pledge_flags::RPATH
                 | pledge_flags::WPATH
-                | pledge_flags::CPATH,
+                | pledge_flags::CPATH
+                | pledge_flags::UNIX_ABSTRACT
+                | pledge_flags::DLOPEN,
         );
         assert_eq!(none, 0);
+
+        // Missing UNIX_ABSTRACT / DLOPEN → restricted by default (S2/S3).
+        let base_no_abs = pledge_promises_to_restrictions(
+            pledge_flags::PROC | pledge_flags::EXEC | pledge_flags::UNIX | pledge_flags::RPATH,
+        );
+        assert_eq!(base_no_abs & NO_NETWORK, 0);
+        assert!(base_no_abs & NO_UNIX_ABSTRACT != 0);
+        assert!(base_no_abs & NO_DLOPEN != 0);
 
         // RPATH without WPATH/CPATH → FS_READONLY only (not NO_FS).
         let ro = pledge_promises_to_restrictions(

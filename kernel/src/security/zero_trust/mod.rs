@@ -11,7 +11,7 @@ pub mod policy;
 pub mod process_state;
 pub mod verify;
 
-pub use context::{ContextStats, PrincipalId, SecurityContext, TrustLevel};
+pub use context::{restriction_flags, ContextStats, PrincipalId, SecurityContext, TrustLevel};
 pub use labels::{ConfidentialityLevel, IntegrityLevel, SecurityLabel};
 pub use policy::{
     global_policy, AccessRequest, PolicyAction, PolicyStats, ResourceKind, ZeroTrustPolicy,

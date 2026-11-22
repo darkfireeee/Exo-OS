@@ -61,6 +61,8 @@ pub struct ProcessControlBlock {
     // ── Threads ───────────────────────────────────────────────────────────────
     /// Number of active threads in this process.
     pub thread_count: AtomicU32,
+    /// Per-process configurable thread quota (S4 Ring 0 confinement).
+    pub max_threads: AtomicU32,
     /// Main thread ID (TID = PID in the POSIX sense).
     pub main_thread: ThreadId,
     /// Dynamic register of process threads, used by signal delivery, reap, and exit_group().
@@ -176,6 +178,7 @@ impl ProcessControlBlock {
             exit_code: AtomicU32::new(0),
             umask: AtomicU32::new(DEFAULT_UMASK),
             thread_count: AtomicU32::new(1),
+            max_threads: AtomicU32::new(types::DEFAULT_MAX_THREADS_PER_PROCESS),
             main_thread,
             threads: SpinLock::new(Vec::new()),
             creds: SpinLock::new(creds),
@@ -508,13 +511,17 @@ impl ProcessControlBlock {
         self.main_thread_rawptr.load(Ordering::Acquire)
     }
 
-    /// Registers a thread in the dynamic register of the process.
+    /// Registers a thread in the dynamic register of the process (S4: bounded + `try_reserve`).
     pub fn register_thread_ptr(&self, ptr: *mut crate::process::core::tcb::ProcessThread) -> bool {
         if ptr.is_null() {
             return false;
         }
+        let limit = self.max_threads.load(Ordering::Acquire).max(1) as usize;
         let mut threads = self.threads.lock();
         if !threads.contains(&ptr) {
+            if threads.len() >= limit || threads.try_reserve(1).is_err() {
+                return false;
+            }
             threads.push(ptr);
         }
         true

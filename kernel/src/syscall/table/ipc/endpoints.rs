@@ -43,6 +43,7 @@ pub(super) fn service_class_for_endpoint_name(name: &[u8]) -> Option<crate::secu
         b"ipc_router" => Some(crate::security::ServiceClass::IpcBroker),
         b"exo_shield" => Some(crate::security::ServiceClass::ExoShield),
         b"exosh" | b"exosh_input_reply" => Some(crate::security::ServiceClass::Exosh),
+        b"exo_compositor" => Some(crate::security::ServiceClass::ExoCompositor),
         b"audio_server" => Some(crate::security::ServiceClass::AudioServer),
         b"usb_server" => Some(crate::security::ServiceClass::UsbServer),
         _ => None,
@@ -351,6 +352,44 @@ pub fn sys_exo_ipc_lookup(
     let name = &mut name_buf[..len];
     if copy_from_user(name.as_mut_ptr(), name_ptr as *const u8, len).is_err() {
         return EFAULT;
+    }
+
+    // S2.3: Block confined compat processes (`NO_RING1_CRITICAL_IPC`) from resolving
+    // direct critical Ring 1 service endpoints (`device_server`, `crypto_server`,
+    // `memory_server`, `init_server`, `exo_shield`).
+    let caller_pid = crate::syscall::fast_path::syscall_current_pid();
+    if caller_pid != 0
+        && (crate::security::zero_trust::process_restrictions(caller_pid)
+            & crate::security::zero_trust::restriction_flags::NO_RING1_CRITICAL_IPC)
+            != 0
+    {
+        let is_critical_name = matches!(
+            service_class_for_endpoint_name(name),
+            Some(
+                crate::security::ServiceClass::InitServer
+                    | crate::security::ServiceClass::CryptoServer
+                    | crate::security::ServiceClass::MemoryServer
+                    | crate::security::ServiceClass::DeviceServer
+                    | crate::security::ServiceClass::ExoShield
+            )
+        ) || name == b"init_server";
+        if is_critical_name {
+            crate::security::exoledger::exo_ledger_append(
+                crate::security::exoledger::ActionTag::IpcUnauthorized {
+                    src_pid: caller_pid,
+                    dst_pid: 1,
+                },
+            );
+            crate::security::shield_feed::push_event(
+                caller_pid,
+                crate::security::shield_feed::event_type::IPC,
+                crate::security::shield_feed::severity::HIGH,
+                0xC047,
+                1,
+                0,
+            );
+            return EACCES;
+        }
     }
 
     match crate::ipc::endpoint::lookup_endpoint(name) {

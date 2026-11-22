@@ -19,6 +19,8 @@
 
 #![no_std]
 
+pub mod metrics;
+
 use core::sync::atomic::{AtomicU32, Ordering};
 
 // ─── Contrat de sûreté pour bibliothèques à état ─────────────────────────────
@@ -32,30 +34,47 @@ pub enum PhoenixError {
     CorruptState,
 }
 
-/// Politique de récupération exigée pour une bibliothèque à état.
+/// Politique de récupération exigée pour un service ou une bibliothèque à état (ExoPhoenix 3 Strates O(1)).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u8)]
 pub enum PhoenixRecovery {
-    Stateless,
-    Transactional,
-    RecreateAfterSwitch,
-    SerializeBeforeSwitch,
-    InvalidateBeforeSwitch,
+    /// Strate 1 UNIQUEMENT (liste close : 6 serveurs critiques + fb_server).
+    /// Bloque PrepareIsolation et RESTORE_SEQUENCE.
+    CriticalSync = 1,
+    /// Strate 2 (DÉFAUT OBLIGATOIRE pour tout nouveau module).
+    /// État transient (CORR-54) : exclu de PrepareIsolation, tué au gel et relancé
+    /// en parallèle par `init_server` après la fin du SLA 1 s.
+    TransientAsync = 2,
+    Stateless = 3,
+    Transactional = 4,
+    RecreateAfterSwitch = 5,
+    SerializeBeforeSwitch = 6,
+    InvalidateBeforeSwitch = 7,
 }
 
-/// Contrat obligatoire pour toute bibliothèque conservant un état inter-IPC.
+/// Contrat obligatoire pour toute bibliothèque ou service conservant un état inter-IPC.
 pub trait PhoenixSafe {
-    /// Politique déclarative ; utilisée par les tests d'intégration et audits.
-    const RECOVERY: PhoenixRecovery;
+    /// Par défaut, tout nouveau composant appartient à la Strate 2 (`TransientAsync`).
+    const RECOVERY: PhoenixRecovery = PhoenixRecovery::TransientAsync;
 
     /// Appelé avant la bascule A/B.
-    fn on_pre_switch(&self) -> Result<(), PhoenixError>;
+    fn on_pre_switch(&self) -> Result<(), PhoenixError> {
+        Ok(())
+    }
 
     /// Appelé après la bascule sur le kernel actif.
-    fn on_post_switch(&self) -> Result<(), PhoenixError>;
+    fn on_post_switch(&self) -> Result<(), PhoenixError> {
+        Ok(())
+    }
 
     /// Indique si la bibliothèque ne conserve aucun état à restaurer.
     fn is_stateless(&self) -> bool {
         matches!(Self::RECOVERY, PhoenixRecovery::Stateless)
+    }
+
+    /// Indique si le composant fait partie de la liste close Strate 1.
+    fn is_strate1_critical(&self) -> bool {
+        matches!(Self::RECOVERY, PhoenixRecovery::CriticalSync)
     }
 }
 

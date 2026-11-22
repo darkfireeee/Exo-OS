@@ -337,6 +337,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "exo-compositor"
+version = "0.1.0"
+dependencies = [
+ "exo-syscall-abi",
+]
+
+[[package]]
 name = "exo-crypto-server"
 version = "0.1.0"
 dependencies = [

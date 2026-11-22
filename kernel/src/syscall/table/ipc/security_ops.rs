@@ -139,15 +139,25 @@ pub fn sys_exo_cap_check(
 /// restrictions, never removes any. Init (PID 1) cannot pledge (PLEDGE-03).
 ///
 /// Returns: `0` if applied (or nothing to restrict), `EPERM` if init / PID out of range.
-pub fn sys_exo_pledge(promises: u64, _flags: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+pub fn sys_exo_pledge(promises: u64, flags: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_EXO_PLEDGE);
     let caller_pid = crate::syscall::fast_path::syscall_current_pid();
     if caller_pid == 0 {
         return EPERM;
     }
-    let restrictions = crate::security::zero_trust::pledge_promises_to_restrictions(promises);
+    // Read-only restriction query (`promises == 0 && flags == 1`) used by `ld-exo.so` (`dlopen` check).
+    if promises == 0 && flags == 1 {
+        return crate::security::zero_trust::process_restrictions(caller_pid) as i64;
+    }
+    let mut restrictions = crate::security::zero_trust::pledge_promises_to_restrictions(promises);
+    if promises != crate::security::isolation::pledge::pledge_flags::UNRESTRICTED {
+        restrictions |= crate::security::zero_trust::restriction_flags::PLEDGE_ACTIVE;
+    }
+    // `flags & 2`: compat confinement forbidding critical Ring 1 IPC endpoints (`exo compat run`).
+    if (flags & 0x2) != 0 {
+        restrictions |= crate::security::zero_trust::restriction_flags::NO_RING1_CRITICAL_IPC;
+    }
     if restrictions == 0 {
-        // All enforced capabilities are promised -> nothing to restrict (success).
         return 0;
     }
     // restrict_process is monotonic and rejects init (PID 1) / PID out of range.

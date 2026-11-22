@@ -442,10 +442,23 @@ pub unsafe extern "C" fn dlopen(filename: *const c_char, flags: c_int) -> *mut c
         set_dlerror("dlopen: invalid UTF-8 filename");
         return ptr::null_mut();
     }
+    // S2: Refuse dynamic loading via `dlopen()` when the process revoked the `DLOPEN`
+    // promise via `SYS_EXO_PLEDGE (324)` (`NO_DLOPEN` restriction bit).
+    if req.is_some() {
+        let restrictions = unsafe { crate::syscall::sys_exo_pledge_query() };
+        if (restrictions & crate::syscall::EXO_RESTRICTION_NO_DLOPEN) != 0 {
+            set_dlerror("dlopen: denied by SYS_EXO_PLEDGE (NO_DLOPEN)");
+            return ptr::null_mut();
+        }
+    }
     match open_for_dlopen(req, flags) {
         Ok((id, tasks)) => {
             unsafe { run_init_tasks(&tasks) };
             encode_handle(id)
+        }
+        Err(13) => {
+            set_dlerror("dlopen: permission denied (signature/W^X policy)");
+            ptr::null_mut()
         }
         Err(_) => {
             set_dlerror("dlopen: failed to load shared object");

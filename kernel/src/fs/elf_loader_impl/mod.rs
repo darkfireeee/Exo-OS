@@ -294,6 +294,28 @@ impl ElfLoader for ExoFsElfLoader {
             map_stack_pages(&mut builder, &alloc, boot_stack_base, BOOT_STACK_SIZE)?;
         install_stack_vma(&child_as, stack_vma_base, stack_vma_size)?;
         let interp_base = interp_image.as_ref().map(|img| img.base).unwrap_or(0);
+        // S2: Compute AT_SECURE when executing setuid/setgid binaries, privileged `/sbin/*`
+        // binaries, credential transitions (uid!=euid / gid!=egid), or confined domain transitions.
+        let file_mode = crate::syscall::fs_bridge::stored_mode(&blob_id).unwrap_or(0);
+        let caller_pid = crate::syscall::fast_path::syscall_current_pid();
+        let cred_elevated = if caller_pid != 0 {
+            let restr = crate::security::zero_trust::process_restrictions(caller_pid);
+            let cred_mismatch = crate::process::core::registry::PROCESS_REGISTRY
+                .find_by_pid(crate::process::core::pid::Pid(caller_pid))
+                .map(|pcb| {
+                    let c = pcb.creds.lock();
+                    c.uid != c.euid || c.gid != c.egid
+                })
+                .unwrap_or(false);
+            cred_mismatch
+                || (restr & crate::security::zero_trust::restriction_flags::NO_RING1_CRITICAL_IPC)
+                    != 0
+        } else {
+            false
+        };
+        let at_secure = u64::from(
+            (file_mode & 0o6000) != 0 || path.starts_with("/sbin/") || cred_elevated,
+        );
         let auxv_cfg = StackAuxvConfig {
             phdr_vaddr: main_image.phdr_vaddr,
             phnum: main_image.phnum,
@@ -303,6 +325,7 @@ impl ElfLoader for ExoFsElfLoader {
             signal_tcb_vaddr,
             seed_hint: file_id,
             execfn: path,
+            secure: at_secure,
         };
         let executable_stack_top = build_initial_process_stack_with_auxv(
             &stack_frames,

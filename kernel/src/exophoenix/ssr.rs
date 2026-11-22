@@ -170,3 +170,42 @@ pub fn initialize_layout_v7() -> Result<(), SsrVersionError> {
 
     validate_layout_v7()
 }
+
+#[cfg(test)]
+static HOST_TIMING_RECORD: spin::Mutex<exo_phoenix_ssr::metrics::PhoenixTimingRecord> =
+    spin::Mutex::new(exo_phoenix_ssr::metrics::PhoenixTimingRecord::zeroed());
+
+/// Writes the latest `PhoenixTimingRecord` to SSR v7 `+ SSR_METRICS_OFFSET (0xC000)` (P1).
+pub fn write_timing_record(record: &exo_phoenix_ssr::metrics::PhoenixTimingRecord) {
+    #[cfg(test)]
+    {
+        *HOST_TIMING_RECORD.lock() = *record;
+    }
+    #[cfg(not(test))]
+    {
+        let base = phys_to_virt(PhysAddr::new(SSR_BASE)).as_u64() as usize;
+        let dst = (base + SSR_METRICS_PUSH) as *mut exo_phoenix_ssr::metrics::PhoenixTimingRecord;
+        // SAFETY: `SSR_METRICS_PUSH + size_of::<PhoenixTimingRecord>() <= SSR_SIZE`
+        // is statically asserted in `exo-phoenix-ssr`.
+        unsafe {
+            core::ptr::write_volatile(dst, *record);
+        }
+        core::sync::atomic::fence(core::sync::atomic::Ordering::Release);
+    }
+}
+
+/// Reads the latest `PhoenixTimingRecord` from SSR v7 `+ SSR_METRICS_OFFSET (0xC000)` (P1).
+pub fn read_timing_record() -> exo_phoenix_ssr::metrics::PhoenixTimingRecord {
+    #[cfg(test)]
+    {
+        *HOST_TIMING_RECORD.lock()
+    }
+    #[cfg(not(test))]
+    {
+        core::sync::atomic::fence(core::sync::atomic::Ordering::Acquire);
+        let base = phys_to_virt(PhysAddr::new(SSR_BASE)).as_u64() as usize;
+        let src = (base + SSR_METRICS_PUSH) as *const exo_phoenix_ssr::metrics::PhoenixTimingRecord;
+        // SAFETY: `SSR_METRICS_PUSH + size_of::<PhoenixTimingRecord>() <= SSR_SIZE`.
+        unsafe { core::ptr::read_volatile(src) }
+    }
+}

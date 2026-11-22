@@ -7,5 +7,7 @@ pub mod hooks;
 pub mod ipc_gate;
 pub mod ml;
 pub mod network;
+pub mod restore_sequence;
 pub mod sandbox;
 pub mod signatures;
+pub mod subscription;

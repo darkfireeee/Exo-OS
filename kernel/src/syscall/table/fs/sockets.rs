@@ -7,6 +7,16 @@ use crate::syscall::validation::IO_BUF_MAX;
 /// `socket(domain, type, protocol)`.
 pub fn sys_socket(domain: u64, ty: u64, protocol: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_SOCKET);
+    if domain == 2 || domain == 10 {
+        let caller_pid = crate::syscall::fast_path::syscall_current_pid();
+        if caller_pid != 0
+            && (crate::security::zero_trust::process_restrictions(caller_pid)
+                & crate::security::zero_trust::restriction_flags::NO_INET)
+                != 0
+        {
+            return EACCES;
+        }
+    }
     use crate::syscall::net_bridge;
     net_bridge::bridge_result(net_bridge::net_socket(
         domain as i32,

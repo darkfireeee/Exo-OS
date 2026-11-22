@@ -13,7 +13,13 @@ pub const SYS_EXIT: u64 = 60;
 pub const SYS_ARCH_PRCTL: u64 = 158;
 pub const SYS_GETTID: u64 = 186;
 pub const SYS_EXIT_GROUP: u64 = 231;
+pub const SYS_EXO_PLEDGE: u64 = 324;
 pub const SYS_EXO_LOG: u64 = 350;
+
+/// Read-only query flag for `SYS_EXO_PLEDGE(0, 1)` returning current process restrictions (S2/S3).
+pub const EXO_PLEDGE_QUERY_FLAG: u64 = 1;
+/// Restriction bit indicating `dlopen()` is prohibited for the current process (`NO_DLOPEN`).
+pub const EXO_RESTRICTION_NO_DLOPEN: u64 = 1 << 9;
 
 pub const PROT_NONE: u32 = 0x0;
 pub const PROT_READ: u32 = 0x1;
@@ -193,6 +199,17 @@ pub fn sys_log(bytes: &[u8]) {
     }
     unsafe {
         let _ = syscall6(SYS_EXO_LOG, bytes.as_ptr() as u64, bytes.len() as u64, 0, 0, 0, 0);
+    }
+}
+
+/// Queries the caller's active `SYS_EXO_PLEDGE` restriction bitmask (read-only).
+/// Returns `0` when unsupported (e.g. host unit test builds).
+pub unsafe fn sys_exo_pledge_query() -> u64 {
+    let ret = unsafe { syscall6(SYS_EXO_PLEDGE, 0, EXO_PLEDGE_QUERY_FLAG, 0, 0, 0, 0) };
+    if ret < 0 {
+        0
+    } else {
+        ret as u64
     }
 }
 

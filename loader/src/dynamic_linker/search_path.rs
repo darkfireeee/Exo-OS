@@ -62,12 +62,26 @@ pub fn join_path_cstr(dir: &str, name: &str) -> Vec<u8> {
     buf
 }
 
+/// Validates whether `$ORIGIN` expansion is allowed under `AT_SECURE != 0` (S2).
+/// Only canonical trusted system prefixes without `..` traversal are accepted.
+#[inline]
+fn is_validated_secure_origin(origin_dir: &str, raw_dir: &str) -> bool {
+    let trusted_origin = matches!(
+        origin_dir,
+        "/bin" | "/sbin" | "/lib" | "/usr/lib" | "/usr/bin"
+    );
+    trusted_origin && !raw_dir.contains("..")
+}
+
 /// Generates ordered candidate library paths for `name` per ELF SysV rules:
 /// 1. Direct path if `name.contains('/')`.
 /// 2. `DT_RPATH` (only if `DT_RUNPATH` is absent).
 /// 3. `LD_LIBRARY_PATH` (ignored if `secure`).
 /// 4. `DT_RUNPATH`.
 /// 5. `/lib`, `/usr/lib`.
+///
+/// Under `AT_SECURE != 0` (`secure == true`), `LD_LIBRARY_PATH`, `LD_PRELOAD`, relative
+/// search paths, `..` traversal components, and unvalidated `$ORIGIN` expansions are ignored.
 pub fn collect_candidate_paths(
     name: &str,
     origin_dir: &str,
@@ -87,11 +101,26 @@ pub fn collect_candidate_paths(
             if raw_dir.is_empty() {
                 continue;
             }
+            let has_origin = raw_dir.contains("$ORIGIN") || raw_dir.contains("${ORIGIN}");
+            if secure {
+                if raw_dir.contains("..") {
+                    continue;
+                }
+                if has_origin && !is_validated_secure_origin(origin_dir, raw_dir) {
+                    continue;
+                }
+                if !has_origin && !raw_dir.starts_with('/') {
+                    continue;
+                }
+            }
             let dir = if expand {
                 expand_origin(raw_dir, origin_dir)
             } else {
                 String::from(raw_dir)
             };
+            if secure && (!dir.starts_with('/') || dir.contains("..")) {
+                continue;
+            }
             let mut full = String::with_capacity(dir.len() + name.len() + 2);
             if dir == "/" {
                 full.push('/');
@@ -187,7 +216,7 @@ mod tests {
         let paths = collect_candidate_paths(
             "libbar.so",
             "/bin",
-            Some("$ORIGIN/../lib"),
+            Some("$ORIGIN/trusted:/opt/custom"),
             None,
             Some("/tmp/untrusted"),
             true,
@@ -195,10 +224,40 @@ mod tests {
         assert_eq!(
             paths,
             alloc::vec![
-                "/bin/../lib/libbar.so",
+                "/bin/trusted/libbar.so",
+                "/opt/custom/libbar.so",
                 "/lib/libbar.so",
                 "/usr/lib/libbar.so",
             ]
+        );
+    }
+
+    #[test]
+    fn secure_mode_rejects_unvalidated_origin_and_traversal() {
+        let paths = collect_candidate_paths(
+            "libevil.so",
+            "/tmp/attacker",
+            Some("$ORIGIN/drop:${ORIGIN}/lib:$ORIGIN/../lib:relative/dir"),
+            None,
+            Some("/tmp/evil"),
+            true,
+        );
+        assert_eq!(
+            paths,
+            alloc::vec!["/lib/libevil.so", "/usr/lib/libevil.so"]
+        );
+
+        let traversal = collect_candidate_paths(
+            "libevil.so",
+            "/bin",
+            Some("$ORIGIN/../tmp"),
+            None,
+            None,
+            true,
+        );
+        assert_eq!(
+            traversal,
+            alloc::vec!["/lib/libevil.so", "/usr/lib/libevil.so"]
         );
     }
 }

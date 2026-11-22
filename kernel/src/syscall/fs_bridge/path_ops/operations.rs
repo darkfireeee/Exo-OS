@@ -87,6 +87,26 @@ pub fn fs_open(path: &[u8], flags: u32, mode: u32, pid: u32) -> Result<i64, FsBr
 
     if existing_entry.map(|(_, kind)| kind == PATH_INDEX_KIND_DIR).unwrap_or(false) {
         crate::syscall::fs_bridge::cwd::register_dir_path(blob_id, &normalized_path);
+    } else {
+        // S2: Track execution trust and noexec mount origin on regular files.
+        let writable = open_flags::can_write(fd_flags) || (fd_flags & open_flags::O_TRUNC) != 0;
+        let mut set_bits = 0u8;
+        let mut clear_bits = 0u8;
+        if is_noexec_mount_path(&normalized_path) {
+            set_bits |= BLOB_EXEC_NOEXEC_MOUNT;
+            clear_bits |= BLOB_EXEC_TRUSTED_SYSTEM;
+        }
+        if !exists || writable {
+            set_bits |= BLOB_EXEC_WRITTEN_RUNTIME;
+            clear_bits |= BLOB_EXEC_TRUSTED_SYSTEM;
+        } else if is_trusted_system_exec_path(&normalized_path)
+            && (blob_exec_policy_flags(&blob_id) & BLOB_EXEC_WRITTEN_RUNTIME) == 0
+        {
+            set_bits |= BLOB_EXEC_TRUSTED_SYSTEM;
+        }
+        if set_bits != 0 || clear_bits != 0 {
+            update_blob_exec_policy(blob_id, set_bits, clear_bits);
+        }
     }
 
     let size = blob_len(&blob_id) as u64;
@@ -253,7 +273,7 @@ pub fn fs_rmdir(path: &[u8], pid: u32) -> Result<i64, FsBridgeError> {
     }
     remove_parent_entry(&parent_path, &leaf)?;
     if OBJECT_TABLE.open_count_for(&blob_id) != 0 {
-        mark_deferred_unlink(blob_id, false);
+        mark_deferred_unlink_for_pid(blob_id, false, pid)?;
     } else {
         BLOB_CACHE.invalidate(&blob_id);
         remove_mode(&blob_id);
@@ -268,7 +288,6 @@ pub fn fs_unlink(path: &[u8], pid: u32) -> Result<i64, FsBridgeError> {
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);
     }
-    let _ = pid;
     let normalized_path = resolve_path_with_symlinks(path, false, false)?;
     if normalized_path == b"/" {
         return Err(FsBridgeError::PermDenied);
@@ -281,7 +300,7 @@ pub fn fs_unlink(path: &[u8], pid: u32) -> Result<i64, FsBridgeError> {
     }
     remove_parent_entry(&parent_path, &leaf)?;
     if OBJECT_TABLE.open_count_for(&blob_id) != 0 {
-        mark_deferred_unlink(blob_id, kind == PATH_INDEX_KIND_SYMLINK);
+        mark_deferred_unlink_for_pid(blob_id, kind == PATH_INDEX_KIND_SYMLINK, pid)?;
     } else {
         if kind == PATH_INDEX_KIND_SYMLINK {
             invalidate_symlink(&blob_id_to_object_id(blob_id));
@@ -299,7 +318,6 @@ pub fn fs_rename(old_path: &[u8], new_path: &[u8], pid: u32) -> Result<i64, FsBr
     if !is_fs_ready() {
         return Err(FsBridgeError::NotReady);
     }
-    let _ = pid;
     let old_normalized = resolve_path_with_symlinks(old_path, false, false)?;
     let new_normalized = resolve_path_with_symlinks(new_path, false, true)?;
     if old_normalized == new_normalized {
@@ -340,7 +358,11 @@ pub fn fs_rename(old_path: &[u8], new_path: &[u8], pid: u32) -> Result<i64, FsBr
             }
             remove_parent_entry(&new_parent, &new_leaf)?;
             if OBJECT_TABLE.open_count_for(&dst_blob_id) != 0 {
-                mark_deferred_unlink(dst_blob_id, dst_kind == PATH_INDEX_KIND_SYMLINK);
+                mark_deferred_unlink_for_pid(
+                    dst_blob_id,
+                    dst_kind == PATH_INDEX_KIND_SYMLINK,
+                    pid,
+                )?;
             } else {
                 if dst_kind == PATH_INDEX_KIND_SYMLINK {
                     invalidate_symlink(&blob_id_to_object_id(dst_blob_id));

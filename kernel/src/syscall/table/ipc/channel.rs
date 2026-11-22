@@ -59,11 +59,23 @@ pub(super) fn validate_ipc_envelope_auth(
     if is_kernel_ephemeral_reply_endpoint(endpoint) {
         return Ok(IpcEnvelopeAuth::NotRequired);
     }
-    if caller_can_inject
-        || crate::security::service_class_of(crate::process::core::pid::Pid(caller_pid))
-            == crate::security::ServiceClass::Exosh
-    {
+    let caller_class = crate::security::service_class_of(crate::process::core::pid::Pid(caller_pid));
+    if caller_can_inject || caller_class == crate::security::ServiceClass::Exosh {
         return Ok(IpcEnvelopeAuth::TrustedCaller);
+    }
+    // S5B: Allow isolated Strate 2 `exo_compositor` to send typed SurfaceGrant/DamageRect IPC
+    // strictly to `fb_server`, `input_server`, or `memory_server` (enforced by ExoCordon POLICY).
+    if caller_class == crate::security::ServiceClass::ExoCompositor {
+        let dst_pid = exo_ipc_endpoint_pid(endpoint);
+        let dst_class = crate::security::service_class_of(crate::process::core::pid::Pid(dst_pid));
+        if matches!(
+            dst_class,
+            crate::security::ServiceClass::FbServer
+                | crate::security::ServiceClass::InputServer
+                | crate::security::ServiceClass::MemoryServer
+        ) {
+            return Ok(IpcEnvelopeAuth::TrustedCaller);
+        }
     }
     // Non-ephemeral ABI non-format messages -> explicit rejection.
     if payload.len() != ABI_IPC_ENVELOPE_SIZE {
@@ -150,6 +162,40 @@ pub(super) fn enforce_direct_ipc_policy(endpoint: u64) -> Result<(), i64> {
     let dst_pid = exo_ipc_endpoint_pid(endpoint);
     if dst_pid == 0 {
         return Err(EINVAL);
+    }
+
+    // S2.3: Block confined compat processes (`NO_RING1_CRITICAL_IPC`) from sending
+    // IPC messages directly to critical Ring 1 services.
+    if (crate::security::zero_trust::process_restrictions(caller_pid)
+        & crate::security::zero_trust::restriction_flags::NO_RING1_CRITICAL_IPC)
+        != 0
+    {
+        let dst_class = crate::security::service_class_of(crate::process::core::pid::Pid(dst_pid));
+        let is_critical_dst = matches!(
+            dst_class,
+            crate::security::ServiceClass::InitServer
+                | crate::security::ServiceClass::CryptoServer
+                | crate::security::ServiceClass::MemoryServer
+                | crate::security::ServiceClass::DeviceServer
+                | crate::security::ServiceClass::ExoShield
+        );
+        if is_critical_dst {
+            crate::security::exoledger::exo_ledger_append(
+                crate::security::exoledger::ActionTag::IpcUnauthorized {
+                    src_pid: caller_pid,
+                    dst_pid,
+                },
+            );
+            crate::security::shield_feed::push_event(
+                caller_pid,
+                crate::security::shield_feed::event_type::IPC,
+                crate::security::shield_feed::severity::HIGH,
+                0xC048,
+                dst_pid as u64,
+                0,
+            );
+            return Err(EACCES);
+        }
     }
 
     let verdict = crate::security::check_direct_ipc(

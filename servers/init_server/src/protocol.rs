@@ -12,6 +12,8 @@ pub const INIT_MSG_RESTART: u32 = 4;
 pub const INIT_MSG_CHILD_DIED: u32 = 5;
 pub const INIT_MSG_PREPARE_ISOLATION: u32 = 6;
 pub const INIT_MSG_PREPARE_ISOLATION_ACK: u32 = 7;
+/// ExoPhoenix Strate 2 asynchronous reconvergence trigger sent after Wave R2 (P2).
+pub const INIT_MSG_RELAUNCH_STRATE2: u32 = 8;
 
 #[repr(C)]
 pub struct InitRequest {

@@ -7,6 +7,7 @@
 use core::sync::atomic::{AtomicU8, Ordering};
 
 pub mod forge;
+pub mod golden_mirror;
 pub mod handoff;
 pub mod interrupts;
 pub mod isolate;

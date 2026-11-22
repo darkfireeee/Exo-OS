@@ -266,6 +266,8 @@ pub fn get_handler(nr: u64) -> SyscallHandler {
         SYS_EXOFS_OPEN_BY_PATH => sys_exofs_open_by_path,
         SYS_EXOFS_READDIR => sys_exofs_readdir,
         SYS_FRAMEBUFFER_INFO => sys_framebuffer_info,
+        SYS_PHOENIX_FORCE => sys_phoenix_force,
+        SYS_EXOPHOENIX_TEST => sys_exophoenix_test,
         // ── GI-03 Drivers (530–549) ──────────────────────────────────────────
         SYS_IRQ_REGISTER => sys_irq_register,
         SYS_IRQ_ACK => sys_irq_ack,

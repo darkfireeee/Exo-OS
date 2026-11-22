@@ -61,7 +61,7 @@ pub fn notify_io_event(blob_id: Option<BlobId>) {
         let mut seqs = BLOB_EDGE_SEQ.lock();
         if let Some((_, seq)) = seqs.iter_mut().find(|(id, _)| *id == b) {
             *seq = seq.wrapping_add(1).max(1);
-        } else if seqs.try_reserve(1).is_ok() {
+        } else if seqs.len() < MAX_BLOB_EDGE_ENTRIES && seqs.try_reserve(1).is_ok() {
             seqs.push((b, 1));
         }
     }
@@ -241,6 +241,10 @@ struct EpollWatch {
     last_edge_gen: u64,
 }
 
+pub const MAX_EPOLL_WATCHES_PER_PID: usize = 512;
+pub const MAX_EPOLL_WATCHES_GLOBAL: usize = 8192;
+const MAX_BLOB_EDGE_ENTRIES: usize = 16384;
+
 static EPOLL_WATCHES: Mutex<Vec<EpollWatch>> = Mutex::new(Vec::new());
 
 pub fn remove_epoll_watches_for_fd(pid: u32, fd: u32) {
@@ -350,6 +354,13 @@ pub fn fs_epoll_ctl(
         EPOLL_CTL_ADD => {
             if existing_pos.is_some() {
                 return Err(FsBridgeError::Exists);
+            }
+            if watches.len() >= MAX_EPOLL_WATCHES_GLOBAL {
+                return Err(FsBridgeError::NoSpace);
+            }
+            let pid_watches = watches.iter().filter(|w| w.pid == pid).count();
+            if pid_watches >= MAX_EPOLL_WATCHES_PER_PID {
+                return Err(FsBridgeError::NoSpace);
             }
             let ev = parsed_ev.ok_or(FsBridgeError::Invalid)?;
             let ev_events = ev.events;

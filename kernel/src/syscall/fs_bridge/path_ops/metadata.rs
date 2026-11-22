@@ -501,6 +501,10 @@ pub fn fs_memfd_create(_name: &[u8], flags: u32, pid: u32) -> Result<i64, FsBrid
     BLOB_CACHE
         .insert(blob_id, alloc::vec::Vec::new())
         .map_err(exofs_to_bridge_error)?;
+    if let Err(err) = init_memfd_seals(blob_id, (flags & MFD_ALLOW_SEALING) != 0) {
+        BLOB_CACHE.invalidate(&blob_id);
+        return Err(err);
+    }
     let handle = OBJECT_TABLE
         .open(blob_id, open_flags::O_RDWR, 0, 0, 0)
         .map_err(exofs_to_bridge_error)?;

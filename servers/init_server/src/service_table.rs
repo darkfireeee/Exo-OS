@@ -1,6 +1,6 @@
 use super::Service;
 
-pub const SERVICE_COUNT: usize = 19;
+pub const SERVICE_COUNT: usize = 20;
 
 pub struct ServiceMetadata {
     pub name: &'static str,
@@ -29,6 +29,7 @@ const DEPS_TTY: &[&str] = &["ipc_router", "input_server", "fb_server", "vfs_serv
 const DEPS_PS2: &[&str] = &["ipc_router", "device_server", "input_server", "tty_server"];
 const DEPS_AUDIO: &[&str] = &["ipc_router", "device_server"];
 const DEPS_USB: &[&str] = &["ipc_router", "device_server"];
+const DEPS_EXO_COMPOSITOR: &[&str] = &["ipc_router", "fb_server", "vfs_server"];
 // STRATA-SEC-01: exosh DOIT attendre exo_shield (vague 5 -> vague 6).
 // exosh ne peut pas etre interactif avant que la surveillance NGAV soit active.
 const DEPS_EXOSH: &[&str] = &[
@@ -71,6 +72,7 @@ pub static EXOSH_BIN: &[u8] = b"/bin/exosh\0";
 pub static EXO_SHIELD_BIN: &[u8] = b"/sbin/exo-shield\0";
 pub static AUDIO_SERVER_BIN: &[u8] = b"/sbin/exo-audio-server\0";
 pub static USB_SERVER_BIN: &[u8] = b"/sbin/exo-usb-server\0";
+pub static EXO_COMPOSITOR_BIN: &[u8] = b"/sbin/exo-compositor\0";
 
 pub static CANONICAL_SERVICES: [ServiceMetadata; SERVICE_COUNT] = [
     ServiceMetadata {
@@ -216,6 +218,15 @@ pub static CANONICAL_SERVICES: [ServiceMetadata; SERVICE_COUNT] = [
         requires: DEPS_USB,
         requires_optional: NO_DEPS,
         ready_timeout_ms: 20_000,
+        critical: false,
+    },
+    // S5B: Isolated Strate 2 Wayland compositor (std, zero MMIO, restartable independently of fb_server).
+    ServiceMetadata {
+        name: "exo_compositor",
+        bin_path: EXO_COMPOSITOR_BIN,
+        requires: DEPS_EXO_COMPOSITOR,
+        requires_optional: NO_DEPS,
+        ready_timeout_ms: 30_000,
         critical: false,
     },
     // STRATA-SEC-01: vague 6 — shell apres SHIELD_READY.

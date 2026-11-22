@@ -173,6 +173,24 @@ pub(crate) fn update_ktime_anchor(tsc_now: u64, ns_now: u64, new_tsc_hz: u64) {
     KTIME_STATE.seq.fetch_add(1, Ordering::Release);
 }
 
+/// Returns the calibrated TSC frequency in kHz (clamped >= 1 to avoid div-by-zero).
+#[inline]
+pub fn current_tsc_khz() -> u64 {
+    let hz = KTIME_STATE.tsc_hz.load(Ordering::Acquire);
+    (hz / 1_000).max(1)
+}
+
+/// Re-anchors the monotonic `ktime` base immediately after an ExoPhoenix A <-> B switch
+/// (CORR-34 / Spec §3.2) without stepping time backwards or triggering IRQ watchdogs.
+pub fn phoenix_reset_time_base() {
+    let ns_now = ktime_get_ns();
+    let (tsc_now, coreid) = super::sources::tsc::read_ordered_with_cpu();
+    let tsc_offset = super::percpu::tsc_offset(coreid as usize);
+    let tsc_adjusted = apply_tsc_offset(tsc_now, tsc_offset);
+    let hz = KTIME_STATE.tsc_hz.load(Ordering::Acquire).max(1_000_000);
+    update_ktime_anchor(tsc_adjusted, ns_now, hz);
+}
+
 // ── Wall clock (UNIX real-time) ──────────────────────────────────────────────
 
 /// Returns Unix time in nanoseconds since the epoch (1970-01-01 00:00:00 UTC).

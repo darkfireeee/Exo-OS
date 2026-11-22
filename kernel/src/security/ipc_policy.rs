@@ -26,6 +26,7 @@ pub enum ServiceClass {
     VirtioDriver,
     ExoShield,
     Exosh,
+    ExoCompositor,
     AudioServer,
     UsbServer,
     Unknown,
@@ -161,10 +162,23 @@ static POLICY: &[(ServiceClass, ServiceClass)] = &[
     (ServiceClass::FbServer, ServiceClass::ExoShield),
     (ServiceClass::FbServer, ServiceClass::VirtioDriver),
     (ServiceClass::VirtioDriver, ServiceClass::FbServer),
+    // S5B: Isolated Strate 2 ExoCompositor <-> FbServer/InputServer/InitServer/ExoShield/MemoryServer
+    (ServiceClass::ExoCompositor, ServiceClass::FbServer),
+    (ServiceClass::FbServer, ServiceClass::ExoCompositor),
+    (ServiceClass::ExoCompositor, ServiceClass::InputServer),
+    (ServiceClass::InputServer, ServiceClass::ExoCompositor),
+    (ServiceClass::ExoCompositor, ServiceClass::InitServer),
+    (ServiceClass::InitServer, ServiceClass::ExoCompositor),
+    (ServiceClass::ExoCompositor, ServiceClass::ExoShield),
+    (ServiceClass::ExoShield, ServiceClass::ExoCompositor),
+    (ServiceClass::ExoCompositor, ServiceClass::MemoryServer),
+    (ServiceClass::MemoryServer, ServiceClass::ExoCompositor),
+    (ServiceClass::Exosh, ServiceClass::ExoCompositor),
+    (ServiceClass::ExoCompositor, ServiceClass::Exosh),
 ];
 
 const _: () = assert!(
-    POLICY.len() == 113,
+    POLICY.len() == 125,
     "IPC policy Ring 1 doit rester synchronisée avec Architecture v7"
 );
 

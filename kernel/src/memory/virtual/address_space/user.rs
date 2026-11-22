@@ -415,6 +415,27 @@ impl UserAddressSpace {
         true
     }
 
+    /// Returns `true` iff every VMA covering `[start, end)` carries `VmaFlags::EXEC_VERIFIED`
+    /// (verified ELF code segment or signature-checked file-backed mapping, S2).
+    pub fn verify_vma_range_exec_verified(&self, start: VirtAddr, end: VirtAddr) -> bool {
+        let inner = self.inner.lock();
+        let mut cursor = start.as_u64();
+        let end_raw = end.as_u64();
+        while cursor < end_raw {
+            let Some(vma) = inner.vma_tree.find(VirtAddr::new(cursor)) else {
+                return false;
+            };
+            if vma.end.as_u64() <= cursor {
+                return false;
+            }
+            if !vma.flags.contains(VmaFlags::EXEC_VERIFIED) {
+                return false;
+            }
+            cursor = vma.end.as_u64().min(end_raw);
+        }
+        true
+    }
+
     /// Splits (if partial) and updates VMA permissions for the next chunk starting at `cursor`
     /// within `[cursor, range_end)` while holding `self.inner`.
     /// Returns `Ok(Some((sub_start, sub_end, effective_page_flags, is_shared)))`,

@@ -26,6 +26,7 @@ pub struct StackAuxvConfig<'a> {
     pub signal_tcb_vaddr: u64,
     pub seed_hint: u64,
     pub execfn: &'a str,
+    pub secure: u64,
 }
 
 #[inline]
@@ -359,7 +360,7 @@ pub fn build_initial_process_stack_with_auxv(
         random_ptr,
         platform_ptr,
         execfn_ptr,
-        secure: 0,
+        secure: auxv_cfg.secure,
         hwcap2: 0,
     };
     let auxv_entries = build_auxv(&auxv_params).map_err(|_| ElfLoadError::OutOfMemory)?;

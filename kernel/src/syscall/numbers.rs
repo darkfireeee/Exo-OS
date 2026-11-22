@@ -442,6 +442,14 @@ pub const SYS_EXOFS_READDIR: u64 = 520;
 /// Signature: (out_ptr: *mut FramebufferInfoWire) -> 0
 pub const SYS_FRAMEBUFFER_INFO: u64 = 521;
 
+/// ExoPhoenix 3-Strata forced switch trigger (`SYS_PHOENIX_FORCE = 523`, Spec §6.2).
+/// Signature: (reason: u64, out_metrics_ptr: u64) -> 0 or errno
+pub const SYS_PHOENIX_FORCE: u64 = 523;
+/// ExoPhoenix telemetry & ExoLedger verification (`SYS_EXOPHOENIX_TEST = 524`).
+/// subcmd=0: copy latest `PhoenixTimingRecord` to `(a2, a3)`
+/// subcmd=1: verify `ExoLedger` BLAKE3 hash chain -> returns verified count (>= 0) or `-EIO`
+pub const SYS_EXOPHOENIX_TEST: u64 = 524;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Block 530–549: GI-03 Drivers (IRQ / DMA / PCI / IOMMU / I/O ports)
 // ─────────────────────────────────────────────────────────────────────────────

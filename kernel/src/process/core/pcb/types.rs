@@ -86,6 +86,8 @@ pub use process_flags as ProcessFlags;
 
 pub const PROCESS_NAME_LEN: usize = 16;
 pub const DEFAULT_UMASK: u32 = 0o022;
+/// Default configurable per-process thread quota (S4 Ring 0 DoS/OOM confinement).
+pub const DEFAULT_MAX_THREADS_PER_PROCESS: u32 = 256;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Credentials — UID/GID

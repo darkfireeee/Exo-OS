@@ -117,6 +117,11 @@ dev_no_vmm = []
 # (ExecError::SignatureVerificationFailed) au lieu d'un simple avertissement.
 # Build durci : cargo build --release --features strict_exec_signatures
 strict_exec_signatures = []
+# Alias tiret pour compatibilite CLI (`--features strict-exec-signatures`)
+strict-exec-signatures = ["strict_exec_signatures"]
+# Isole le port QEMU isa-debug-exit (0xf4) aux seuls builds de conformite/audit QEMU.
+# Desactive par defaut : 0 reference au port 0xf4 dans les noyaux standard et release.
+qemu-compliance-exit = []
 
 #  Cible par defaut (peut etre surchargee en ligne de commande) 
 

@@ -132,6 +132,14 @@ pub mod restriction_flags {
     pub const FS_READONLY: u64 = 1 << 6;
     /// Restrict: no process creation.
     pub const NO_PROCESS_CREATE: u64 = 1 << 7;
+    /// Restrict: no abstract AF_UNIX namespace (`sun_path[0] == 0`) — S3.
+    pub const NO_UNIX_ABSTRACT: u64 = 1 << 8;
+    /// Restrict: no runtime `dlopen()` in `ld-exo.so` — S2.
+    pub const NO_DLOPEN: u64 = 1 << 9;
+    /// Restrict: no direct IPC to critical Ring 1 services (`exo compat run`) — S2.
+    pub const NO_RING1_CRITICAL_IPC: u64 = 1 << 10;
+    /// Restrict: no AF_INET / AF_INET6 sockets when `INET` promise is absent — S3.
+    pub const NO_INET: u64 = 1 << 11;
 }
 
 // SAFETY: SecurityContext contains only atomic primitives.

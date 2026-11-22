@@ -129,10 +129,14 @@ pub fn install_elf_vma(
     let start = p_vaddr & !(PAGE_SIZE as u64 - 1);
     let end_unaligned = p_vaddr.saturating_add(p_memsz as u64);
     let end = end_unaligned.saturating_add(PAGE_SIZE as u64 - 1) & !(PAGE_SIZE as u64 - 1);
+    let mut vma_flags = elf_vma_flags(p_flags);
+    if vma_flags.contains(crate::memory::virt::vma::VmaFlags::EXEC) {
+        vma_flags |= crate::memory::virt::vma::VmaFlags::EXEC_VERIFIED;
+    }
     let mut vma = Box::new(VmaDescriptor::new(
         VirtAddr::new(start),
         VirtAddr::new(end),
-        elf_vma_flags(p_flags),
+        vma_flags,
         elf_page_flags(p_flags),
         VmaBacking::File,
     ));

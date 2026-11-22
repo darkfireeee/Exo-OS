@@ -13,7 +13,7 @@ mod buf_pool;
 mod dhcp;
 mod driver_link;
 mod icmp;
-mod isolation;
+mod transient_drain;
 mod protocol;
 mod routing;
 mod smoltcp_iface;
@@ -25,7 +25,7 @@ mod virtio_device;
 use buf_pool::{NetBufPool, VIRTIO_NET_HDR_SIZE_MODERN};
 use dhcp::DhcpAction;
 use driver_link::DriverLink;
-use isolation::IsolationState;
+use transient_drain::IsolationState;
 use protocol::{
     parse_driver_ctrl, parse_net_msg, parse_raw_call, recv_raw, register_endpoint, send_rpc_reply,
     send_rpc_reply_with_data, DriverCtrlMsg, MacReplyMsg, NetMsg, NetReply, RxReadyMsg,

@@ -59,6 +59,11 @@ pub mod pledge_flags {
     pub const TTY: u64 = 1 << 15;
     /// Futex operations (userspace mutexes).
     pub const FUTEX: u64 = 1 << 16;
+    /// Explicit opt-in for Linux abstract AF_UNIX sockets (`sun_path[0] == 0`).
+    /// Denied by default for pledged processes (S3).
+    pub const UNIX_ABSTRACT: u64 = 1 << 17;
+    /// Explicit opt-in for dynamic library loading (`dlopen`) under `ld-exo.so` (S2).
+    pub const DLOPEN: u64 = 1 << 18;
     /// All privileges (no restrictions).
     pub const UNRESTRICTED: u64 = !0u64;
 }

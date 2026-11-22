@@ -264,6 +264,25 @@ fn validate_prot(prot: u32) -> Result<(), MmapError> {
     Ok(())
 }
 
+/// Records an unauthorized `PROT_EXEC` mapping/transition attempt in `ExoLedger` and `shield_feed` (S2).
+fn record_exec_mapping_denied(reason_code: u32, addr_or_oid: u64) {
+    let pid = crate::syscall::fast_path::syscall_current_pid();
+    crate::security::exoledger::exo_ledger_append(
+        crate::security::exoledger::ActionTag::AccessDenied {
+            oid: addr_or_oid,
+            rights: PROT_EXEC,
+        },
+    );
+    crate::security::shield_feed::push_event(
+        pid,
+        crate::security::shield_feed::event_type::MEMORY,
+        crate::security::shield_feed::severity::HIGH,
+        reason_code,
+        addr_or_oid,
+        PROT_EXEC as u64,
+    );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // do_mmap
 // ─────────────────────────────────────────────────────────────────────────────
@@ -304,6 +323,11 @@ pub fn do_mmap_in_as(
         return Err(MmapError::InvalidLength);
     }
     validate_prot(prot)?;
+    // S2: Reject anonymous executable mappings (no code backing / no JIT capability).
+    if (prot & PROT_EXEC) != 0 {
+        record_exec_mapping_denied(1, addr);
+        return Err(MmapError::PermissionDenied);
+    }
 
     // Alignment to PAGE_SIZE
     let len_aligned = len
@@ -537,13 +561,18 @@ fn unmap_and_shootdown_range(
                 continue;
             }
 
-            // Phase 2: synchronous TLB shootdown (all CPUs) — V-04.
+            // Phase 2: synchronize KPTI shadow PML4 & issue synchronous TLB shootdown (all CPUs) — S4 / V-04.
             let batch_start = VirtAddr::new(
                 range_start
                     .as_u64()
                     .max(cursor - (count as u64 * PAGE_SIZE as u64)),
             );
             let batch_end = VirtAddr::new(cursor);
+            #[cfg(target_arch = "x86_64")]
+            crate::arch::x86_64::exceptions::page_fault::sync_kpti_user_fault_mapping(
+                batch_start.as_u64(),
+                user_as.pml4_phys().as_u64(),
+            );
             // SAFETY: canonical user range, called outside IRQ.
             unsafe {
                 crate::memory::virt::shootdown_sync(
@@ -583,7 +612,16 @@ pub fn do_mprotect(addr: u64, len: usize, prot: u32) -> Result<(), MmapError> {
     let user_as_ptr = get_current_user_as().ok_or(MmapError::NoAddressSpace)?;
     // SAFETY: user_as_ptr is non-null (guaranteed by get_current_user_as) and lives for the duration of the syscall.
     let user_as: &UserAddressSpace = unsafe { &*user_as_ptr };
-    do_mprotect_in_as(user_as, addr, len, prot)
+    do_mprotect_in_as_inner(user_as, addr, len, prot, false)
+}
+
+/// Internal helper invoked exclusively by `fs_mmap_file` after file-backed
+/// signature / trust verification succeeds (S2). Marks the VMA `EXEC_VERIFIED`.
+pub fn do_mprotect_verified_file_exec(addr: u64, len: usize, prot: u32) -> Result<(), MmapError> {
+    let user_as_ptr = get_current_user_as().ok_or(MmapError::NoAddressSpace)?;
+    // SAFETY: user_as_ptr is non-null (guaranteed by get_current_user_as) and lives for the duration of the syscall.
+    let user_as: &UserAddressSpace = unsafe { &*user_as_ptr };
+    do_mprotect_in_as_inner(user_as, addr, len, prot, true)
 }
 
 /// Computes the leaf PTE flags for `mprotect`, preserving CoW tracking across `PROT_NONE`.
@@ -613,6 +651,16 @@ pub fn do_mprotect_in_as(
     len: usize,
     prot: u32,
 ) -> Result<(), MmapError> {
+    do_mprotect_in_as_inner(user_as, addr, len, prot, false)
+}
+
+fn do_mprotect_in_as_inner(
+    user_as: &UserAddressSpace,
+    addr: u64,
+    len: usize,
+    prot: u32,
+    verified_file_exec: bool,
+) -> Result<(), MmapError> {
     if addr < PAGE_SIZE as u64 || !addr.is_multiple_of(PAGE_SIZE as u64) {
         return Err(MmapError::InvalidAddress);
     }
@@ -638,6 +686,15 @@ pub fn do_mprotect_in_as(
         return Err(MmapError::NotMapped);
     }
 
+    // S2: Reject unsigned `RW -> RX` transitions on unverified / anonymous VMAs.
+    if (prot & PROT_EXEC) != 0
+        && !verified_file_exec
+        && !user_as.verify_vma_range_exec_verified(range_start, range_end)
+    {
+        record_exec_mapping_denied(2, addr);
+        return Err(MmapError::PermissionDenied);
+    }
+
     let base_page_flags = prot_to_page_flags(prot);
     let mut new_perm = VmaFlags::NONE;
     if prot & PROT_READ != 0 {
@@ -648,6 +705,9 @@ pub fn do_mprotect_in_as(
     }
     if prot & PROT_EXEC != 0 {
         new_perm |= VmaFlags::EXEC;
+        if verified_file_exec {
+            new_perm |= VmaFlags::EXEC_VERIFIED;
+        }
     }
 
     let is_prot_none = prot & (PROT_READ | PROT_WRITE | PROT_EXEC) == 0;
@@ -708,6 +768,11 @@ pub fn do_mprotect_in_as(
                 pt_cursor += PAGE_SIZE as u64;
             }
 
+            #[cfg(target_arch = "x86_64")]
+            crate::arch::x86_64::exceptions::page_fault::sync_kpti_user_fault_mapping(
+                sub_start.as_u64(),
+                user_as.pml4_phys().as_u64(),
+            );
             // SAFETY: canonical user addresses in [sub_start, sub_end), outside IRQ.
             unsafe {
                 crate::memory::virt::shootdown_sync(

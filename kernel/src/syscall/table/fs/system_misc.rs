@@ -24,9 +24,13 @@ const LINUX_REBOOT_MAGIC1: u64 = 0xfee1_dead;
 const LINUX_REBOOT_MAGIC2: u64 = 672_274_793;
 const LINUX_REBOOT_CMD_RESTART: u64 = 0x0123_4567;
 const LINUX_REBOOT_CMD_POWER_OFF: u64 = 0x4321_fedc;
+#[cfg(feature = "qemu-compliance-exit")]
 const EXO_REBOOT_CMD_COMPLIANCE_EXIT: u64 = 0x4558_4f54; // "EXOT"
+#[cfg(feature = "qemu-compliance-exit")]
 const QEMU_DEBUG_EXIT_PORT: u16 = 0x00f4;
+#[cfg(feature = "qemu-compliance-exit")]
 const QEMU_DEBUG_EXIT_SUCCESS: u32 = 0x10; // QEMU exit code (0x10 << 1) | 1 = 33
+#[cfg(feature = "qemu-compliance-exit")]
 const QEMU_DEBUG_EXIT_FAILURE: u32 = 0x11; // QEMU exit code (0x11 << 1) | 1 = 35
 const PS2_CONTROLLER_PORT: u16 = 0x0064;
 const PS2_RESET_COMMAND: u8 = 0xfe;
@@ -37,10 +41,10 @@ fn halt_after_reboot_request() -> ! {
 }
 
 #[inline(never)]
-#[cfg(target_arch = "x86_64")]
+#[cfg(all(target_arch = "x86_64", feature = "qemu-compliance-exit"))]
 fn platform_debug_exit(code: u32) -> ! {
-    // SAFETY: SYS_REBOOT runs in ring 0. Port 0xf4 is the configured
-    // QEMU isa-debug-exit device in the project boot commands.
+    // SAFETY: SYS_REBOOT runs in ring 0. Port 0xf4 is compiled ONLY when the
+    // dedicated `qemu-compliance-exit` test feature is explicitly enabled.
     unsafe {
         crate::arch::x86_64::outl(QEMU_DEBUG_EXIT_PORT, code);
     }
@@ -48,14 +52,21 @@ fn platform_debug_exit(code: u32) -> ! {
 }
 
 #[inline(never)]
-#[cfg(not(target_arch = "x86_64"))]
+#[cfg(all(not(target_arch = "x86_64"), feature = "qemu-compliance-exit"))]
 fn platform_debug_exit(_code: u32) -> ! {
     halt_after_reboot_request()
 }
 
 #[inline(never)]
 fn platform_poweroff() -> ! {
-    platform_debug_exit(QEMU_DEBUG_EXIT_SUCCESS)
+    #[cfg(feature = "qemu-compliance-exit")]
+    {
+        platform_debug_exit(QEMU_DEBUG_EXIT_SUCCESS)
+    }
+    #[cfg(not(feature = "qemu-compliance-exit"))]
+    {
+        halt_after_reboot_request()
+    }
 }
 
 #[inline(never)]
@@ -83,6 +94,7 @@ pub fn sys_reboot(magic1: u64, magic2: u64, cmd: u64, arg: u64, _a5: u64, _a6: u
     }
 
     let caller = current_pid_u32();
+    #[cfg(feature = "qemu-compliance-exit")]
     if cmd == EXO_REBOOT_CMD_COMPLIANCE_EXIT {
         let is_root = caller <= 1
             || crate::process::core::registry::PROCESS_REGISTRY
@@ -108,6 +120,8 @@ pub fn sys_reboot(magic1: u64, magic2: u64, cmd: u64, arg: u64, _a5: u64, _a6: u
         let _ = crate::syscall::fs_bridge::fs_sync(caller);
         platform_debug_exit(exit_val);
     }
+    #[cfg(not(feature = "qemu-compliance-exit"))]
+    let _ = arg;
 
     // Only PID 0 (kernel boot context) or PID 1 (init) may reboot the system.
     // Any other process knowing the magic constants could otherwise DoS the system.

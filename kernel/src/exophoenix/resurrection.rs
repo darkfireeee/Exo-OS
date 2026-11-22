@@ -69,6 +69,7 @@ fn recover_kernel_a(reason: &str, frame: &mut ExceptionFrame) -> bool {
     PHOENIX_STATE.store(PhoenixState::Restore as u8, Ordering::Release);
     match forge::verify_seeded_kernel_a_image() {
         Ok(()) => {
+            crate::arch::x86_64::time::ktime::phoenix_reset_time_base();
             crate::arch::x86_64::irq::reset_all_masked_since();
             debug_str("[ExoPhoenix] ExoFS propre vérifié, image Kernel A rechargée\n");
             set_handoff_flag(ssr::HANDOFF_B_ACTIVE);
@@ -137,8 +138,8 @@ pub fn trigger_self_destruct() -> ! {
     crate::arch::x86_64::halt_cpu()
 }
 
-#[cfg(exophoenix_resurrection_test)]
-fn qemu_debug_exit_success() -> ! {
+#[cfg(all(exophoenix_resurrection_test, feature = "qemu-compliance-exit"))]
+fn finish_resurrection_landing_pad() -> ! {
     unsafe {
         core::arch::asm!(
             "out dx, eax",
@@ -150,8 +151,8 @@ fn qemu_debug_exit_success() -> ! {
     crate::arch::x86_64::halt_cpu()
 }
 
-#[cfg(not(exophoenix_resurrection_test))]
-fn qemu_debug_exit_success() -> ! {
+#[cfg(not(all(exophoenix_resurrection_test, feature = "qemu-compliance-exit")))]
+fn finish_resurrection_landing_pad() -> ! {
     crate::arch::x86_64::halt_cpu()
 }
 
@@ -161,7 +162,7 @@ pub extern "C" fn exophoenix_resurrection_landing_pad() -> ! {
     PHOENIX_STATE.store(PhoenixState::Normal as u8, Ordering::Release);
     debug_str("[ExoPhoenix] Kernel A relancé depuis image saine\n");
     debug_str("[ExoPhoenix] RESURRECTION_OK\n");
-    qemu_debug_exit_success()
+    finish_resurrection_landing_pad()
 }
 
 pub fn recovery_succeeded() -> bool {

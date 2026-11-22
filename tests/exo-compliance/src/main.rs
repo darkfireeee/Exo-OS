@@ -1,4 +1,5 @@
 mod raw;
+mod security_and_phoenix;
 
 use raw::*;
 use std::collections::{BTreeMap, BTreeSet};
@@ -54,6 +55,19 @@ fn main() {
     if args.len() >= 3 && args[1] == "--helper" {
         run_helper(&args[2..]);
         return;
+    }
+    if args.len() >= 3 && args[1] == "--sec-helper" {
+        security_and_phoenix::run_security_helper(&args[2..]);
+    }
+    if args.len() >= 2 && args[1] == "--security-audit" {
+        let exit_qemu = args.iter().any(|a| a == "--exit-qemu");
+        security_and_phoenix::run_security_audit(exit_qemu);
+    }
+    if args.len() >= 2 && args[1] == "--phoenix-bench-a" {
+        security_and_phoenix::run_phoenix_bench(false);
+    }
+    if args.len() >= 2 && args[1] == "--phoenix-bench-b" {
+        security_and_phoenix::run_phoenix_bench(true);
     }
     if args.len() >= 2 && args[1] == "--pie-self-check" {
         match run_pie_self_check() {
@@ -225,6 +239,7 @@ fn t0_boot_layout() -> Result<(), String> {
         "/sbin/exo-init-server",
         "/sbin/exo-network-server",
         "/sbin/exo-fb-server",
+        "/sbin/exo-compositor",
         "/sbin/exo-loopback-driver",
         "/bin/exosh",
         "/lib/ld-exo.so",
@@ -1283,7 +1298,7 @@ fn t4_epoll_event_driven() -> Result<(), String> {
     Ok(())
 }
 
-fn t4_wayland_live_ipc() -> Result<(), String> {
+pub(crate) fn t4_wayland_live_ipc() -> Result<(), String> {
     let fd = unsafe { syscall3(SYS_SOCKET, AF_UNIX as u64, SOCK_STREAM as u64, 0) };
     if fd < 0 {
         return Err(format!("wayland unix socket failed: {fd}"));

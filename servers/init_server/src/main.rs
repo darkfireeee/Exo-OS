@@ -179,6 +179,7 @@ static SERVICES: [Service; service_table::SERVICE_COUNT] = [
     Service::new("scheduler_server", service_table::SCHEDULER_SERVER_BIN),
     Service::new("audio_server", service_table::AUDIO_SERVER_BIN),
     Service::new("usb_server", service_table::USB_SERVER_BIN),
+    Service::new("exo_compositor", service_table::EXO_COMPOSITOR_BIN),
     Service::new("exosh", service_table::EXOSH_BIN),
 ];
 
@@ -400,6 +401,13 @@ fn handle_control_plane(service_watchdog: &mut ServiceWatchdog) {
                 Err(err) => protocol::InitReply::error(err),
             },
             protocol::INIT_MSG_PREPARE_ISOLATION => isolation::prepare_isolation_reply(&SERVICES),
+            protocol::INIT_MSG_RELAUNCH_STRATE2 => {
+                let scheduled = supervisor::schedule_strate2_async_relaunch(&SERVICES);
+                if supervisor::all_strate2_ready(&SERVICES) {
+                    log::line(b"init_server: strate2 converged (t6)");
+                }
+                protocol::lifecycle_reply(scheduled, supervisor::running_mask(&SERVICES))
+            }
             _ => protocol::InitReply::error(syscall::EINVAL),
         },
     };

@@ -35,6 +35,7 @@ impl VmaFlags {
     pub const DONTEXPAND: VmaFlags = VmaFlags(1 << 14); // Non-expandable
     pub const WIPEONFORK: VmaFlags = VmaFlags(1 << 15); // Clear on fork
     pub const DONTCOPY: VmaFlags = VmaFlags(1 << 16); // Not copied on fork (SignalTcb)
+    pub const EXEC_VERIFIED: VmaFlags = VmaFlags(1 << 17); // Verified code backing allowed to execute (S2)
 
     pub const fn contains(self, other: VmaFlags) -> bool {
         (self.0 & other.0) == other.0

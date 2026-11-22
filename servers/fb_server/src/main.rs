@@ -2041,7 +2041,6 @@ pub extern "C" fn _start() -> ! {
 
     let mut input_endpoint = register_input_stream();
     let mut last_clock_min = desktop::current_rtc_minute();
-    let wl_sock = wayland::wayland_socket_mut();
 
     let mut req = syscall::FbRequest::zeroed();
     loop {
@@ -2051,32 +2050,9 @@ pub extern "C" fn _start() -> ! {
         if let Some(ep) = input_endpoint {
             drain_mouse_events(ep, &mut mouse, console_mut().fb);
         }
-        let wl_res = wl_sock.poll(wayland_mut(), console_mut().fb);
-        if wl_res.full_repaint || wl_res.dirty.is_some() {
-            let fb = console_mut().fb;
-            if fb.is_present() {
-                desktop_mut().set_wayland_stats(
-                    wayland_mut().wire_messages_processed,
-                    wayland_mut().active_surface_count(),
-                );
-                if wl_res.full_repaint {
-                    compositor_repaint(&mut mouse, fb, 0, fb.height, true);
-                } else if let Some((y0, y1)) = wl_res.dirty {
-                    if mouse.drawn {
-                        mouse.restore_background(fb);
-                    }
-                    if y0 == 0 && y1 >= fb.height {
-                        render_all_layers(fb);
-                    } else {
-                        render_band_layers(fb, y0, y1);
-                        desktop::render_bottom_panel_with_wayland(fb, wayland_mut());
-                    }
-                    console_mut().mark_dirty_rows(y0.min(fb.height), fb.height);
-                    console_mut().flush_damage();
-                    mouse.draw_cursor(fb);
-                }
-            }
-        }
+        // S5B: `/run/wayland-0` socket parsing is delegated exclusively to the isolated
+        // Strate 2 `exo_compositor` server; `fb_server` stays strictly hardware MMIO guardian
+        // + Strate 1 emergency display accepting typed `SurfaceGrant`/`DamageRect` IPC.
         let now_min = desktop::current_rtc_minute();
         if now_min != last_clock_min && console_mut().fb.is_present() {
             last_clock_min = now_min;
@@ -2095,26 +2071,14 @@ pub extern "C" fn _start() -> ! {
             console_mut().flush_damage();
             mouse.draw_cursor(fb);
         }
-        let rc = if wl_res.did_io {
-            unsafe {
-                syscall::syscall4(
-                    syscall::SYS_EXO_IPC_RECV_NB,
-                    syscall::FB_SERVER_ENDPOINT,
-                    &mut req as *mut syscall::FbRequest as u64,
-                    core::mem::size_of::<syscall::FbRequest>() as u64,
-                    0,
-                )
-            }
-        } else {
-            unsafe {
-                syscall::syscall4(
-                    syscall::SYS_IPC_RECV,
-                    syscall::FB_SERVER_ENDPOINT,
-                    &mut req as *mut syscall::FbRequest as u64,
-                    core::mem::size_of::<syscall::FbRequest>() as u64,
-                    syscall::IPC_FLAG_TIMEOUT | RECV_TIMEOUT_MS,
-                )
-            }
+        let rc = unsafe {
+            syscall::syscall4(
+                syscall::SYS_IPC_RECV,
+                syscall::FB_SERVER_ENDPOINT,
+                &mut req as *mut syscall::FbRequest as u64,
+                core::mem::size_of::<syscall::FbRequest>() as u64,
+                syscall::IPC_FLAG_TIMEOUT | RECV_TIMEOUT_MS,
+            )
         };
         if rc < 0 {
             continue;
