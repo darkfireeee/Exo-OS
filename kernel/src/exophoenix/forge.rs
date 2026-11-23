@@ -57,8 +57,8 @@ static A_MERKLE_ROOT: [u8; 32] =
     *include_bytes!(concat!(env!("OUT_DIR"), "/kernel_a_merkle_root.bin"));
 
 // Clean ELF of Kernel A, copied by build.rs from KERNEL_A_IMAGE_PATH during
-// the second Kernel B pass.
-static A_CLEAN_IMAGE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/kernel_a_image.bin"));
+// the second Kernel B pass (placed in `.boot_payloads` after SSR 0x0100_0000..0x0101_0000).
+include!(concat!(env!("OUT_DIR"), "/kernel_a_image_embed.rs"));
 
 const MAX_EAGER_KERNEL_A_BLOB_BYTES: usize = (1usize << BUDDY_MAX_ORDER) * PAGE_SIZE - PAGE_SIZE;
 

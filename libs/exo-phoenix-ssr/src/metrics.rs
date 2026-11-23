@@ -15,6 +15,15 @@ pub const PHOENIX_REASON_LIVE_UPDATE: u32 = 4;
 /// Bit flags stored in `PhoenixTimingRecord::flags`.
 pub const PHOENIX_FLAG_DEGRADED_FREEZE_TIMEOUT: u32 = 1 << 0;
 pub const PHOENIX_FLAG_COLD_DISK_FALLBACK: u32 = 1 << 1;
+pub const PHOENIX_FLAG_TEXT_HEALED: u32 = 1 << 2;
+pub const PHOENIX_FLAG_COLD_RESPAWN: u32 = 1 << 3;
+pub const PHOENIX_FLAG_CRASH_NMI: u32 = 1 << 4;
+pub const PHOENIX_FLAG_KVM_ACCEL: u32 = 1 << 5;
+
+/// Switch qualification modes (P6.4).
+pub const PHOENIX_MODE_SOFT_FORCE: u32 = 0;
+pub const PHOENIX_MODE_COLD_RESPAWN: u32 = 1;
+pub const PHOENIX_MODE_CRASH_NMI: u32 = 2;
 
 /// Serialized ExoPhoenix switch telemetry record stored at `SSR_BASE_PHYS + 0xC000`.
 #[repr(C, align(64))]
@@ -101,6 +110,22 @@ impl PhoenixTimingRecord {
             PHOENIX_REASON_LIVE_UPDATE => "LIVEUPDATE",
             _ => "UNKNOWN",
         }
+    }
+
+    #[inline]
+    pub const fn mode_str(&self) -> &'static str {
+        if (self.flags & PHOENIX_FLAG_COLD_RESPAWN) != 0 {
+            "COLD_RESPAWN"
+        } else if (self.flags & PHOENIX_FLAG_CRASH_NMI) != 0 {
+            "CRASH_NMI"
+        } else {
+            "SOFT_FORCE"
+        }
+    }
+
+    #[inline]
+    pub const fn text_healed(&self) -> bool {
+        (self.flags & PHOENIX_FLAG_TEXT_HEALED) != 0
     }
 }
 

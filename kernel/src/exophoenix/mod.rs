@@ -6,6 +6,8 @@
 
 use core::sync::atomic::{AtomicU8, Ordering};
 
+#[cfg(feature = "phoenix-fault-injection")]
+pub mod fault_inject;
 pub mod forge;
 pub mod golden_mirror;
 pub mod handoff;

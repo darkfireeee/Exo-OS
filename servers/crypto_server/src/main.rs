@@ -84,6 +84,10 @@ pub(crate) fn secure_random(buf: &mut [u8]) -> bool {
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     boot_log(b"crypto_server: boot\n");
+    let pid = unsafe { syscall::syscall0(syscall::SYS_GETPID) };
+    if pid > 0 {
+        dispatch::RUNTIME_PID.store(pid as u32, Ordering::Release);
+    }
     xchacha20::xchacha20_init();
     keystore::keystore_init();
     tls::tls_init();

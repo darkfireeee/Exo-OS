@@ -1,26 +1,18 @@
 //! ExoPhoenix handlers for reserved vectors.
 //! Absolute rule: lock-free, zero allocation, atomics + MSR/CR3 only.
 
-use core::ptr::{read_volatile, write_volatile};
 use core::sync::atomic::Ordering;
 
-use crate::arch::x86_64::apic::x2apic;
-use crate::arch::x86_64::cpu::msr;
+use crate::arch::x86_64::apic::{local_apic, x2apic};
+use crate::arch::x86_64::cpu::{msr, tsc};
+use crate::memory::{phys_to_virt, PhysAddr};
 use crate::scheduler::core::task::ThreadControlBlock;
 
 use super::ssr;
 use super::stage0;
 
-const APICBASE_ADDR_MASK: u64 = 0xFFFF_FFFF_F000;
-const LAPIC_ID_REG_OFFSET: usize = 0x20;
-const LAPIC_ACK_REG_OFFSET: usize = 0xB0;
-
-#[inline(always)]
-fn xapic_mmio_base() -> usize {
-    // SAFETY: reading an architectural MSR in Ring 0.
-    let apic_base = unsafe { msr::read_msr(msr::MSR_IA32_APIC_BASE) } & APICBASE_ADDR_MASK;
-    apic_base as usize
-}
+/// CORR-33 bounded wait ceiling for frozen APs (100 ms + safety margin so BSP always exits first).
+const AP_WAKE_SAFETY_TIMEOUT_MS: u64 = 250;
 
 #[inline(always)]
 fn current_apic_id() -> u32 {
@@ -30,9 +22,8 @@ fn current_apic_id() -> u32 {
             unsafe { msr::read_msr(x2apic::X2APIC_ID) as u32 }
         }
         stage0::BootApicMode::XApic => {
-            let lapic_id_ptr = (xapic_mmio_base() + LAPIC_ID_REG_OFFSET) as *const u32;
-            // SAFETY: LAPIC MMIO active in xAPIC mode.
-            unsafe { read_volatile(lapic_id_ptr) >> 24 }
+            // Use the high-fixmap LAPIC base mapped in ALL CR3s (safe under userspace CR3).
+            local_apic::lapic_id()
         }
     }
 }
@@ -52,11 +43,8 @@ fn apic_ack() {
             }
         }
         stage0::BootApicMode::XApic => {
-            let lapic_eoi_ptr = (xapic_mmio_base() + LAPIC_ACK_REG_OFFSET) as *mut u32;
-            // SAFETY: LAPIC MMIO active in xAPIC mode.
-            unsafe {
-                write_volatile(lapic_eoi_ptr, 0);
-            }
+            // High-fixmap EOI write (safe under userspace CR3).
+            local_apic::eoi();
         }
     }
 }
@@ -81,12 +69,13 @@ unsafe fn save_current_fpu_before_freeze_ack() {
     crate::scheduler::fpu::lazy::cr0_set_ts();
 }
 
-/// 0xF1 — Cooperative freeze.
+/// ExoPhoenix Freeze IPI (`VEC_EXOPHOENIX_FREEZE = 0xF0`).
 ///
 /// - CLI (maskable IRQs off; NMI remains possible by x86 design)
-/// - Potential XSAVE before ACK (CORR-15 / TLA S3)
-/// - ACK FREEZE with Release ordering
-/// - spin until Kernel B resumption
+/// - Conditional FPU XSAVE + CR0.TS=1 before ACK (`CORR-15`)
+/// - Save kstack/TSC snapshot into `SSR_PMC_OFFSET + slot * 64`
+/// - Write `FREEZE_ACK_DONE` with Release ordering + `sfence`
+/// - Bounded wait until Kernel B resumption (`CORR-33`)
 pub unsafe fn handle_freeze_ipi() {
     // SAFETY: privileged instruction in ring0 IRQ handler context.
     unsafe {
@@ -95,18 +84,57 @@ pub unsafe fn handle_freeze_ipi() {
 
     save_current_fpu_before_freeze_ack();
 
-    if let Some(slot) = current_slot() {
-        // SAFETY: fixed/reserved physical SSR; offset bounded via slot map.
+    let slot_opt = current_slot();
+    if let Some(slot) = slot_opt {
+        // Save kstack + TSC checkpoint into this core's 64-byte SSR PMC slot.
+        let ssr_base = phys_to_virt(PhysAddr::new(ssr::SSR_BASE)).as_u64() as usize;
+        let slot_base = ssr_base + ssr::pmc_snapshot_offset(slot);
+        let cur_rsp: u64;
+        #[cfg(all(target_arch = "x86_64", target_os = "none"))]
         unsafe {
-            ssr::ssr_atomic_u32(ssr::freeze_ack_offset(slot))
-                .store(ssr::FREEZE_ACK_DONE, Ordering::Release);
-            core::arch::asm!("sfence", options(nostack, preserves_flags));
+            core::arch::asm!("mov {}, rsp", out(reg) cur_rsp, options(nostack, nomem));
+        }
+        #[cfg(not(all(target_arch = "x86_64", target_os = "none")))]
+        {
+            cur_rsp = 0;
+        }
+        unsafe {
+            core::ptr::write_volatile(slot_base as *mut u64, cur_rsp);
+            core::ptr::write_volatile((slot_base + 8) as *mut u64, tsc::read_tsc());
+        }
+
+        // Fault-injection hook (`F2` / `CORR-33`): when armed on this AP slot, deliberately
+        // withhold `FREEZE_ACK_DONE` so the coordinator proves the 100 ms timeout + `0xDEAD_ACK`.
+        #[cfg(feature = "phoenix-fault-injection")]
+        let stall_this_ap = super::fault_inject::consume_ap_stall_for_slot(slot);
+        #[cfg(not(feature = "phoenix-fault-injection"))]
+        let stall_this_ap = false;
+
+        if !stall_this_ap {
+            // SAFETY: fixed/reserved physical SSR; offset bounded via slot map.
+            unsafe {
+                ssr::ssr_atomic_u32(ssr::freeze_ack_offset(slot))
+                    .store(ssr::FREEZE_ACK_DONE, Ordering::Release);
+                core::arch::asm!("sfence", options(nostack, preserves_flags));
+            }
         }
     }
 
+    let deadline = tsc::read_tsc().wrapping_add(tsc::tsc_ms_to_cycles(AP_WAKE_SAFETY_TIMEOUT_MS));
     loop {
         let handoff = unsafe { ssr::ssr_atomic(ssr::SSR_HANDOFF_FLAG).load(Ordering::Acquire) };
         if handoff == ssr::HANDOFF_B_ACTIVE || handoff == ssr::HANDOFF_NORMAL {
+            break;
+        }
+        if let Some(slot) = slot_opt {
+            let slot_state = unsafe {
+                ssr::ssr_atomic_u32(ssr::freeze_ack_offset(slot)).load(Ordering::Acquire)
+            };
+            if slot_state == ssr::FREEZE_ACK_DEAD {
+                break;
+            }
+        }
+        if tsc::read_tsc().wrapping_sub(deadline) < (u64::MAX / 2) {
             break;
         }
 
@@ -119,7 +147,7 @@ pub unsafe fn handle_freeze_ipi() {
     apic_ack();
 }
 
-/// 0xF2 — PMC snapshot (heuristic, never single source of truth).
+/// 0xF1 — PMC snapshot (heuristic, never single source of truth).
 pub unsafe fn handle_pmc_snapshot_ipi() {
     if !stage0::B_FEATURES.pmc_available() {
         apic_ack();
@@ -131,7 +159,8 @@ pub unsafe fn handle_pmc_snapshot_ipi() {
         return;
     };
 
-    let base = ssr::SSR_BASE as usize + ssr::pmc_snapshot_offset(slot);
+    let base = phys_to_virt(PhysAddr::new(ssr::SSR_BASE)).as_u64() as usize
+        + ssr::pmc_snapshot_offset(slot);
 
     for i in 0..4u32 {
         // SAFETY: MSR access conditioned by pmc_available.
@@ -149,7 +178,7 @@ pub unsafe fn handle_pmc_snapshot_ipi() {
     apic_ack();
 }
 
-/// 0xF3 — Local global TLB flush (reload CR3) + ACK.
+/// 0xF2 — Local global TLB flush (reload CR3 + KPTI shadow sync) + ACK.
 pub unsafe fn handle_tlb_flush_ipi() {
     // SAFETY: privileged instruction in ring0 IRQ handler context.
     unsafe {
@@ -168,9 +197,12 @@ pub unsafe fn handle_tlb_flush_ipi() {
 
     if let Some(slot) = current_slot() {
         // SAFETY: fixed/reserved physical SSR; offset bounded via slot map.
+        // Preserve `FREEZE_ACK_DEAD` (`CORR-33`) for post-cycle audit until the next freeze reset.
         unsafe {
-            ssr::ssr_atomic_u32(ssr::freeze_ack_offset(slot))
-                .store(ssr::TLB_ACK_DONE, Ordering::Release);
+            let cell = ssr::ssr_atomic_u32(ssr::freeze_ack_offset(slot));
+            if cell.load(Ordering::Acquire) != ssr::FREEZE_ACK_DEAD {
+                cell.store(ssr::TLB_ACK_DONE, Ordering::Release);
+            }
         }
     }
 

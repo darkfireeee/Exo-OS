@@ -743,6 +743,18 @@ pub fn p0_used() -> usize {
     P0_USED.load(Ordering::Acquire)
 }
 
+/// Returns the stored BLAKE3 hash of P0 slot `idx` if written (read-only).
+pub fn p0_entry_hash(idx: usize) -> Option<[u8; 32]> {
+    let _guard = P0_CHAIN_LOCK.lock();
+    let used = P0_USED.load(Ordering::Acquire).min(P0_ZONE_ENTRIES);
+    if idx >= used {
+        return None;
+    }
+    // SAFETY: idx < used <= P0_ZONE_ENTRIES, read-only under P0_CHAIN_LOCK.
+    let entry = unsafe { core::ptr::read_volatile(p0_zone_ptr().add(idx) as *const LedgerEntry) };
+    Some(entry.hash)
+}
+
 /// Total entries written (P0 + ring buffer).
 #[inline(always)]
 pub fn total_written() -> u64 {

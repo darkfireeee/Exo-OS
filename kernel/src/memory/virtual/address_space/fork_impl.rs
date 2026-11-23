@@ -198,7 +198,7 @@ impl AddressSpaceCloner for KernelAddressSpaceCloner {
         unsafe {
             shootdown_sync(
                 TlbFlushType::All,
-                crate::arch::x86_64::acpi::madt::madt_cpu_count(),
+                crate::arch::x86_64::smp::percpu::cpu_count(),
             );
         }
     }

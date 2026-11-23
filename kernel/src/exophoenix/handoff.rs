@@ -13,12 +13,15 @@ use core::fmt::Write as _;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use crate::arch::x86_64::apic::{self, ipi, local_apic, x2apic};
-use crate::arch::x86_64::cpu::msr;
+use crate::arch::x86_64::cpu::{msr, tsc};
 use crate::arch::x86_64::idt;
 use crate::exophoenix::{forge, golden_mirror, ssr, stage0, PhoenixState, PHOENIX_STATE};
 use crate::memory::dma::iommu::{AMD_IOMMU, INTEL_VTD};
 use exo_phoenix_ssr::metrics::{
-    PhoenixTimingRecord, PHOENIX_FLAG_COLD_DISK_FALLBACK, PHOENIX_METRICS_MAGIC,
+    PhoenixTimingRecord, PHOENIX_FLAG_COLD_DISK_FALLBACK, PHOENIX_FLAG_COLD_RESPAWN,
+    PHOENIX_FLAG_CRASH_NMI, PHOENIX_FLAG_KVM_ACCEL, PHOENIX_FLAG_TEXT_HEALED,
+    PHOENIX_METRICS_MAGIC, PHOENIX_MODE_COLD_RESPAWN, PHOENIX_MODE_CRASH_NMI,
+    PHOENIX_MODE_SOFT_FORCE,
 };
 #[cfg(not(test))]
 use exo_phoenix_ssr::metrics::PHOENIX_FLAG_DEGRADED_FREEZE_TIMEOUT;
@@ -28,7 +31,10 @@ const HANDOFF_FREEZE_REQ: u64 = ssr::HANDOFF_FREEZE_REQ;
 const HANDOFF_FREEZE_ACK_ALL: u64 = ssr::HANDOFF_FREEZE_ACK_ALL;
 const HANDOFF_B_ACTIVE: u64 = ssr::HANDOFF_B_ACTIVE;
 
-const SOFT_TIMEOUT_US: u64 = 100;
+/// CORR-33 bounded SMP freeze timeout: 100 ms (eliminates global deadlock on stalled AP).
+pub const FREEZE_TIMEOUT_MS: u64 = 100;
+#[cfg(not(test))]
+const TLB_SHOOTDOWN_TIMEOUT_MS: u64 = 10;
 const MAX_FORGE_ATTEMPTS: u32 = 3;
 
 const ICR_DM_INIT_X2APIC: u64 = 0b101 << 8;
@@ -40,10 +46,12 @@ static FORGE_FAILURE_COUNT: AtomicU32 = AtomicU32::new(0);
 static PHOENIX_CYCLE_COUNTER: AtomicU32 = AtomicU32::new(0);
 static PHOENIX_FALLBACK_EPOCH: AtomicU64 = AtomicU64::new(0);
 
-const APICBASE_ADDR_MASK: u64 = 0xFFFF_FFFF_F000;
-const LAPIC_ID_REG_OFFSET: usize = 0x20;
 const INIT_SERVER_ENDPOINT_ID: u64 = 1;
 const INIT_MSG_RELAUNCH_STRATE2: u32 = 8;
+#[cfg(not(test))]
+const INIT_MSG_COLD_RESPAWN_PHOENIX: u32 = 9;
+#[cfg(not(test))]
+const COLD_RESPAWN_TIMEOUT_NS: u64 = 15_000_000_000; // 15 s safety ceiling for TCG debug/release
 const CRYPTO_SERVER_ENDPOINT_ID: u64 = 4;
 const CRYPTO_PROTOCOL_VERSION: u8 = 3;
 const PHOENIX_WAKE_ENTROPY: u32 = 255;
@@ -54,7 +62,7 @@ const CRYPTO_REPLY_STATUS_OFFSET: usize = 4;
 const CRYPTO_REPLY_VERSION_OFFSET: usize = 14;
 const CRYPTO_REPLY_DATA_OFFSET: usize = 16;
 const PHOENIX_WAKE_ACK_TIMEOUT_NS: u64 = 5_000_000_000;
-const PHOENIX_FORCE_CRYPTO_TIMEOUT_NS: u64 = 250_000_000;
+const PHOENIX_FORCE_CRYPTO_TIMEOUT_NS: u64 = 500_000_000;
 const RAW_NOWAIT: u32 = 0x0001;
 
 #[repr(C)]
@@ -115,11 +123,12 @@ fn wait_crypto_phoenix_ack(
                     } else {
                         0
                     };
-                    let monotonic_epoch = if epoch > 0 {
+                    let prev_monotone = PHOENIX_FALLBACK_EPOCH.fetch_add(1, Ordering::AcqRel) + 1;
+                    let monotonic_epoch = if epoch > prev_monotone {
                         PHOENIX_FALLBACK_EPOCH.fetch_max(epoch, Ordering::AcqRel);
                         epoch
                     } else {
-                        PHOENIX_FALLBACK_EPOCH.fetch_add(1, Ordering::AcqRel) + 1
+                        prev_monotone
                     };
                     return Ok(monotonic_epoch);
                 }
@@ -141,13 +150,6 @@ fn wait_crypto_phoenix_ack(
 }
 
 #[inline(always)]
-fn xapic_mmio_base() -> usize {
-    // SAFETY: reading an architectural MSR in Ring 0.
-    let apic_base = unsafe { msr::read_msr(msr::MSR_IA32_APIC_BASE) } & APICBASE_ADDR_MASK;
-    apic_base as usize
-}
-
-#[inline(always)]
 fn current_apic_id() -> u32 {
     match stage0::B_FEATURES.apic_mode() {
         stage0::BootApicMode::X2Apic => {
@@ -155,9 +157,8 @@ fn current_apic_id() -> u32 {
             unsafe { msr::read_msr(x2apic::X2APIC_ID) as u32 }
         }
         stage0::BootApicMode::XApic => {
-            let lapic_id_ptr = (xapic_mmio_base() + LAPIC_ID_REG_OFFSET) as *const u32;
-            // SAFETY: LAPIC MMIO active in xAPIC mode.
-            unsafe { core::ptr::read_volatile(lapic_id_ptr) >> 24 }
+            // High-fixmap LAPIC ID read (safe under userspace CR3).
+            local_apic::lapic_id()
         }
     }
 }
@@ -179,14 +180,6 @@ fn read_apic_timestamp_ticks() -> u32 {
 }
 
 #[inline(always)]
-fn apic_elapsed_us(start_ticks: u32, end_ticks: u32, ticks_per_us: u64) -> u64 {
-    if ticks_per_us == 0 {
-        return SOFT_TIMEOUT_US.saturating_add(1);
-    }
-    start_ticks.wrapping_sub(end_ticks) as u64 / ticks_per_us
-}
-
-#[inline(always)]
 fn set_handoff_flag_release(v: u64) {
     // SAFETY: valid SSR offset; Release ordering enforced (S9).
     unsafe {
@@ -201,11 +194,36 @@ fn handoff_flag_acquire() -> u64 {
 }
 
 fn phoenix_wake_entropy() -> u64 {
-    crate::arch::x86_64::cpu::tsc::read_tsc()
+    tsc::read_tsc()
         ^ ((current_apic_id() as u64) << 32)
         ^ handoff_flag_acquire()
         ^ read_apic_timestamp_ticks() as u64
         ^ FORGE_FAILURE_COUNT.load(Ordering::Acquire) as u64
+}
+
+pub(crate) fn find_crypto_server_runtime_pid() -> Option<u32> {
+    if let Some(owner_pid) = crate::syscall::table::ipc::endpoint_owner_pid(CRYPTO_SERVER_ENDPOINT_ID)
+    {
+        if crate::process::is_alive(owner_pid) {
+            return Some(owner_pid);
+        }
+    }
+    let mut found = None;
+    crate::process::PROCESS_REGISTRY.for_each(|pcb| {
+        if found.is_some() || pcb.is_exiting() || !crate::process::is_alive(pcb.pid.0) {
+            return;
+        }
+        let pid = pcb.pid;
+        if crate::security::service_class_of(pid) == crate::security::ServiceClass::CryptoServer {
+            found = Some(pid.0);
+            return;
+        }
+        let name = pcb.name_snapshot();
+        if name.starts_with(b"exo-crypto-serv") || name.starts_with(b"crypto_server") {
+            found = Some(pid.0);
+        }
+    });
+    found
 }
 
 fn notify_crypto_server_phoenix_wake_with_timeout(timeout_ns: u64) -> Result<u64, &'static str> {
@@ -213,12 +231,26 @@ fn notify_crypto_server_phoenix_wake_with_timeout(timeout_ns: u64) -> Result<u64
         .ok_or("phoenix_wake_invalid_endpoint")?;
 
     let entropy = phoenix_wake_entropy();
-    let timestamp = crate::arch::x86_64::cpu::tsc::read_tsc();
+    let timestamp = tsc::read_tsc();
     let reply_endpoint =
         phoenix_wake_reply_endpoint(entropy, timestamp).ok_or("phoenix_wake_reply_endpoint")?;
 
     if !crate::ipc::channel::raw::mailbox_open(reply_endpoint) {
         return Err("phoenix_wake_reply_open_failed");
+    }
+
+    // T20-001: mint a genuine Ring 0 `IPC_SEND | IPC_MANAGE` CapToken bound to crypto_server's
+    // live runtime PID (unforgeable by Ring 3) and revoke it immediately after the reply.
+    let mut minted_oid: Option<u32> = None;
+    let mut cap_token_wire = [0u8; crate::security::capability::CAP_TOKEN_WIRE_SIZE];
+    if let Some(crypto_pid) = find_crypto_server_runtime_pid() {
+        let wake_rights = crate::security::capability::Rights::IPC_SEND
+            | crate::security::capability::Rights::IPC_MANAGE;
+        if let Ok(token) = crate::security::capability::mint_kernel_ipc_token(crypto_pid, wake_rights)
+        {
+            cap_token_wire = token.to_bytes();
+            minted_oid = Some(token.object_id().as_u64() as u32);
+        }
     }
 
     let mut request = PhoenixWakeRequest {
@@ -228,7 +260,7 @@ fn notify_crypto_server_phoenix_wake_with_timeout(timeout_ns: u64) -> Result<u64
         payload_len: 16,
         version: CRYPTO_PROTOCOL_VERSION,
         flags: 0,
-        cap_token: [0u8; crate::security::capability::CAP_TOKEN_WIRE_SIZE],
+        cap_token: cap_token_wire,
         payload: [0u8; CRYPTO_REQUEST_PAYLOAD_SIZE],
     };
     request.payload[..8].copy_from_slice(&entropy.to_le_bytes());
@@ -246,11 +278,17 @@ fn notify_crypto_server_phoenix_wake_with_timeout(timeout_ns: u64) -> Result<u64
         .map_err(|_| "phoenix_wake_send_failed");
     if let Err(err) = send_result {
         crate::ipc::channel::raw::mailbox_close(reply_endpoint);
+        if let Some(oid) = minted_oid {
+            let _ = crate::security::capability::revoke_handle(oid);
+        }
         return Err(err);
     }
 
     let ack_result = wait_crypto_phoenix_ack(reply_endpoint, timeout_ns);
     crate::ipc::channel::raw::mailbox_close(reply_endpoint);
+    if let Some(oid) = minted_oid {
+        let _ = crate::security::capability::revoke_handle(oid);
+    }
     ack_result
 }
 
@@ -351,9 +389,13 @@ fn stage_hard_revoke_iommu(with_drain: bool) {
     }
 }
 
-fn wait_freeze_ack_and_drain_timeout_100us(self_slot: Option<usize>) -> bool {
-    let ticks_per_us = stage0::ticks_per_us();
-    let start_ticks = read_apic_timestamp_ticks();
+/// CORR-33 bounded SMP freeze wait (100 ms via calibrated TSC).
+///
+/// If any peer AP fails to acknowledge within `FREEZE_TIMEOUT_MS`, marks its SSR slot
+/// `FREEZE_ACK_DEAD (0xDEAD_0001)` and logs to `ExoLedger` without causing a global deadlock.
+fn wait_freeze_ack_and_drain_timeout_corr33(self_slot: Option<usize>) -> bool {
+    let start_tsc = tsc::read_tsc();
+    let timeout_cycles = tsc::tsc_ms_to_cycles(FREEZE_TIMEOUT_MS).max(1);
 
     loop {
         let acks_ok = all_freeze_acks_observed(self_slot);
@@ -363,13 +405,52 @@ fn wait_freeze_ack_and_drain_timeout_100us(self_slot: Option<usize>) -> bool {
             return true;
         }
 
-        let now_ticks = read_apic_timestamp_ticks();
-        if apic_elapsed_us(start_ticks, now_ticks, ticks_per_us) >= SOFT_TIMEOUT_US {
+        if tsc::read_tsc().wrapping_sub(start_tsc) >= timeout_cycles {
+            // Mark every non-responding AP slot `FREEZE_ACK_DEAD` (`CORR-33`).
+            let mut seen = [0u64; 4];
+            for_each_mapped_apic_slot(|_, slot| {
+                if Some(slot) == self_slot || !super::take_slot_once(&mut seen, slot) {
+                    return;
+                }
+                let ack = unsafe {
+                    ssr::ssr_atomic_u32(ssr::freeze_ack_offset(slot)).load(Ordering::Acquire)
+                };
+                if ack != ssr::FREEZE_ACK_DONE && ack != ssr::TLB_ACK_DONE {
+                    unsafe {
+                        ssr::ssr_atomic_u32(ssr::freeze_ack_offset(slot))
+                            .store(ssr::FREEZE_ACK_DEAD, Ordering::Release);
+                    }
+                    crate::security::exoledger::exo_ledger_append(
+                        crate::security::exoledger::ActionTag::Custom {
+                            tag: 0xDEAD_0AC4, // CORR-33 DEAD_ACK
+                            data: slot as u64,
+                        },
+                    );
+                }
+            });
             return false;
         }
 
         core::hint::spin_loop();
     }
+}
+
+/// Counts how many peer cores acknowledged the most recent freeze IPI (`FREEZE_ACK_DONE` / `TLB_ACK_DONE`).
+pub fn count_acked_peer_cores() -> u32 {
+    let self_slot = current_slot();
+    let mut seen = [0u64; 4];
+    let mut count = 0u32;
+    for_each_mapped_apic_slot(|_, slot| {
+        if Some(slot) == self_slot || !super::take_slot_once(&mut seen, slot) {
+            return;
+        }
+        let ack =
+            unsafe { ssr::ssr_atomic_u32(ssr::freeze_ack_offset(slot)).load(Ordering::Acquire) };
+        if ack == ssr::FREEZE_ACK_DONE || ack == ssr::TLB_ACK_DONE {
+            count = count.saturating_add(1);
+        }
+    });
+    count
 }
 
 const PCI_CAP_ID_MSI: u8 = 0x05;
@@ -585,12 +666,142 @@ impl<const N: usize> core::fmt::Write for StackLineBuf<N> {
 }
 
 #[cfg(not(test))]
+fn post_switch_smp_coherency(self_slot: Option<usize>) {
+    // P6.2: 1. Local CR3 reload & KPTI shadow PML4 sync if KPTI active.
+    let cr3_now = crate::arch::x86_64::read_cr3();
+    if crate::arch::x86_64::spectre::kpti::kpti_enabled() {
+        let user_cr3 = crate::arch::x86_64::spectre::kpti::current_user_cr3();
+        if user_cr3 != 0 && cr3_now != 0 {
+            crate::arch::x86_64::spectre::kpti::set_current_cr3(cr3_now, user_cr3);
+        }
+    }
+    // SAFETY: local CR3 reload flushes non-global TLB entries on the coordinator core.
+    unsafe {
+        core::arch::asm!(
+            "mov {tmp}, cr3",
+            "mov cr3, {tmp}",
+            tmp = out(reg) _,
+            options(nostack)
+        );
+    }
+
+    // P6.2: 2. Global SMP TLB shootdown broadcast (`VEC_EXOPHOENIX_TLB`) if peer cores exist.
+    if has_other_mapped_cores(self_slot) {
+        if apic::is_x2apic() {
+            x2apic::broadcast_ipi_except_self_x2apic(idt::VEC_EXOPHOENIX_TLB);
+        } else {
+            local_apic::broadcast_ipi_except_self(idt::VEC_EXOPHOENIX_TLB);
+        }
+        let start = tsc::read_tsc();
+        let timeout = tsc::tsc_ms_to_cycles(TLB_SHOOTDOWN_TIMEOUT_MS).max(1);
+        while tsc::read_tsc().wrapping_sub(start) < timeout {
+            let mut all_tlb = true;
+            let mut seen = [0u64; 4];
+            for_each_mapped_apic_slot(|_, slot| {
+                if !all_tlb || Some(slot) == self_slot || !super::take_slot_once(&mut seen, slot) {
+                    return;
+                }
+                let ack = unsafe {
+                    ssr::ssr_atomic_u32(ssr::freeze_ack_offset(slot)).load(Ordering::Acquire)
+                };
+                if ack != ssr::TLB_ACK_DONE && ack != ssr::FREEZE_ACK_DEAD {
+                    all_tlb = false;
+                }
+            });
+            if all_tlb {
+                break;
+            }
+            core::hint::spin_loop();
+        }
+    }
+}
+
+#[cfg(not(test))]
+fn request_init_cold_respawn_phoenix() -> Result<u32, &'static str> {
+    let init_ep = crate::ipc::core::types::EndpointId::new(INIT_SERVER_ENDPOINT_ID)
+        .ok_or("cold_respawn_invalid_init_ep")?;
+
+    // Unregister endpoints of the servers that `init_server` is about to SIGKILL so readiness
+    // polling CANNOT be fooled by stale pre-kill endpoint entries (`F3`).
+    const KILLED_ENDPOINTS: &[&[u8]] = &[
+        b"crypto_server",
+        b"memory_server",
+        b"vfs_server",
+        b"device_server",
+        b"network_server",
+        b"scheduler_server",
+        b"exo_compositor",
+    ];
+    for &ep_name in KILLED_ENDPOINTS {
+        crate::syscall::table::ipc::force_release_named_endpoint(ep_name);
+    }
+
+    let entropy = phoenix_wake_entropy();
+    let reply_ep = phoenix_wake_reply_endpoint(entropy ^ 0xC01D_5EA1, tsc::read_tsc())
+        .ok_or("cold_respawn_reply_ep")?;
+    if !crate::ipc::channel::raw::mailbox_open(reply_ep) {
+        return Err("cold_respawn_reply_open_failed");
+    }
+
+    // InitRequest layout: sender_pid(u32=0), msg_type(u32=9), payload[0..8]=reply_ep(u64).
+    let mut msg = [0u8; 64];
+    msg[4..8].copy_from_slice(&INIT_MSG_COLD_RESPAWN_PHOENIX.to_le_bytes());
+    msg[8..16].copy_from_slice(&reply_ep.get().to_le_bytes());
+
+    if crate::ipc::channel::raw::send_raw(init_ep, &msg, RAW_NOWAIT).is_err() {
+        crate::ipc::channel::raw::mailbox_close(reply_ep);
+        return Err("cold_respawn_send_failed");
+    }
+
+    let deadline =
+        crate::scheduler::timer::clock::monotonic_ns().saturating_add(COLD_RESPAWN_TIMEOUT_NS);
+    let mut reply = [0u8; 64];
+    let result = loop {
+        match crate::ipc::channel::raw::recv_raw(reply_ep, &mut reply, RAW_NOWAIT) {
+            Ok(n) if n >= 32 => {
+                let status = i64::from_le_bytes([
+                    reply[0], reply[1], reply[2], reply[3], reply[4], reply[5], reply[6], reply[7],
+                ]);
+                let respawned = u32::from_le_bytes([reply[8], reply[9], reply[10], reply[11]]);
+                let phx03_ok = u32::from_le_bytes([reply[28], reply[29], reply[30], reply[31]]);
+                if status == 0 && respawned >= 4 && phx03_ok == 1 {
+                    break Ok(respawned);
+                }
+                break Err("cold_respawn_wave_failed");
+            }
+            Ok(_) => break Err("cold_respawn_short_reply"),
+            Err(crate::ipc::core::types::IpcError::WouldBlock)
+            | Err(crate::ipc::core::types::IpcError::QueueEmpty) => {
+                if crate::scheduler::timer::clock::monotonic_ns() >= deadline {
+                    break Err("cold_respawn_timeout");
+                }
+                unsafe {
+                    let _ = crate::scheduler::core::switch::cooperative_reschedule();
+                }
+            }
+            Err(_) => break Err("cold_respawn_recv_failed"),
+        }
+    };
+
+    crate::ipc::channel::raw::mailbox_close(reply_ep);
+    result
+}
+
+#[cfg(not(test))]
 fn emit_phoenix_sla_telemetry(record: &PhoenixTimingRecord, strate1_online: u32) {
-    let mut line = StackLineBuf::<320>::new();
+    let mut line = StackLineBuf::<384>::new();
     let degraded = if record.is_degraded() { 1u32 } else { 0u32 };
+    let smp = crate::arch::x86_64::smp::init::smp_cpu_count().max(1);
+    let accel = if (record.flags & PHOENIX_FLAG_KVM_ACCEL) != 0 {
+        "KVM"
+    } else {
+        "TCG"
+    };
+    let s1_respawn_us = record.delta_sla_us.saturating_sub(record.delta_s0_us);
+    let s2_reconverge_us = record.delta_full_us.saturating_sub(record.delta_sla_us);
     let _ = writeln!(
         line,
-        "[EXO_PHOENIX_SLA] CYCLE={} REASON={} S0_FREEZE_US={} S0_FORGE_US={} S0_TOTAL_US={} CRYPTO_US={} S1_TOTAL_US={} FULL_S2_US={} DEGRADED={} RESULT=PASS EPOCH={} S1_ONLINE={}",
+        "[EXO_PHOENIX_SLA] CYCLE={} REASON={} S0_FREEZE_US={} S0_FORGE_US={} S0_TOTAL_US={} CRYPTO_US={} S1_TOTAL_US={} FULL_S2_US={} DEGRADED={} RESULT=PASS EPOCH={} S1_ONLINE={} MODE={} SMP={} ACCEL={} S0_US={} S1_RESPAWN_US={} S2_RECONVERGE_US={} HEALED={}",
         record.cycle_id,
         record.reason_str(),
         record.delta_s0_freeze_us,
@@ -602,6 +813,13 @@ fn emit_phoenix_sla_telemetry(record: &PhoenixTimingRecord, strate1_online: u32)
         degraded,
         record.crypto_epoch_id,
         strate1_online,
+        record.mode_str(),
+        smp,
+        accel,
+        record.delta_s0_us,
+        s1_respawn_us,
+        s2_reconverge_us,
+        if record.text_healed() { 1u32 } else { 0u32 },
     );
     crate::arch::x86_64::terminal::debug_write(line.as_bytes());
 }
@@ -645,12 +863,21 @@ impl Drop for Strate0IrqGuard {
     }
 }
 
-/// Executes a full O(1) 3-Strata ExoPhoenix switch cycle with serialized TSC milestones `t0..t6`,
-/// Golden RAM Mirror BLAKE3 verification (P3), `ktime` base reset (P1), `crypto_server` CSPRNG
-/// reseed + monotonic epoch update, closed Strate 1 wave check (`t5` = SLA end), asynchronous
-/// Strate 2 reconvergence trigger (`t6`), SSR v7 `+0xC000` persistence, `ExoLedger` audit entry,
-/// and deterministic `[EXO_PHOENIX_SLA]` serial emission.
+/// Executes an O(1) 3-Strata ExoPhoenix switch cycle in `PHOENIX_MODE_SOFT_FORCE` mode.
 pub fn force_phoenix_switch_cycle(trigger_reason: u32) -> Result<PhoenixTimingRecord, &'static str> {
+    force_phoenix_switch_cycle_with_mode(trigger_reason, PHOENIX_MODE_SOFT_FORCE)
+}
+
+/// Executes a full 3-Strata ExoPhoenix switch cycle supporting `SOFT_FORCE`, `COLD_RESPAWN`,
+/// and `CRASH_NMI` modes (`P5`–`P8`), with serialized TSC milestones `t0..t6`, real SMP freeze
+/// (`CORR-33` 100 ms), physical Golden RAM Mirror `.text` healing (`P5.3`), `ExoVeil` revocation,
+/// KPTI + SMP TLB shootdown (`P6.2`), `ktime` base reset, `T20-001` Ring 0 capability-authenticated
+/// `crypto_server` CSPRNG reseed, destructive `COLD_RESPAWN` (`R0 -> R1 -> R2` + `PHX-03`),
+/// SSR v7 `+0xC000` persistence, `ExoLedger` audit, and deterministic P6.4 telemetry.
+pub fn force_phoenix_switch_cycle_with_mode(
+    trigger_reason: u32,
+    mode: u32,
+) -> Result<PhoenixTimingRecord, &'static str> {
     let cycle_id = PHOENIX_CYCLE_COUNTER.fetch_add(1, Ordering::AcqRel) + 1;
     let tsc_khz = crate::arch::x86_64::time::ktime::current_tsc_khz().max(1_000);
 
@@ -659,6 +886,16 @@ pub fn force_phoenix_switch_cycle(trigger_reason: u32) -> Result<PhoenixTimingRe
     record.cycle_id = cycle_id;
     record.trigger_reason = trigger_reason;
     record.tsc_khz = tsc_khz;
+    if mode == PHOENIX_MODE_COLD_RESPAWN {
+        record.flags |= PHOENIX_FLAG_COLD_RESPAWN;
+    } else if mode == PHOENIX_MODE_CRASH_NMI {
+        record.flags |= PHOENIX_FLAG_CRASH_NMI;
+    }
+    if crate::arch::x86_64::virt::detect::hypervisor_type()
+        == crate::arch::x86_64::virt::detect::HypervisorType::Kvm
+    {
+        record.flags |= PHOENIX_FLAG_KVM_ACCEL;
+    }
 
     // Ensure the read-only Golden RAM Mirror is provisioned BEFORE masking interrupts so the
     // Strate 0 critical window (`t0..t3`) performs zero heap allocations and zero disk I/O.
@@ -672,12 +909,12 @@ pub fn force_phoenix_switch_cycle(trigger_reason: u32) -> Result<PhoenixTimingRe
     }
 
     // Strate 0 atomic critical window (`t0..t3`): mask timer preemption so untrusted Strate 2
-    // threads cannot preempt Ring 0 IOMMU lock + Golden RAM Mirror BLAKE3 verification.
+    // threads cannot preempt Ring 0 IOMMU lock + Golden RAM Mirror BLAKE3 verification/healing.
     #[cfg(all(target_arch = "x86_64", not(test)))]
     let strate0_irq_guard = Strate0IrqGuard::enter();
 
     // t0: Serialized switch start (`lfence; rdtsc`)
-    record.t0_freeze_req = crate::arch::x86_64::cpu::tsc::read_tsc_begin();
+    record.t0_freeze_req = tsc::read_tsc_begin();
     PHOENIX_STATE.store(PhoenixState::IsolationSoft as u8, Ordering::Release);
 
     crate::security::exoledger::exo_ledger_append_p0(
@@ -687,17 +924,24 @@ pub fn force_phoenix_switch_cycle(trigger_reason: u32) -> Result<PhoenixTimingRe
     );
 
     #[cfg(not(test))]
+    let self_slot = current_slot();
+    #[cfg(not(test))]
     {
-        let self_slot = current_slot();
         set_handoff_flag_release(HANDOFF_FREEZE_REQ);
         if has_other_mapped_cores(self_slot) {
             reset_freeze_acks_for_targets(self_slot);
             send_freeze_ipi_broadcast_except_self();
             stage_soft_revoke_iommu();
-            if !wait_freeze_ack_and_drain_timeout_100us(self_slot) {
+            if !wait_freeze_ack_and_drain_timeout_corr33(self_slot) {
                 record.flags |= PHOENIX_FLAG_DEGRADED_FREEZE_TIMEOUT;
-                mask_all_msi_msix();
-                send_init_ipi_to_resistant_cores(self_slot);
+                #[cfg(feature = "phoenix-fault-injection")]
+                let controlled_stall = super::fault_inject::take_controlled_ap_stall_occurred();
+                #[cfg(not(feature = "phoenix-fault-injection"))]
+                let controlled_stall = false;
+                if !controlled_stall {
+                    mask_all_msi_msix();
+                    send_init_ipi_to_resistant_cores(self_slot);
+                }
             }
         } else {
             stage_soft_revoke_iommu();
@@ -709,36 +953,53 @@ pub fn force_phoenix_switch_cycle(trigger_reason: u32) -> Result<PhoenixTimingRe
         IOMMU_DRAIN_CONFIRMED.store(true, Ordering::Release);
     }
 
-    // t1: All peer cores frozen + soft IOMMU drain complete
-    record.t1_freeze_ack_all = crate::arch::x86_64::cpu::tsc::read_tsc_end().0;
+    // t1: All peer cores frozen (or CORR-33 100 ms degraded timeout) + soft IOMMU drain complete
+    record.t1_freeze_ack_all = tsc::read_tsc_end().0;
 
-    // Hard IOMMU revoke + Golden RAM Mirror BLAKE3 verification (Strates 0 & 1 only, zero disk I/O)
+    // Hard IOMMU revoke + ExoVeil ephemeral domain revocation + Golden RAM Mirror verify/physical heal
     #[cfg(not(test))]
     stage_hard_revoke_iommu(true);
+    unsafe {
+        crate::security::exoveil::exoveil_revoke_all_on_handoff();
+    }
     PHOENIX_STATE.store(PhoenixState::IsolationHard as u8, Ordering::Release);
 
-    let mirror_report = golden_mirror::verify_strate0_and_strate1_mirror()?;
-    if mirror_report.used_cold_disk_fallback {
+    let heal_report = golden_mirror::heal_kernel_a_from_mirror()?;
+    if heal_report.used_cold_disk_fallback {
         record.flags |= PHOENIX_FLAG_COLD_DISK_FALLBACK;
     }
+    if heal_report.corruption_detected && heal_report.verified_after_heal {
+        record.flags |= PHOENIX_FLAG_TEXT_HEALED;
+    }
 
-    // t2: Hard IOMMU + ExoForge RAM Mirror verification complete
-    record.t2_iommu_and_forge = crate::arch::x86_64::cpu::tsc::read_tsc_end().0;
+    // t2: Hard IOMMU + ExoForge RAM Mirror verification/physical `.text` healing complete
+    record.t2_iommu_and_forge = tsc::read_tsc_end().0;
 
-    // Kernel B active handoff + monotonic time-base reset + IRQ watchdog reset
+    // Kernel B active handoff + SMP KPTI/TLB coherency + monotonic time-base & IRQ watchdog reset
     #[cfg(not(test))]
     set_handoff_flag_release(HANDOFF_B_ACTIVE);
+    #[cfg(not(test))]
+    post_switch_smp_coherency(self_slot);
     reset_irq_watchdogs_after_restore();
+    unsafe {
+        crate::security::exoveil::pks_restore_for_normal_ops();
+    }
     PHOENIX_STATE.store(PhoenixState::Restore as u8, Ordering::Release);
 
     // t3: Kernel B / restored Ring 0 operational (`delta_s0_us` ends here)
-    record.t3_kernel_b_active = crate::arch::x86_64::cpu::tsc::read_tsc_end().0;
+    record.t3_kernel_b_active = tsc::read_tsc_end().0;
 
-    // Restore IRQs immediately after `t3` so Wave R0 (`crypto_server`) IPC can run cleanly.
+    // Restore IRQs immediately after `t3` so Wave R0/R1/R2 IPC & respawn can run cleanly.
     #[cfg(all(target_arch = "x86_64", not(test)))]
     drop(strate0_irq_guard);
 
-    // Wave R0 critical crypto reseed (`PHOENIX_WAKE_ENTROPY`) -> monotonic `epoch_id`
+    // Destructive Cold Respawn (`F3` / P6.3): SIGKILL + parallel R0->R1->R2 + PHX-03 via init_server.
+    #[cfg(not(test))]
+    if mode == PHOENIX_MODE_COLD_RESPAWN {
+        request_init_cold_respawn_phoenix()?;
+    }
+
+    // Wave R0 critical crypto reseed (`PHOENIX_WAKE_ENTROPY` + T20-001 CapToken) -> monotonic `epoch_id`
     let epoch_id = if crate::ipc::endpoint::lookup_endpoint(b"crypto_server").is_some() {
         match notify_crypto_server_phoenix_wake_with_timeout(PHOENIX_FORCE_CRYPTO_TIMEOUT_NS) {
             Ok(ep) => ep,
@@ -750,16 +1011,18 @@ pub fn force_phoenix_switch_cycle(trigger_reason: u32) -> Result<PhoenixTimingRe
     record.crypto_epoch_id = epoch_id;
 
     // t4: `crypto_server` CSPRNG reseeded
-    record.t4_crypto_reseeded = crate::arch::x86_64::cpu::tsc::read_tsc_end().0;
+    record.t4_crypto_reseeded = tsc::read_tsc_end().0;
 
     // Closed O(1) Strate 1 wave verification (R0 -> R1 -> R2; zero Strate 2 dependency)
     let strate1_online = verify_strate1_waves_o1();
 
     // t5: Strate 1 ready — END OF 1 s SLA (`delta_sla_us`)
-    record.t5_strate1_ready = crate::arch::x86_64::cpu::tsc::read_tsc_end().0;
+    record.t5_strate1_ready = tsc::read_tsc_end().0;
 
     // Trigger asynchronous Strate 2 reconvergence outside the SLA critical path
-    notify_init_relaunch_strate2_async();
+    if mode != PHOENIX_MODE_COLD_RESPAWN {
+        notify_init_relaunch_strate2_async();
+    }
 
     // Release normal handoff state
     #[cfg(not(test))]
@@ -767,7 +1030,7 @@ pub fn force_phoenix_switch_cycle(trigger_reason: u32) -> Result<PhoenixTimingRe
     PHOENIX_STATE.store(PhoenixState::Normal as u8, Ordering::Release);
 
     // t6: Strate 2 async reconvergence signaled
-    record.t6_strate2_ready = crate::arch::x86_64::cpu::tsc::read_tsc_end().0;
+    record.t6_strate2_ready = tsc::read_tsc_end().0;
 
     // Compute 128-bit overflow-free microsecond deltas, persist in SSR +0xC000, audit in ExoLedger
     record.compute_deltas();
@@ -875,7 +1138,7 @@ pub fn begin_isolation_soft() -> Result<(), &'static str> {
     send_freeze_ipi_broadcast_except_self();
     stage_soft_revoke_iommu();
 
-    if !wait_freeze_ack_and_drain_timeout_100us(self_slot) {
+    if !wait_freeze_ack_and_drain_timeout_corr33(self_slot) {
         return begin_isolation_hard();
     }
 

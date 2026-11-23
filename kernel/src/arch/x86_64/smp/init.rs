@@ -47,11 +47,26 @@ pub fn smp_boot_complete() -> bool {
 /// The AP writes `AP_ALIVE_MAGIC` here to report its presence to the BSP.
 const AP_ALIVE_MAGIC: u32 = 0xA1_1A_1A_A1;
 const HANDSHAKE_OFFSET: u64 = 0x10; // offset within trampoline
+const AP_STACK_SIZE: usize = 32 * 1024;
+const MAX_BOOT_APS: usize = 16;
+
+#[repr(C, align(16))]
+struct ApBootStack([u8; AP_STACK_SIZE]);
+
+static mut AP_BOOT_STACKS: [ApBootStack; MAX_BOOT_APS] =
+    [const { ApBootStack([0u8; AP_STACK_SIZE]) }; MAX_BOOT_APS];
 
 fn write_trampoline_u32(offset: u64, val: u32) {
     // SAFETY: identity-mapped trampoline, validated offset
     unsafe {
         core::ptr::write_volatile((TRAMPOLINE_PHYS + offset) as *mut u32, val);
+    }
+}
+
+fn write_trampoline_u64(offset: u64, val: u64) {
+    // SAFETY: identity-mapped trampoline, validated offset
+    unsafe {
+        core::ptr::write_volatile((TRAMPOLINE_PHYS + offset) as *mut u64, val);
     }
 }
 
@@ -69,22 +84,37 @@ fn read_trampoline_u32(offset: u64) -> u32 {
 pub fn smp_boot_aps(madt_info: &madt::MadtInfo, bsp_lapic_id: u32) {
     let n = madt_info.cpu_count;
     let apic_ids = &madt_info.apic_ids;
+    let mut next_cpu_id = 1u32;
 
     for &apic_id in &apic_ids[..(n as usize)] {
         if apic_id == bsp_lapic_id {
             continue;
         } // skip BSP
-
-        boot_ap(apic_id as u8);
+        if (next_cpu_id as usize) >= MAX_BOOT_APS {
+            break;
+        }
+        if boot_ap(next_cpu_id, apic_id as u8) {
+            next_cpu_id += 1;
+        }
     }
 
     SMP_BOOT_DONE.store(true, Ordering::Release);
 }
 
 /// INIT → SIPI → SIPI sequence for an AP
-fn boot_ap(dest_apic_id: u8) {
-    // 1. Prepare handshake area
+fn boot_ap(cpu_id: u32, dest_apic_id: u8) -> bool {
+    let stack_top = unsafe {
+        let base = core::ptr::addr_of!(AP_BOOT_STACKS[cpu_id as usize].0) as u64;
+        (base + AP_STACK_SIZE as u64) & !0xFu64
+    };
+
+    // 1. Prepare handshake & parameters in trampoline page (0x6010..0x6038)
     write_trampoline_u32(HANDSHAKE_OFFSET, 0);
+    write_trampoline_u64(0x18, stack_top);
+    write_trampoline_u32(0x28, cpu_id);
+    write_trampoline_u32(0x2C, dest_apic_id as u32);
+    write_trampoline_u64(0x30, ap_entry as *const () as u64);
+    core::sync::atomic::fence(Ordering::SeqCst);
 
     // 2. INIT IPI
     ipi::send_init_ipi(dest_apic_id);
@@ -97,17 +127,17 @@ fn boot_ap(dest_apic_id: u8) {
     // 4. Second SIPI (certain chipsets require two SIPIs)
     ipi::send_startup_ipi(dest_apic_id, TRAMPOLINE_PAGE);
 
-    // 5. Wait for AP to report its presence
+    // 5. Wait for AP to complete ap_entry initialization and report its presence
     let deadline = tsc::read_tsc() + tsc::tsc_ms_to_cycles(AP_STARTUP_TIMEOUT_MS);
     loop {
         let sig = read_trampoline_u32(HANDSHAKE_OFFSET);
         if sig == AP_ALIVE_MAGIC {
             core::sync::atomic::fence(Ordering::Acquire);
-            break;
+            return true;
         }
         if tsc::read_tsc() > deadline {
             // Non-responsive AP: ignore (may be absent or disabled in MADT)
-            break;
+            return false;
         }
         core::hint::spin_loop();
     }
@@ -128,11 +158,12 @@ pub unsafe extern "C" fn ap_entry(cpu_id: u32, lapic_id: u32, kernel_stack_top: 
         core::hint::spin_loop();
     }
 
-    // 1. Per-CPU data (GS_BASE)
-    percpu::init_percpu_for_ap(cpu_id, kernel_stack_top, lapic_id);
-
-    // 2. GDT per-CPU + TSS
+    // 1. GDT per-CPU + TSS FIRST (note: init_gdt_for_cpu reloads GS selector = 0,
+    //    which clears MSR_GS_BASE, so init_percpu_for_ap MUST run after this!).
     super::super::gdt::init_gdt_for_cpu(cpu_id as usize, kernel_stack_top);
+
+    // 2. Per-CPU data (GS_BASE)
+    percpu::init_percpu_for_ap(cpu_id, kernel_stack_top, lapic_id);
 
     // 3. IDT (shared — just LIDT)
     super::super::idt::load_idt();
@@ -150,48 +181,27 @@ pub unsafe extern "C" fn ap_entry(cpu_id: u32, lapic_id: u32, kernel_stack_top: 
     // 6. FPU
     super::super::cpu::fpu::init_fpu_for_cpu();
 
-    // FIX-SMP-RACE (analysis_report §5.3 + CVE-EXO-001):
-    // The SECURITY_READY spin-wait was placed AFTER calls 6b and 6c,
-    // leaving a window where APs modified shared scheduler structures
-    // while security_init() (BSP) could still read them
-    // to initialize capability tables or zero-trust hooks.
-    //
-    // Fix: spin here, prior to any modification of shared structures.
-    // APs do not require IPC or capabilities for the steps that follow —
-    // but the BOOT-SEC rule (V-26) still requires them to wait for
-    // SECURITY_READY before touching the shared scheduler.
-    //
-    // Note: publish_current_boot_idle() and scheduler::init_ap() access
-    // per-CPU runqueues (layer 1) and not security/ (layer 2b),
-    // so the dependency is directional. We keep the spin here as a
-    // precaution because security_init() phase 5 installs scheduler hooks
-    // (exokairos budget init, exoargos PMC hooks).
     while !crate::security::is_security_ready() {
         core::hint::spin_loop();
     }
 
     // 6b. Publish a bootstrap idle TCB for this AP after SECURITY_READY.
-    // The AP already executes its `hlt` loop; this TCB thus represents the
-    // current CPU context until the first real scheduler switch.
     let _ = crate::scheduler::core::publish_current_boot_idle(cpu_id, kernel_stack_top);
 
     // 6c. Local AP scheduler initialization (lazy FPU + tick counters).
     crate::scheduler::init_ap(cpu_id);
 
     // 7. Spectre mitigations (IBRS/STIBP/SSBD + KPTI) on this AP.
-    // FIX-AUDIT-V020-P0-1: section was empty — only BSP applied
-    // mitigations (early_init.rs). APs were executing Ring 0 code without
-    // IBRS/SSBD or KPTI, exposing kernel to cross-process Spectre v2/v4 via
-    // secondary cores. apply_mitigations_ap() performs per-CPU MSR/CR4 writes
-    // (IA32_SPEC_CTRL, SMEP/SMAP) and builds the core-specific shadow PML4 KPTI
-    // (kpti::init_kpti → register_cpu(cpu_id, ...)).
     crate::arch::x86_64::spectre::apply_mitigations_ap();
 
-    // 9. Enable interrupts and enter scheduler idle loop
+    // 8. Signal BSP that this AP is online and ready to handle interrupts/IPIs
+    write_trampoline_u32(HANDSHAKE_OFFSET, AP_ALIVE_MAGIC);
+    core::sync::atomic::fence(Ordering::Release);
+
+    // 9. Enable interrupts and enter IPI-servicing idle loop
     // SAFETY: all structures are initialized on this AP
     core::arch::asm!("sti", options(nostack, nomem));
 
-    // Idle loop (scheduler::idle::run() will be called during integration)
     loop {
         core::arch::asm!("hlt", options(nostack, nomem));
     }

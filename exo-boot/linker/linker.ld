@@ -47,15 +47,6 @@ SECTIONS
     __rodata_end = .;
     _rodata_end = .;
 
-    /* Payloads Ring1 embarques: charges en memoire mais exclus du hash .rodata. */
-    . = ALIGN(4K);
-    __boot_payloads_start = .;
-    .boot_payloads :
-    {
-        KEEP(*(.boot_payloads .boot_payloads.*))
-    }
-    __boot_payloads_end = .;
-
     /* ── Données initialisées ── */
     . = ALIGN(4K);
     __data_start = .;
@@ -68,6 +59,21 @@ SECTIONS
     }
     __data_end = .;
     _data_end = .;
+
+    /* ── Fenêtre physique SSR v7 réservée à 0x0100_0000..0x0101_0000 (64 KiB) ──
+     * Garantit qu'aucune section .rodata, .data ou .bss du noyau ne chevauche
+     * SSR_PHYS_BASE (0x0100_0000).
+     */
+    . = 0x01010000;
+
+    /* Payloads Ring1 / Kernel A embarqués: chargés après SSR (exclus du hash .rodata). */
+    . = ALIGN(4K);
+    __boot_payloads_start = .;
+    .boot_payloads :
+    {
+        KEEP(*(.boot_payloads .boot_payloads.*))
+    }
+    __boot_payloads_end = .;
 
     /* ── Données non initialisées ── */
     . = ALIGN(4K);
@@ -100,3 +106,5 @@ SECTIONS
         *(.eh_frame*)
     }
 }
+
+ASSERT(__data_end <= 0x01000000, "ERROR: .text + .rodata + .data exceed SSR_PHYS_BASE (0x01000000)");

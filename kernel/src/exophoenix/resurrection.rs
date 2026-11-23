@@ -5,7 +5,7 @@
 //! the IOMMU window, verifies the clean image of A from ExoFS, then resumes at a
 //! healthy restart point instead of requiring a physical reset.
 
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crate::arch::x86_64::exceptions::ExceptionFrame;
 use crate::exophoenix::{forge, ssr, stage0, PhoenixState, PHOENIX_STATE};
@@ -14,6 +14,17 @@ use crate::memory::dma::iommu::{AMD_IOMMU, INTEL_VTD};
 static TEST_ARMED: AtomicBool = AtomicBool::new(false);
 static RECOVERY_STARTED: AtomicBool = AtomicBool::new(false);
 static RECOVERY_SUCCEEDED: AtomicBool = AtomicBool::new(false);
+/// Runtime controlled recovery landing pad for Ring 0 crash/exception survival proofs (P5.2).
+static RUNTIME_RECOVERY_ARMED: AtomicBool = AtomicBool::new(false);
+static RUNTIME_RECOVERY_RIP: AtomicU64 = AtomicU64::new(0);
+static RUNTIME_RECOVERY_RSP: AtomicU64 = AtomicU64::new(0);
+static RUNTIME_RECOVERY_RBP: AtomicU64 = AtomicU64::new(0);
+static RUNTIME_RECOVERY_COUNT: AtomicU64 = AtomicU64::new(0);
+/// Hardware NMI recovery hook state (P5.1, `IST_NMI`).
+static NMI_RECOVERY_ARMED: AtomicBool = AtomicBool::new(false);
+static NMI_DEADLOCK_BROKEN: AtomicBool = AtomicBool::new(false);
+static NMI_EXECUTED_ON_IST: AtomicBool = AtomicBool::new(false);
+static NMI_RECOVERY_COUNT: AtomicU64 = AtomicU64::new(0);
 #[cfg(exophoenix_resurrection_test)]
 static BOOT_TEST_STARTED: AtomicBool = AtomicBool::new(false);
 
@@ -87,9 +98,86 @@ fn recover_kernel_a(reason: &str, frame: &mut ExceptionFrame) -> bool {
     }
 }
 
+/// Arms a runtime Ring 0 exception recovery landing pad (P5.2).
+/// Used exclusively by controlled Ring 0 crash-survival qualification (`F1`).
+#[cfg(feature = "phoenix-fault-injection")]
+pub fn arm_runtime_recovery(rip: u64, rsp: u64, rbp: u64) {
+    RUNTIME_RECOVERY_RIP.store(rip, Ordering::Release);
+    RUNTIME_RECOVERY_RSP.store(rsp, Ordering::Release);
+    RUNTIME_RECOVERY_RBP.store(rbp, Ordering::Release);
+    RUNTIME_RECOVERY_ARMED.store(true, Ordering::Release);
+}
+
+#[cfg(feature = "phoenix-fault-injection")]
+pub fn disarm_runtime_recovery() {
+    RUNTIME_RECOVERY_ARMED.store(false, Ordering::Release);
+    RUNTIME_RECOVERY_RIP.store(0, Ordering::Release);
+    RUNTIME_RECOVERY_RSP.store(0, Ordering::Release);
+    RUNTIME_RECOVERY_RBP.store(0, Ordering::Release);
+}
+
+#[cfg(feature = "phoenix-fault-injection")]
+pub fn arm_nmi_deadlock_recovery() {
+    NMI_DEADLOCK_BROKEN.store(false, Ordering::Release);
+    NMI_EXECUTED_ON_IST.store(false, Ordering::Release);
+    NMI_RECOVERY_ARMED.store(true, Ordering::Release);
+}
+
+#[cfg(feature = "phoenix-fault-injection")]
+pub fn nmi_deadlock_broken() -> bool {
+    NMI_DEADLOCK_BROKEN.load(Ordering::Acquire)
+}
+
+#[cfg(feature = "phoenix-fault-injection")]
+pub fn nmi_executed_on_ist() -> bool {
+    NMI_EXECUTED_ON_IST.load(Ordering::Acquire)
+}
+
+pub fn runtime_recovery_count() -> u64 {
+    RUNTIME_RECOVERY_COUNT.load(Ordering::Acquire)
+}
+
+pub fn nmi_recovery_count() -> u64 {
+    NMI_RECOVERY_COUNT.load(Ordering::Acquire)
+}
+
+fn try_runtime_controlled_recovery(reason: &str, frame: &mut ExceptionFrame) -> bool {
+    if !RUNTIME_RECOVERY_ARMED.swap(false, Ordering::AcqRel) {
+        return false;
+    }
+    let _target_rip = RUNTIME_RECOVERY_RIP.load(Ordering::Acquire);
+    let _target_rsp = RUNTIME_RECOVERY_RSP.load(Ordering::Acquire);
+    let _target_rbp = RUNTIME_RECOVERY_RBP.load(Ordering::Acquire);
+
+    debug_str("\n[ExoPhoenix] Ring 0 emergency crash intercepted: ");
+    debug_str(reason);
+    debug_str("\n");
+
+    // Lock-free, zero-alloc ISR-safe handoff signaling inside `#UD` trap handler;
+    // the full switch cycle (`force_phoenix_switch_cycle_with_mode`) executes immediately
+    // upon `iretq` past the 2-byte `ud2` instruction (`0x0F 0x0B`).
+    PHOENIX_STATE.store(PhoenixState::Threat as u8, Ordering::Release);
+    set_handoff_flag(ssr::HANDOFF_EMERGENCY_CRASH);
+    lock_iommu_for_handoff();
+    PHOENIX_STATE.store(PhoenixState::Restore as u8, Ordering::Release);
+    set_handoff_flag(ssr::HANDOFF_B_ACTIVE);
+    core::sync::atomic::fence(Ordering::SeqCst);
+
+    // Advance RIP past the 2-byte `ud2` instruction (`0x0F 0x0B`), keeping the hardware-saved
+    // `frame.rsp` and `frame.rbp` intact, and return `rax = 1` to the recovery landing pad.
+    frame.rip = frame.rip.wrapping_add(2);
+    frame.rax = 1;
+    RUNTIME_RECOVERY_COUNT.fetch_add(1, Ordering::AcqRel);
+    RECOVERY_SUCCEEDED.store(true, Ordering::Release);
+    true
+}
+
 pub fn try_recover_exception(reason: &str, frame: &mut ExceptionFrame) -> bool {
     if !frame.from_kernel() {
         return false;
+    }
+    if try_runtime_controlled_recovery(reason, frame) {
+        return true;
     }
     // PATCH-P0-PHOENIX: in production, trigger recovery as soon as
     // ExoPhoenix is in Normal state (fully operational).
@@ -105,15 +193,54 @@ pub fn try_recover_exception(reason: &str, frame: &mut ExceptionFrame) -> bool {
     recover_kernel_a(reason, frame)
 }
 
-#[cfg(exophoenix_resurrection_test)]
+/// Hardware `#NMI` handler invoked on dedicated TSS `IST_NMI` stack (`cpu_faults::do_nmi`, P5.1).
 pub fn handle_nmi(frame: &mut ExceptionFrame) -> bool {
-    TEST_ARMED.store(true, Ordering::Release);
-    recover_kernel_a("NMI matériel", frame)
-}
+    let cpu_id = crate::arch::x86_64::smp::percpu::try_current_cpu_id().unwrap_or(0) as usize;
+    let current_rsp: u64;
+    #[cfg(all(target_arch = "x86_64", target_os = "none"))]
+    unsafe {
+        core::arch::asm!("mov {}, rsp", out(reg) current_rsp, options(nostack, nomem));
+    }
+    #[cfg(not(all(target_arch = "x86_64", target_os = "none")))]
+    {
+        current_rsp = 0;
+    }
 
-#[cfg(not(exophoenix_resurrection_test))]
-pub fn handle_nmi(_frame: &mut ExceptionFrame) -> bool {
-    false
+    let on_ist = crate::arch::x86_64::tss::rsp_in_nmi_ist(cpu_id, current_rsp);
+    if on_ist {
+        NMI_EXECUTED_ON_IST.store(true, Ordering::Release);
+    }
+
+    if NMI_RECOVERY_ARMED.swap(false, Ordering::AcqRel) {
+        ssr::record_emergency_crash(
+            0x4E4D_4933, // "NMI3"
+            frame.rip,
+            crate::arch::x86_64::read_cr2(),
+            cpu_id as u64,
+        );
+        PHOENIX_STATE.store(PhoenixState::Threat as u8, Ordering::Release);
+        set_handoff_flag(ssr::HANDOFF_EMERGENCY_CRASH);
+        lock_iommu_for_handoff();
+        // Zero-lock NMI-safe recovery signaling: clear deadlock barrier so interrupted CPU
+        // exits its `cli; pause` deadlock cleanly and completes full mirror heal + ExoLedger P0.
+        NMI_DEADLOCK_BROKEN.store(true, Ordering::Release);
+        NMI_RECOVERY_COUNT.fetch_add(1, Ordering::AcqRel);
+        set_handoff_flag(ssr::HANDOFF_B_ACTIVE);
+        PHOENIX_STATE.store(PhoenixState::Restore as u8, Ordering::Release);
+        return true;
+    }
+
+    #[cfg(exophoenix_resurrection_test)]
+    {
+        TEST_ARMED.store(true, Ordering::Release);
+        return recover_kernel_a("NMI matériel", frame);
+    }
+
+    #[cfg(not(exophoenix_resurrection_test))]
+    {
+        let _ = frame;
+        false
+    }
 }
 
 #[cfg(exophoenix_resurrection_test)]

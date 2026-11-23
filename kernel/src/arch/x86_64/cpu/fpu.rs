@@ -311,6 +311,7 @@ pub fn init_fpu_for_cpu() {
         if features.has_pku() {
             xcr0 |= XSAVE_PKRU;
         }
+        xcr0 &= features.xsave_features_mask();
 
         // SAFETY: xcr0 contains only bits supported by this CPU
         unsafe {

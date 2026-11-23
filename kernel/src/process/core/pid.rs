@@ -110,38 +110,49 @@ impl<const N: usize> PidBitmap<N> {
         }
     }
 
-    /// Allocates the first free ID >= `first_usable`.
+    /// Allocates the first free ID >= `start_id` (wrapping around to `first_usable`).
     /// Returns `None` if exhausted.
-    /// Algorithm: word-by-word scan, CLZ to find a free bit.
-    fn alloc(&self, first_usable: u32) -> Option<u32> {
-        let start_word = (first_usable / 64) as usize;
-        let total_words = N;
+    fn alloc_from(&self, first_usable: u32, hint: u32) -> Option<u32> {
+        let max_id = (N as u32) * 64;
+        let start_id = if hint >= first_usable && hint < max_id {
+            hint
+        } else {
+            first_usable
+        };
+        if let Some(id) = self.alloc_range(start_id, max_id) {
+            return Some(id);
+        }
+        if start_id > first_usable {
+            return self.alloc_range(first_usable, start_id);
+        }
+        None
+    }
 
-        for w in start_word..total_words {
-            let val = self.words[w].load(Ordering::Relaxed);
-            if val == 0 {
-                continue;
-            } // word full
+    fn alloc_range(&self, min_id: u32, max_id_excl: u32) -> Option<u32> {
+        let start_word = (min_id / 64) as usize;
+        let end_word = (((max_id_excl.saturating_add(63)) / 64) as usize).min(N);
 
-            // Find least significant free bit.
-            let bit = val.trailing_zeros(); // position of first bit set to 1
-            let mask = 1u64 << bit;
-
-            // Attempt to mark as used (1→0) with CAS.
-            if self.words[w]
-                .compare_exchange(val, val & !mask, Ordering::AcqRel, Ordering::Relaxed)
-                .is_ok()
-            {
-                let id = (w as u32) * 64 + bit;
-                if id >= first_usable {
-                    return Some(id);
-                }
-                // ID too low (< first_usable) — release it and continue.
-                self.words[w].fetch_or(mask, Ordering::Relaxed);
+        for w in start_word..end_word {
+            let raw_val = self.words[w].load(Ordering::Relaxed);
+            let min_bit = if w == start_word { min_id % 64 } else { 0 };
+            let candidate_val = raw_val & (!0u64 << min_bit);
+            if candidate_val == 0 {
                 continue;
             }
-            // CAS failed (race) — retry this word.
-            // For simplicity, move to the next word (next allocation will succeed).
+
+            let bit = candidate_val.trailing_zeros();
+            let id = (w as u32) * 64 + bit;
+            if id < min_id || id >= max_id_excl {
+                continue;
+            }
+            let mask = 1u64 << bit;
+
+            if self.words[w]
+                .compare_exchange(raw_val, raw_val & !mask, Ordering::AcqRel, Ordering::Relaxed)
+                .is_ok()
+            {
+                return Some(id);
+            }
         }
         None
     }
@@ -178,6 +189,8 @@ pub struct PidAllocator {
     first_usable: u32,
     #[allow(dead_code)]
     total_capacity: u32,
+    /// Rotating allocation hint to avoid immediate PID reuse on cold respawn.
+    rover: AtomicU32,
     /// Number of successful allocations since boot.
     alloc_count: AtomicU64,
     /// Number of frees since boot.
@@ -207,6 +220,7 @@ pub static PID_ALLOCATOR: PidAllocator = PidAllocator {
     bitmap: unsafe { &*(&PID_BITMAP_STORAGE as *const PidBitmapPid) },
     first_usable: PID_FIRST_USABLE,
     total_capacity: PID_MAX,
+    rover: AtomicU32::new(PID_FIRST_USABLE),
     alloc_count: AtomicU64::new(0),
     free_count: AtomicU64::new(0),
     current_used: AtomicU32::new(0),
@@ -220,6 +234,7 @@ pub static TID_ALLOCATOR: PidAllocator = PidAllocator {
     bitmap: unsafe { &*(&TID_BITMAP_STORAGE as *const PidBitmapTid as *const PidBitmapPid) },
     first_usable: TID_FIRST_USABLE,
     total_capacity: TID_MAX,
+    rover: AtomicU32::new(TID_FIRST_USABLE),
     alloc_count: AtomicU64::new(0),
     free_count: AtomicU64::new(0),
     current_used: AtomicU32::new(0),
@@ -245,8 +260,15 @@ impl PidAllocator {
     /// Returns `Err(Exhausted)` if all IDs are in use.
     #[inline]
     pub fn alloc(&self) -> Result<u32, PidAllocError> {
-        match self.bitmap.alloc(self.first_usable) {
+        let hint = self.rover.load(Ordering::Relaxed);
+        match self.bitmap.alloc_from(self.first_usable, hint) {
             Some(id) => {
+                let next_hint = if id >= self.total_capacity {
+                    self.first_usable
+                } else {
+                    id + 1
+                };
+                self.rover.store(next_hint, Ordering::Relaxed);
                 self.alloc_count.fetch_add(1, Ordering::Relaxed);
                 let cur = self.current_used.fetch_add(1, Ordering::Relaxed) + 1;
                 // Lock-free update of high-water mark.

@@ -209,15 +209,23 @@ pub unsafe fn kernel_init(cpu_count: usize) {
     kdb(b'c'); // cgroup root ready before scheduler runqueues
 
     // ── Phase 3: Scheduler ───────────────────────────────────────────
-    let sched_cpus = if crate::arch::x86_64::smp::init::smp_boot_complete() {
+    let total_cpus = if crate::arch::x86_64::smp::init::smp_boot_complete() {
         cpu_count.max(1)
     } else {
         1
     };
+    // APs in `smp/init.rs` remain in their interruptible `sti; hlt` loop to
+    // service hardware IPIs (ExoPhoenix FREEZE/PMC/TLB, TLB shootdowns). Keep
+    // runnable thread dispatch on BSP (`nr_cpus = 1`) while initializing
+    // per-CPU runqueues and idle TCBs for all `total_cpus` online SMP cores.
+    let sched_cpus = 1;
     crate::scheduler::init(&crate::scheduler::SchedInitParams {
         nr_cpus: sched_cpus,
         nr_nodes: 1,
     });
+    if total_cpus > sched_cpus {
+        crate::scheduler::core::runqueue::init_percpu(total_cpus);
+    }
     kdb(b'5'); // Phase 3 done
 
     // ── Phase 3b: Bootstrap idle thread (BSP + APs already online) ─────────
@@ -225,7 +233,7 @@ pub unsafe fn kernel_init(cpu_count: usize) {
         0,
         crate::arch::x86_64::boot::early_init::boot_stack_top(),
     );
-    crate::scheduler::core::bind_boot_idle_threads(sched_cpus);
+    crate::scheduler::core::bind_boot_idle_threads(total_cpus);
     kdb(b'6'); // idle thread done
 
     // ── Phase 3c: Address space cloner registration ───────────────
@@ -422,6 +430,15 @@ fn kernel_panic(info: &core::panic::PanicInfo) -> ! {
     // SAFETY: CLI from Ring 0 — always safe. debug_byte writes to port 0xE9.
     unsafe {
         core::arch::asm!("cli", options(nostack, nomem));
+        // P5.2: record Ring 0 panic crash context atomically into SSR v7 (zero-alloc, zero-lock)
+        // so Core 0 / Kernel B can intercept immediately without userspace PrepareIsolation wait.
+        if crate::exophoenix::ssr::validate_layout_v7().is_ok() {
+            let rip_here: u64;
+            core::arch::asm!("lea {}, [rip]", out(reg) rip_here, options(nostack, nomem));
+            let cr2 = crate::arch::x86_64::read_cr2();
+            let cpu = crate::arch::x86_64::smp::percpu::try_current_cpu_id().unwrap_or(0) as u64;
+            crate::exophoenix::ssr::record_emergency_crash(0x5041_4E49, rip_here, cr2, cpu);
+        }
         debug_str(b"\n\x1B[1;31m*** KERNEL PANIC ***\x1B[0m ");
         if let Some(loc) = info.location() {
             debug_str(loc.file().as_bytes());

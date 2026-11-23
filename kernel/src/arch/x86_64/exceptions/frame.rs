@@ -319,14 +319,32 @@ pub fn debug_read_cr3() -> u64 {
 #[cold]
 #[inline(never)]
 pub fn kernel_panic_exception(msg: &str, frame: &mut ExceptionFrame) {
+    // P5.2: record Ring 0 fatal exception context lock-free into SSR v7 before recovery/halt.
+    if crate::exophoenix::ssr::validate_layout_v7().is_ok() {
+        crate::exophoenix::ssr::record_emergency_crash(
+            0x4558_4350,
+            frame.rip,
+            read_cr2(),
+            current_cpu_id_checked() as u64,
+        );
+    }
+
     if crate::exophoenix::resurrection::try_recover_exception(msg, frame) {
         return;
     }
 
-    // In a full implementation: write to serial port or VGA buffer.
-    // For now: consume parameters to avoid warnings.
-    let _ = msg;
-    let _ = frame;
+    // Zero-alloc E9 diagnostic output so no fatal Ring 0 exception is ever silent.
+    crate::arch::x86_64::terminal::debug_write(b"\n[KERNEL_PANIC_EXC] ");
+    crate::arch::x86_64::terminal::debug_write(msg.as_bytes());
+    crate::arch::x86_64::exceptions::cpu_faults::df_debug_field(b" rip=0x", frame.rip);
+    crate::arch::x86_64::exceptions::cpu_faults::df_debug_field(b" cs=0x", frame.cs);
+    crate::arch::x86_64::exceptions::cpu_faults::df_debug_field(b" err=0x", frame.error_code);
+    crate::arch::x86_64::exceptions::cpu_faults::df_debug_field(b" cr2=0x", read_cr2());
+    crate::arch::x86_64::exceptions::cpu_faults::df_debug_field(
+        b" cpu=0x",
+        current_cpu_id_checked() as u64,
+    );
+    crate::arch::x86_64::terminal::debug_write(b"\n");
 
     // Broadcast panic IPI to all APs to stop them.
     // SAFETY: unrecoverable situation; broadcast_ipi_panic() does not allocate.

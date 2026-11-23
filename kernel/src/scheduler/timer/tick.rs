@@ -132,11 +132,15 @@ pub unsafe extern "C" fn scheduler_tick(cpu_id: u32, current: *mut ThreadControl
     // never detected their deadline misses.
     crate::scheduler::timer::deadline_timer::dl_tick(cpu_id as usize);
 
-    // ── 5c. GI-03 maintenance (BSP, 100 Hz) ───────────────────────────────
+    // ── 5c. GI-03 maintenance (BSP, 100 Hz) + Kernel A SSR heartbeat (50 Hz / 20 ms — P5.1) ──
     // IRQ watchdog + drainage of IOMMU faults outside dedicated hardware ISR.
     if cpu_id == 0 && tick.is_multiple_of(GI03_DEFERRED_TICK_INTERVAL) {
         crate::arch::x86_64::irq::watchdog::watchdog_tick();
         crate::drivers::iommu::fault_handler::process_iommu_faults();
+    }
+    if cpu_id == 0 && tick.is_multiple_of(20) {
+        let _ = crate::exophoenix::ssr::bump_kernel_a_heartbeat();
+        crate::security::exonmi::ping();
     }
 
     // ── 6. Load balancing ──────────────────────────────────────────

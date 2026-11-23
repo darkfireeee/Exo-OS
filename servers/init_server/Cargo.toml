@@ -15,5 +15,6 @@ bench = false
 
 [dependencies]
 spin.workspace = true
+blake3.workspace = true
 exo-syscall-abi = { path = "../syscall_abi" }
 exo-phoenix-ssr = { path = "../../libs/exo-phoenix-ssr" }

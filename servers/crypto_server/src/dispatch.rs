@@ -27,6 +27,18 @@ pub static REQUESTS_TOTAL: AtomicU64 = AtomicU64::new(0);
 pub static REQUESTS_OK: AtomicU64 = AtomicU64::new(0);
 pub static REQUESTS_ERR: AtomicU64 = AtomicU64::new(0);
 pub static IPC_RECV_TIMEOUTS: AtomicU32 = AtomicU32::new(0);
+/// Runtime PID assigned by `init_server` (used by `exo_cap_check` which enforces `caller == target`).
+pub static RUNTIME_PID: AtomicU32 = AtomicU32::new(CRYPTO_SERVER_PID);
+
+#[inline]
+fn target_pid() -> u32 {
+    let pid = RUNTIME_PID.load(Ordering::Acquire);
+    if pid == 0 {
+        CRYPTO_SERVER_PID
+    } else {
+        pid
+    }
+}
 
 pub fn hash_blake3(data: &[u8]) -> [u8; 32] {
     *blake3::hash(data).as_bytes()
@@ -50,16 +62,27 @@ pub fn send_reply(destination: u64, reply: &CryptoReply) {
     };
 }
 
-pub fn authorize_request(req: &CryptoRequest) -> Result<u64, u32> {
+pub fn authorize_request_with_rights(req: &CryptoRequest, required_rights: u32) -> Result<u64, u32> {
     if req.cap_token.is_empty() {
+        // Still call exo_cap_check on privileged requests so the kernel audits the spoof attempt.
+        if (required_rights & syscall::EXO_CAP_RIGHT_IPC_MANAGE) != 0 {
+            let _ = unsafe {
+                syscall::exo_cap_check(
+                    &req.cap_token,
+                    required_rights,
+                    target_pid(),
+                    syscall::EXO_CAP_TYPE_IPC_ENDPOINT,
+                )
+            };
+        }
         return Err(CRYPTO_ERR_CAP);
     }
 
     let rc = unsafe {
         syscall::exo_cap_check(
             &req.cap_token,
-            syscall::EXO_CAP_RIGHT_IPC_SEND,
-            CRYPTO_SERVER_PID,
+            required_rights,
+            target_pid(),
             syscall::EXO_CAP_TYPE_IPC_ENDPOINT,
         )
     };
@@ -72,6 +95,10 @@ pub fn authorize_request(req: &CryptoRequest) -> Result<u64, u32> {
         return Err(CRYPTO_ERR_CAP);
     }
     Ok(principal)
+}
+
+pub fn authorize_request(req: &CryptoRequest) -> Result<u64, u32> {
+    authorize_request_with_rights(req, syscall::EXO_CAP_RIGHT_IPC_SEND)
 }
 
 pub fn phoenix_wake_entropy_from_request(req: &CryptoRequest, payload: &[u8]) -> Option<u64> {
@@ -93,11 +120,14 @@ pub fn handle_request(req: &CryptoRequest) -> CryptoReply {
 
     let payload = &req.payload[..req.payload_len as usize];
     let caller_principal = if req.msg_type == PHOENIX_WAKE_ENTROPY {
-        // FIX-CS-PHOENIX-01 / T20-001 : Valider la capability kernel via exo_cap_check.
-        // req.sender_pid ne suffit pas car non-authentifié sans vérification de capability.
-        match authorize_request(req) {
+        // FIX-CS-PHOENIX-01 / T20-001: validate Ring 0 minted `IPC_SEND | IPC_MANAGE`
+        // capability via `exo_cap_check`. `req.sender_pid == 0` alone is NEVER trusted;
+        // Ring 3 cannot mint `IPC_MANAGE`, so any spoofing attempt fails with CRYPTO_ERR_CAP
+        // and records an audit alert in ExoLedger.
+        let required = syscall::EXO_CAP_RIGHT_IPC_SEND | syscall::EXO_CAP_RIGHT_IPC_MANAGE;
+        match authorize_request_with_rights(req, required) {
             Ok(principal) => {
-                if req.sender_pid != 0 || principal > 1 {
+                if req.sender_pid != 0 {
                     reply.status = CRYPTO_ERR_CAP;
                     REQUESTS_ERR.fetch_add(1, Ordering::Relaxed);
                     return reply;
@@ -468,11 +498,11 @@ pub fn handle_request(req: &CryptoRequest) -> CryptoReply {
             reply.write_data(&encoded);
         }
         PHOENIX_WAKE_ENTROPY => {
-            // FIX-CS-PHOENIX-01 : Seul le noyau (PID 0) authentifié peut déclencher
-            // le réveil Phoenix et la réinitialisation des clés.
+            // FIX-CS-PHOENIX-01 / T20-001: Ring 0 minted `IPC_SEND | IPC_MANAGE` capability
+            // was already validated via `exo_cap_check` above; reject unless sender_pid == 0.
             static PHOENIX_EPOCH_ID: core::sync::atomic::AtomicU64 =
                 core::sync::atomic::AtomicU64::new(1);
-            let authenticated_kernel_wake = req.sender_pid == 0 && caller_principal == 0;
+            let authenticated_kernel_wake = req.sender_pid == 0 && caller_principal != 0;
             if !authenticated_kernel_wake {
                 reply.status = CRYPTO_ERR_CAP;
             } else if let Some(entropy) = phoenix_wake_entropy_from_request(req, payload) {

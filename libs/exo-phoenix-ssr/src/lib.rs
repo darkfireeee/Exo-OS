@@ -157,6 +157,11 @@ pub const HANDOFF_NORMAL: u64 = 0;
 pub const HANDOFF_FREEZE_REQ: u64 = 1;
 pub const HANDOFF_FREEZE_ACK_ALL: u64 = 2;
 pub const HANDOFF_B_ACTIVE: u64 = 3;
+/// Crash d'urgence non coopératif (panic!() / exception fatale Ring 0 / ExoNmi).
+pub const HANDOFF_EMERGENCY_CRASH: u64 = 4;
+
+/// Marqueur CORR-33 d'un AP non coopératif libéré après timeout 100 ms.
+pub const FREEZE_ACK_DEAD: u32 = 0xDEAD_0001;
 
 // ─── Offsets SSR ─────────────────────────────────────────────────────────────
 
@@ -168,10 +173,22 @@ pub const SSR_HANDOFF_FLAG_OFFSET: usize = 0x0008;
 pub const SSR_LIVENESS_NONCE_OFFSET: usize = 0x0010;
 /// `[0x0018]` Seqlock SSR partagé entre noyaux (u64 atomique).
 pub const SSR_SEQLOCK_OFFSET: usize = 0x0018;
+/// `[0x0020]` Heartbeat monotone Kernel A (u64 atomique, incrémenté toutes les 20 ms — P5.1).
+pub const SSR_KERNEL_A_HEARTBEAT_OFFSET: usize = 0x0020;
 /// `[0x0040]` Ring de commandes B → A (64 octets).
 pub const SSR_CMD_B2A_OFFSET: usize = 0x0040;
 /// `[0x0080]` Freeze ACK par cœur — u32 × 256 = 1 KiO.
 pub const SSR_FREEZE_ACK_OFFSET: usize = 0x0080;
+/// `[0x0480]` Code de crash / panic Ring 0 (u64 atomique, no-alloc/no-lock — P5.2).
+pub const SSR_CRASH_CODE_OFFSET: usize = 0x0480;
+/// `[0x0488]` RIP de la faute Ring 0 (u64 atomique — P5.2).
+pub const SSR_CRASH_RIP_OFFSET: usize = 0x0488;
+/// `[0x0490]` CR2 de la faute Ring 0 (u64 atomique — P5.2).
+pub const SSR_CRASH_CR2_OFFSET: usize = 0x0490;
+/// `[0x0498]` CPU ID fautif Ring 0 (u64 atomique — P5.2).
+pub const SSR_CRASH_CPU_OFFSET: usize = 0x0498;
+/// `[0x04A0]` Compteur de strikes ExoNmi observés (u64 atomique — P5.1).
+pub const SSR_NMI_STRIKES_OFFSET: usize = 0x04A0;
 /// `[0x4000]` Snapshots PMC par cœur — 64 B × 256 = 16 KiO.
 pub const SSR_PMC_OFFSET: usize = 0x4000;
 /// `[0x8000]` Journal d'audit (16 KiO).
@@ -187,8 +204,18 @@ const _: () = assert!(
 );
 
 const _: () = assert!(
-    SSR_FREEZE_ACK_OFFSET + SSR_MAX_CORES_LAYOUT * 4 <= SSR_PMC_OFFSET,
-    "SSR: zone freeze_ack dépasse la zone PMC"
+    SSR_KERNEL_A_HEARTBEAT_OFFSET + 8 <= SSR_CMD_B2A_OFFSET,
+    "SSR: heartbeat dépasse cmd_b2a"
+);
+
+const _: () = assert!(
+    SSR_FREEZE_ACK_OFFSET + SSR_MAX_CORES_LAYOUT * 4 <= SSR_CRASH_CODE_OFFSET,
+    "SSR: zone freeze_ack dépasse la zone crash"
+);
+
+const _: () = assert!(
+    SSR_NMI_STRIKES_OFFSET + 8 <= SSR_PMC_OFFSET,
+    "SSR: zone crash/nmi dépasse la zone PMC"
 );
 
 const _: () = assert!(

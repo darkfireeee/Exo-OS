@@ -314,15 +314,18 @@ pub fn sys_phoenix_force(
     0
 }
 
-/// `sys_exophoenix_test(subcmd, arg0, arg1)` (`SYS_EXOPHOENIX_TEST = 524`).
+/// `sys_exophoenix_test(subcmd, arg0, arg1, arg2)` (`SYS_EXOPHOENIX_TEST = 524`).
 ///
 /// - `subcmd == 0`: read latest `PhoenixTimingRecord` from SSR v7 `+0xC000` into `(arg0, arg1)`.
 /// - `subcmd == 1`: verify `ExoLedger` BLAKE3 cryptographic hash chain across P0 + ring buffer.
+/// - `subcmd == 9..=18`: destructive qualification fault injectors — **strictly gated by
+///   `#[cfg(feature = "phoenix-fault-injection")]` + `CAP_PHOENIX_FAULT_INJECT`** (returns `-ENOSYS`
+///   when compiled without `phoenix-fault-injection`, guaranteeing 0 hooks in `EXO_PROFILE=pure`).
 pub fn sys_exophoenix_test(
     subcmd: u64,
     arg0: u64,
     arg1: u64,
-    _a4: u64,
+    arg2: u64,
     _a5: u64,
     _a6: u64,
 ) -> i64 {
@@ -354,6 +357,18 @@ pub fn sys_exophoenix_test(
             Ok(verified_entries) => verified_entries as i64,
             Err(_) => -5, // EIO: chain integrity violated
         },
+        #[cfg(feature = "phoenix-fault-injection")]
+        9..=19 => {
+            let caller = current_pid_u32();
+            crate::exophoenix::fault_inject::dispatch_fault_injection(
+                caller, subcmd, arg0, arg1, arg2,
+            )
+        }
+        #[cfg(not(feature = "phoenix-fault-injection"))]
+        9..=19 => {
+            let _ = arg2;
+            ENOSYS
+        }
         _ => EINVAL,
     }
 }

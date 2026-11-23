@@ -212,6 +212,14 @@ fn write_artifacts(out: &Path, image: &[u8], image_hash: &[u8; 32], merkle_root:
     write_hash_blob(&out.join("kernel_a_merkle_root.bin"), merkle_root);
     std::fs::write(out.join("kernel_a_image.bin"), image)
         .expect("écriture image Kernel A ExoPhoenix OUT_DIR");
+    let embed_rs = format!(
+        "#[cfg_attr(target_os = \"none\", link_section = \".boot_payloads\")]\n\
+         static A_CLEAN_IMAGE_BYTES: [u8; {}] = *include_bytes!(concat!(env!(\"OUT_DIR\"), \"/kernel_a_image.bin\"));\n\
+         static A_CLEAN_IMAGE: &[u8] = &A_CLEAN_IMAGE_BYTES;\n",
+        image.len()
+    );
+    std::fs::write(out.join("kernel_a_image_embed.rs"), embed_rs)
+        .expect("écriture kernel_a_image_embed.rs OUT_DIR");
 }
 
 fn kernel_a_image_path_from_env() -> Option<PathBuf> {

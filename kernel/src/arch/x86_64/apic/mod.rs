@@ -82,7 +82,7 @@ pub fn init_ap_local_apic() {
             x2apic::mask_all_lvt_x2apic();
         }
         ApicMode::XApic => {
-            local_apic::enable_xapic();
+            local_apic::init_local_apic();
         }
     }
     local_apic::set_spurious_vector(super::idt::VEC_SPURIOUS);

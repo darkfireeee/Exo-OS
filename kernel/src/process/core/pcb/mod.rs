@@ -258,6 +258,11 @@ impl ProcessControlBlock {
             return;
         }
 
+        if base == b"exo-compositor" {
+            self.set_name_bytes(b"exo_compositor");
+            return;
+        }
+
         if base.starts_with(b"exo-") && base.ends_with(b"-server") && base.len() > 11 {
             let service = &base[4..base.len() - 7];
             let mut out = [0u8; PROCESS_NAME_LEN];

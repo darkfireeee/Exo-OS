@@ -51,11 +51,47 @@ pub const SYS_EPOLL_CREATE1: u64 = 291;
 pub const SYS_GETRANDOM: u64 = 318;
 pub const SYS_EXECVE: u64 = 59;
 pub const SYS_MEMFD_CREATE: u64 = 319;
+pub const SYS_EXO_IPC_SEND: u64 = 300;
+pub const SYS_EXO_IPC_RECV: u64 = 301;
 pub const SYS_EXO_IPC_LOOKUP: u64 = 306;
+pub const SYS_EXO_CAP_CREATE: u64 = 320;
 pub const SYS_EXO_PLEDGE: u64 = 324;
 pub const SYS_EXO_LOG: u64 = 350;
+pub const SYS_EXO_PROCESS_LIST: u64 = 351;
 pub const SYS_PHOENIX_FORCE: u64 = 523;
 pub const SYS_EXOPHOENIX_TEST: u64 = 524;
+
+pub const PHOENIX_FLAG_DEGRADED_FREEZE_TIMEOUT: u32 = 1 << 0;
+pub const PHOENIX_FLAG_COLD_DISK_FALLBACK: u32 = 1 << 1;
+pub const PHOENIX_FLAG_TEXT_HEALED: u32 = 1 << 2;
+pub const PHOENIX_FLAG_COLD_RESPAWN: u32 = 1 << 3;
+pub const PHOENIX_FLAG_CRASH_NMI: u32 = 1 << 4;
+pub const PHOENIX_FLAG_KVM_ACCEL: u32 = 1 << 5;
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct ExoProcessInfoWire {
+    pub pid: u32,
+    pub ppid: u32,
+    pub state: u32,
+    pub threads: u32,
+    pub name: [u8; 16],
+    pub utime_ns: u64,
+    pub stime_ns: u64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct PhoenixLeakSnapshotWire {
+    pub free_frames: u64,
+    pub active_pids: u64,
+    pub p0_used: u64,
+    pub ledger_verified: u64,
+    pub online_cpus: u64,
+    pub is_kvm: u64,
+    pub vtd_units: u64,
+    pub heartbeat: u64,
+}
 
 pub const PROT_EXEC: u64 = 4;
 pub const MAP_SHARED: u64 = 0x01;

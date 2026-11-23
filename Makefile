@@ -7,7 +7,7 @@
 #   make qemu    → lance QEMU depuis l'ISO (x86_64, 4Go RAM, sortie série stdio)
 #   make run     → alias de qemu
 
-.PHONY: all build build-rootfs-binaries build-musl-exo rootfs-image release iso iso-phoenix-resurrection iso-release-phoenix-resurrection qemu qemu-e1000 qemu-virtio-net qemu-nographic-virtio-net qemu-headless-safe-virtio-net run clean check fmt test test-exofs test-userspace test-drivers test-loader qemu-shell-smoke qemu-compliance qemu-security-audit qemu-phoenix-bench info help qemu-headless-safe qemu-phoenix-resurrection qemu-release-phoenix-resurrection keygen-kernel sign-kernel verify-kernel _sign_kernel
+.PHONY: all build build-rootfs-binaries build-musl-exo rootfs-image release iso iso-phoenix-resurrection iso-release-phoenix-resurrection iso-phoenix-fault-test qemu qemu-e1000 qemu-virtio-net qemu-nographic-virtio-net qemu-headless-safe-virtio-net run clean check fmt test test-exofs test-userspace test-drivers test-loader qemu-shell-smoke qemu-compliance qemu-security-audit qemu-phoenix-bench qemu-phoenix-faults qemu-phoenix-smp-cold qemu-phoenix-gi05 qemu-phoenix-kvm info help qemu-headless-safe qemu-phoenix-resurrection qemu-release-phoenix-resurrection keygen-kernel sign-kernel verify-kernel _sign_kernel
 
 # ── Outils & Profils de Sécurité (S1 : 1 dépôt, 2 profils, 0 fork) ───────────
 EXO_PROFILE ?= pure
@@ -541,6 +541,27 @@ qemu-phoenix-bench:
 	@echo "$(CYAN)Benchmark ExoPhoenix 3-Strates O(1) & SLA <= 1s (Cas A vs Cas B)$(NC)"
 	@$(MAKE) --no-print-directory iso-release EXO_PROFILE=compat COMPLIANCE_PROBE=1 P3_PROBE=1 KERNEL_EXTRA_FEATURES=qemu-compliance-exit
 	@python3 scripts/qemu/run_phoenix_bench.py --release --disk "$(QEMU_EXOFS_DISK)" --iso "$(ISO_OUTPUT)"
+
+iso-phoenix-fault-test:
+	@echo "$(CYAN)Construction ISO de qualification ExoPhoenix (--release + phoenix-fault-injection + qemu-compliance-exit)$(NC)"
+	@mkdir -p target/qemu
+	@$(MAKE) --no-print-directory iso-release EXO_PROFILE=compat COMPLIANCE_PROBE=1 P3_PROBE=1 KERNEL_EXTRA_FEATURES="qemu-compliance-exit phoenix-fault-injection" ISO_OUTPUT=target/qemu/exo-os-fault-test.iso
+
+qemu-phoenix-faults: iso-phoenix-fault-test
+	@echo "$(CYAN)Qualification ExoPhoenix Sprint A : F0 (hygiene pure) + F1 (panic, deadlock ExoNmi IST, auto-guerison .text)$(NC)"
+	@python3 scripts/qemu/run_phoenix_qualification.py --suite faults --accel auto --smp 4 --disk "$(QEMU_EXOFS_DISK)" --iso target/qemu/exo-os-fault-test.iso
+
+qemu-phoenix-smp-cold: iso-phoenix-fault-test
+	@echo "$(CYAN)Qualification ExoPhoenix Sprint B : F2 (SMP -smp 4 + CORR-33) + F3 (Cold Respawn R0->R1->R2 + TCP/Wayland)$(NC)"
+	@python3 scripts/qemu/run_phoenix_qualification.py --suite smp-cold --accel auto --smp 4 --disk "$(QEMU_EXOFS_DISK)" --iso target/qemu/exo-os-fault-test.iso
+
+qemu-phoenix-gi05: iso-phoenix-fault-test
+	@echo "$(CYAN)Qualification ExoPhoenix Sprint C : F4..F9 (FPU/SSE, ExoFS mid-Epoch, Crypto T20-001, DMA/IOMMU, Watchdog 10s, ExoVeil/P0/50 cycles)$(NC)"
+	@python3 scripts/qemu/run_phoenix_qualification.py --suite gi05 --accel auto --smp 4 --disk "$(QEMU_EXOFS_DISK)" --iso target/qemu/exo-os-fault-test.iso
+
+qemu-phoenix-kvm: iso-phoenix-fault-test
+	@echo "$(CYAN)Qualification ExoPhoenix Palier 2 : F0..F9 sous QEMU KVM + Intel VT-d (-smp 4, --release)$(NC)"
+	@python3 scripts/qemu/run_phoenix_qualification.py --suite all --accel kvm --smp 4 --disk "$(QEMU_EXOFS_DISK)" --iso target/qemu/exo-os-fault-test.iso --log-out target/qemu/phoenix-kvm-vtd.log
 
 # ── Nettoyage ─────────────────────────────────────────────────────────────────
 clean:

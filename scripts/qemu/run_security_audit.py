@@ -78,7 +78,18 @@ def audit_s0_pure_hygiene(pure_root: Path, pure_kernel: Path) -> tuple[bool, lis
     else:
         try:
             nm_out = subprocess.check_output(["nm", str(pure_kernel)], stderr=subprocess.DEVNULL, text=True)
-            for forbidden_sym in ("platform_debug_exit", "qemu_debug_exit", "mi_malloc", "mi_free"):
+            for forbidden_sym in (
+                "platform_debug_exit",
+                "qemu_debug_exit",
+                "mi_malloc",
+                "mi_free",
+                "phoenix_inject_",
+                "fault_inject",
+                "FAULT_KERNEL_A",
+                "mint_phoenix_fault_inject",
+                "verify_phoenix_fault_inject",
+                "inject_sentinel_text_bitflip",
+            ):
                 if forbidden_sym in nm_out:
                     issues.append(f"forbidden symbol '{forbidden_sym}' present in pure release kernel")
         except Exception as exc:

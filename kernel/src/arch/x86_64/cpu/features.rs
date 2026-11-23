@@ -416,7 +416,13 @@ impl CpuFeatures {
     }
     #[inline(always)]
     pub fn has_xsave(&self) -> bool {
-        self.flags.leaf1_ecx & LEAF1_ECX_XSAVE != 0
+        (self.flags.leaf1_ecx & LEAF1_ECX_XSAVE != 0)
+            && self.flags.max_basic_leaf >= 0xD
+            && (self.flags.xsave_features & 0b11) == 0b11
+    }
+    #[inline(always)]
+    pub fn xsave_features_mask(&self) -> u64 {
+        self.flags.xsave_features as u64
     }
     #[inline(always)]
     pub fn has_fxsr(&self) -> bool {

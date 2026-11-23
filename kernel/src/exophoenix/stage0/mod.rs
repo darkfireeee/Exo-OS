@@ -169,9 +169,16 @@ pub fn stage0_init_all_steps(kernel_a_boot: bool) -> Stage0Summary {
     }
     s0dbg(b'e');
 
-    // 13) Arm ExoPhoenix recovery vectors (0xF1/0xF2/0xF3).
+    // 13) Enforce V7-C-05 (`MAX_CORES_RUNTIME <= SSR_MAX_CORES_LAYOUT`) and arm ExoPhoenix vectors.
+    let runtime_cores = crate::arch::x86_64::smp::init::smp_cpu_count()
+        .max(1)
+        .min(exo_phoenix_ssr::SSR_MAX_CORES_LAYOUT as u32);
+    exo_phoenix_ssr::init_core_count(runtime_cores);
     if PHOENIX_STATE.load(Ordering::Acquire) != PhoenixState::Degraded as u8 {
         activate_exophoenix_vectors();
+        if kernel_a_boot {
+            PHOENIX_STATE.store(PhoenixState::Normal as u8, Ordering::Release);
+        }
     }
 
     Stage0Summary {

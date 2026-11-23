@@ -14,6 +14,8 @@ pub const INIT_MSG_PREPARE_ISOLATION: u32 = 6;
 pub const INIT_MSG_PREPARE_ISOLATION_ACK: u32 = 7;
 /// ExoPhoenix Strate 2 asynchronous reconvergence trigger sent after Wave R2 (P2).
 pub const INIT_MSG_RELAUNCH_STRATE2: u32 = 8;
+/// ExoPhoenix destructive cold respawn trigger (`F3` / P6.3): SIGKILL + parallel R0->R1->R2 + PHX-03.
+pub const INIT_MSG_COLD_RESPAWN_PHOENIX: u32 = 9;
 
 #[repr(C)]
 pub struct InitRequest {

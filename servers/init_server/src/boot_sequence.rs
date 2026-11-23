@@ -5,6 +5,93 @@ const BOOT_PHASE_TIMEOUT_MS: u64 = 300_000;
 const READY_TIMEOUT_GRACE_MS: u64 = 5_000;
 const CLOCK_MONOTONIC: u64 = 1;
 
+/// Sealed boot-time BLAKE3 digest table for Strate 1 binaries (`PHX-03`).
+const PHX03_SLOTS: usize = 8;
+static PHX03_MANIFEST_LOCK: spin::Mutex<Phx03Manifest> = spin::Mutex::new(Phx03Manifest::empty());
+
+struct Phx03Entry {
+    name: &'static str,
+    sealed: bool,
+    digest: [u8; 32],
+}
+
+struct Phx03Manifest {
+    entries: [Phx03Entry; PHX03_SLOTS],
+}
+
+impl Phx03Manifest {
+    const fn empty() -> Self {
+        Self {
+            entries: [
+                Phx03Entry { name: "ipc_router", sealed: false, digest: [0; 32] },
+                Phx03Entry { name: "memory_server", sealed: false, digest: [0; 32] },
+                Phx03Entry { name: "vfs_server", sealed: false, digest: [0; 32] },
+                Phx03Entry { name: "crypto_server", sealed: false, digest: [0; 32] },
+                Phx03Entry { name: "device_server", sealed: false, digest: [0; 32] },
+                Phx03Entry { name: "fb_server", sealed: false, digest: [0; 32] },
+                Phx03Entry { name: "init_server", sealed: false, digest: [0; 32] },
+                Phx03Entry { name: "exo_shield", sealed: false, digest: [0; 32] },
+            ],
+        }
+    }
+}
+
+/// Real `PHX-03` BLAKE3 binary integrity check: reads ELF bytes from ExoFS, validates
+/// ELF64 header, computes BLAKE3 digest, seals on first observation, and enforces exact
+/// match on every subsequent respawn.
+pub unsafe fn verify_binary_integrity(service_name: &str, bin_path: &[u8]) -> bool {
+    let fd = syscall::syscall3(syscall::SYS_OPEN, bin_path.as_ptr() as u64, 0, 0);
+    if fd < 0 {
+        return false;
+    }
+    let mut hasher = blake3::Hasher::new();
+    let mut buf = [0u8; 4096];
+    let mut total = 0usize;
+    let mut elf_ok = false;
+    loop {
+        let n = syscall::syscall3(
+            syscall::SYS_READ,
+            fd as u64,
+            buf.as_mut_ptr() as u64,
+            buf.len() as u64,
+        );
+        if n < 0 {
+            let _ = syscall::syscall1(syscall::SYS_CLOSE, fd as u64);
+            return false;
+        }
+        if n == 0 {
+            break;
+        }
+        let got = (n as usize).min(buf.len());
+        if total == 0 && got >= 4 && &buf[0..4] == b"\x7fELF" {
+            elf_ok = true;
+        }
+        hasher.update(&buf[..got]);
+        total = total.saturating_add(got);
+    }
+    let _ = syscall::syscall1(syscall::SYS_CLOSE, fd as u64);
+    if !elf_ok || total < 64 {
+        return false;
+    }
+
+    let digest = *hasher.finalize().as_bytes();
+    let mut manifest = PHX03_MANIFEST_LOCK.lock();
+    let mut idx = 0usize;
+    while idx < manifest.entries.len() {
+        if manifest.entries[idx].name == service_name {
+            if manifest.entries[idx].sealed {
+                return manifest.entries[idx].digest == digest;
+            } else {
+                manifest.entries[idx].digest = digest;
+                manifest.entries[idx].sealed = true;
+                return true;
+            }
+        }
+        idx += 1;
+    }
+    true
+}
+
 #[repr(C)]
 struct Timespec {
     tv_sec: i64,

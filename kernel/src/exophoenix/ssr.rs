@@ -8,12 +8,16 @@ use crate::arch::constants::{
 use crate::memory::{phys_to_virt, PhysAddr};
 
 pub use exo_phoenix_ssr::{
-    HANDOFF_B_ACTIVE, HANDOFF_FREEZE_ACK_ALL, HANDOFF_FREEZE_REQ, HANDOFF_NORMAL,
-    SSR_BASE_PHYS as SSR_BASE, SSR_CMD_B2A_OFFSET as SSR_CMD_B2A,
-    SSR_FREEZE_ACK_OFFSET as SSR_FREEZE_ACK, SSR_HANDOFF_FLAG_OFFSET as SSR_HANDOFF_FLAG,
-    SSR_LAYOUT_MAJOR, SSR_LAYOUT_MINOR, SSR_LIVENESS_NONCE_OFFSET as SSR_LIVENESS_NONCE,
-    SSR_LOG_AUDIT_OFFSET as SSR_LOG_AUDIT, SSR_MAGIC_OFFSET as SSR_MAGIC, SSR_MAGIC_VERSION,
-    SSR_MAX_CORES_LAYOUT as MAX_CORES, SSR_METRICS_OFFSET as SSR_METRICS_PUSH,
+    FREEZE_ACK_DEAD, HANDOFF_B_ACTIVE, HANDOFF_EMERGENCY_CRASH, HANDOFF_FREEZE_ACK_ALL,
+    HANDOFF_FREEZE_REQ, HANDOFF_NORMAL, SSR_BASE_PHYS as SSR_BASE,
+    SSR_CMD_B2A_OFFSET as SSR_CMD_B2A, SSR_CRASH_CODE_OFFSET as SSR_CRASH_CODE,
+    SSR_CRASH_CPU_OFFSET as SSR_CRASH_CPU, SSR_CRASH_CR2_OFFSET as SSR_CRASH_CR2,
+    SSR_CRASH_RIP_OFFSET as SSR_CRASH_RIP, SSR_FREEZE_ACK_OFFSET as SSR_FREEZE_ACK,
+    SSR_HANDOFF_FLAG_OFFSET as SSR_HANDOFF_FLAG,
+    SSR_KERNEL_A_HEARTBEAT_OFFSET as SSR_KERNEL_A_HEARTBEAT, SSR_LAYOUT_MAJOR, SSR_LAYOUT_MINOR,
+    SSR_LIVENESS_NONCE_OFFSET as SSR_LIVENESS_NONCE, SSR_LOG_AUDIT_OFFSET as SSR_LOG_AUDIT,
+    SSR_MAGIC_OFFSET as SSR_MAGIC, SSR_MAGIC_VERSION, SSR_MAX_CORES_LAYOUT as MAX_CORES,
+    SSR_METRICS_OFFSET as SSR_METRICS_PUSH, SSR_NMI_STRIKES_OFFSET as SSR_NMI_STRIKES,
     SSR_PMC_OFFSET as SSR_PMC_SNAPSHOT, SSR_SEQLOCK_OFFSET as SSR_SEQLOCK, SSR_SIZE,
 };
 
@@ -207,5 +211,132 @@ pub fn read_timing_record() -> exo_phoenix_ssr::metrics::PhoenixTimingRecord {
         let src = (base + SSR_METRICS_PUSH) as *const exo_phoenix_ssr::metrics::PhoenixTimingRecord;
         // SAFETY: `SSR_METRICS_PUSH + size_of::<PhoenixTimingRecord>() <= SSR_SIZE`.
         unsafe { core::ptr::read_volatile(src) }
+    }
+}
+
+/// Snapshot of an emergency Ring 0 crash written lock-free into SSR v7 (P5.2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub struct EmergencyCrashRecord {
+    pub code: u64,
+    pub rip: u64,
+    pub cr2: u64,
+    pub cpu_id: u64,
+}
+
+#[cfg(test)]
+static HOST_HEARTBEAT: AtomicU64 = AtomicU64::new(0);
+#[cfg(test)]
+static HOST_NMI_STRIKES: AtomicU64 = AtomicU64::new(0);
+#[cfg(test)]
+static HOST_CRASH_CODE: AtomicU64 = AtomicU64::new(0);
+#[cfg(test)]
+static HOST_CRASH_RIP: AtomicU64 = AtomicU64::new(0);
+#[cfg(test)]
+static HOST_CRASH_CR2: AtomicU64 = AtomicU64::new(0);
+#[cfg(test)]
+static HOST_CRASH_CPU: AtomicU64 = AtomicU64::new(0);
+
+/// Increments Kernel A's monotonic liveness heartbeat in SSR v7 (P5.1, zero-alloc/zero-lock).
+#[inline]
+pub fn bump_kernel_a_heartbeat() -> u64 {
+    #[cfg(test)]
+    {
+        HOST_HEARTBEAT.fetch_add(1, core::sync::atomic::Ordering::Release) + 1
+    }
+    #[cfg(not(test))]
+    {
+        // SAFETY: SSR_KERNEL_A_HEARTBEAT is a valid u64 slot in SSR v7.
+        unsafe {
+            ssr_atomic(SSR_KERNEL_A_HEARTBEAT)
+                .fetch_add(1, core::sync::atomic::Ordering::Release)
+                + 1
+        }
+    }
+}
+
+#[inline]
+pub fn read_kernel_a_heartbeat() -> u64 {
+    #[cfg(test)]
+    {
+        HOST_HEARTBEAT.load(core::sync::atomic::Ordering::Acquire)
+    }
+    #[cfg(not(test))]
+    {
+        // SAFETY: SSR_KERNEL_A_HEARTBEAT is a valid u64 slot in SSR v7.
+        unsafe { ssr_atomic(SSR_KERNEL_A_HEARTBEAT).load(core::sync::atomic::Ordering::Acquire) }
+    }
+}
+
+/// Records ExoNmi consecutive strike count into SSR v7 (ISR/NMI-safe, lock-free).
+#[inline]
+pub fn record_nmi_strikes(strikes: u64) {
+    #[cfg(test)]
+    {
+        HOST_NMI_STRIKES.store(strikes, core::sync::atomic::Ordering::Release);
+    }
+    #[cfg(not(test))]
+    {
+        unsafe {
+            ssr_atomic(SSR_NMI_STRIKES).store(strikes, core::sync::atomic::Ordering::Release);
+        }
+    }
+}
+
+#[inline]
+pub fn read_nmi_strikes() -> u64 {
+    #[cfg(test)]
+    {
+        HOST_NMI_STRIKES.load(core::sync::atomic::Ordering::Acquire)
+    }
+    #[cfg(not(test))]
+    {
+        unsafe { ssr_atomic(SSR_NMI_STRIKES).load(core::sync::atomic::Ordering::Acquire) }
+    }
+}
+
+/// Atomically writes Ring 0 crash context into SSR v7 without allocations or locks (P5.2).
+pub fn record_emergency_crash(code: u64, rip: u64, cr2: u64, cpu_id: u64) {
+    #[cfg(test)]
+    {
+        HOST_CRASH_CODE.store(code, core::sync::atomic::Ordering::Release);
+        HOST_CRASH_RIP.store(rip, core::sync::atomic::Ordering::Release);
+        HOST_CRASH_CR2.store(cr2, core::sync::atomic::Ordering::Release);
+        HOST_CRASH_CPU.store(cpu_id, core::sync::atomic::Ordering::Release);
+    }
+    #[cfg(not(test))]
+    {
+        // SAFETY: fixed SSR v7 offsets, wait-free atomic stores only.
+        unsafe {
+            ssr_atomic(SSR_CRASH_CODE).store(code, core::sync::atomic::Ordering::Release);
+            ssr_atomic(SSR_CRASH_RIP).store(rip, core::sync::atomic::Ordering::Release);
+            ssr_atomic(SSR_CRASH_CR2).store(cr2, core::sync::atomic::Ordering::Release);
+            ssr_atomic(SSR_CRASH_CPU).store(cpu_id, core::sync::atomic::Ordering::Release);
+            ssr_atomic(SSR_HANDOFF_FLAG)
+                .store(HANDOFF_EMERGENCY_CRASH, core::sync::atomic::Ordering::Release);
+        }
+    }
+}
+
+pub fn read_emergency_crash() -> EmergencyCrashRecord {
+    #[cfg(test)]
+    {
+        EmergencyCrashRecord {
+            code: HOST_CRASH_CODE.load(core::sync::atomic::Ordering::Acquire),
+            rip: HOST_CRASH_RIP.load(core::sync::atomic::Ordering::Acquire),
+            cr2: HOST_CRASH_CR2.load(core::sync::atomic::Ordering::Acquire),
+            cpu_id: HOST_CRASH_CPU.load(core::sync::atomic::Ordering::Acquire),
+        }
+    }
+    #[cfg(not(test))]
+    {
+        // SAFETY: fixed SSR v7 offsets, Acquire reads.
+        unsafe {
+            EmergencyCrashRecord {
+                code: ssr_atomic(SSR_CRASH_CODE).load(core::sync::atomic::Ordering::Acquire),
+                rip: ssr_atomic(SSR_CRASH_RIP).load(core::sync::atomic::Ordering::Acquire),
+                cr2: ssr_atomic(SSR_CRASH_CR2).load(core::sync::atomic::Ordering::Acquire),
+                cpu_id: ssr_atomic(SSR_CRASH_CPU).load(core::sync::atomic::Ordering::Acquire),
+            }
+        }
     }
 }

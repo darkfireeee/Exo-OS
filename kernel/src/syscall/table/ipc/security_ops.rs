@@ -127,7 +127,18 @@ pub fn sys_exo_cap_check(
         expected_type,
     ) {
         Ok(_) => 0,
-        Err(e) => e.to_kernel_errno() as i64,
+        Err(e) => {
+            // T20-001: record unauthorized privileged capability check (e.g. PHOENIX_WAKE_ENTROPY spoof).
+            if (required_rights & crate::security::capability::Rights::IPC_MANAGE.bits()) != 0 {
+                crate::security::exoledger::exo_ledger_append(
+                    crate::security::exoledger::ActionTag::AccessDenied {
+                        oid: token.object_id().as_u64(),
+                        rights: required_rights,
+                    },
+                );
+            }
+            e.to_kernel_errno() as i64
+        }
     }
 }
 

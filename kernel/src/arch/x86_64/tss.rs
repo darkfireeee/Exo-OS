@@ -64,19 +64,18 @@ const EARLY_IST_POOL_SIZE: usize = MAX_CPUS * GUARDED_IST_STACKS_PER_CPU * GUARD
 
 // ── TSS Structure ─────────────────────────────────────────────────────────────
 
-/// x86_64 TSS (104 bytes, 16-byte aligned)
+/// x86_64 TSS (104 bytes, 16-byte aligned — Intel SDM Vol. 3A Figure 8-11)
 #[repr(C, packed)]
 #[derive(Debug, Clone, Copy)]
 pub struct TaskStateSegment {
     _reserved0: u32,
     /// Privilege-level stacks (RSP0 = Ring 3 → Ring 0 entry)
     pub rsp: [u64; 3], // RSP0, RSP1, RSP2 (offsets 0x04..0x1C)
-    _reserved1: u32,   // offset 0x1C..0x20
+    _reserved1: u64,   // offset 0x1C..0x24 (8 bytes per x86_64 hardware spec)
     /// Interrupt Stack Table (7 entries)
-    pub ist: [u64; 7], // IST1-IST7 (offsets 0x20..0x58)
-    _reserved2: u64,   // offset 0x58..0x60 (8 bytes)
-    _reserved3: u32,   // offset 0x60..0x64 (4 bytes)
-    _reserved4: u16,   // offset 0x64..0x66 (2 bytes)
+    pub ist: [u64; 7], // IST1-IST7 (offsets 0x24..0x5C)
+    _reserved2: u64,   // offset 0x5C..0x64 (8 bytes)
+    _reserved3: u16,   // offset 0x64..0x66 (2 bytes)
     /// Offset of I/O Permission Bitmap (set to TSS size = no IOPB)
     pub iopb_offset: u16, // offset 0x66..0x68 (2 bytes)
 }
@@ -84,7 +83,7 @@ pub struct TaskStateSegment {
 const _: () = {
     assert!(core::mem::size_of::<TaskStateSegment>() == 104);
     assert!(core::mem::offset_of!(TaskStateSegment, rsp) == 0x04);
-    assert!(core::mem::offset_of!(TaskStateSegment, ist) == 0x20);
+    assert!(core::mem::offset_of!(TaskStateSegment, ist) == 0x24);
     assert!(core::mem::offset_of!(TaskStateSegment, iopb_offset) == 0x66);
 };
 
@@ -97,7 +96,6 @@ impl TaskStateSegment {
             ist: [0u64; 7],
             _reserved2: 0,
             _reserved3: 0,
-            _reserved4: 0,
             iopb_offset: core::mem::size_of::<TaskStateSegment>() as u16,
         }
     }
@@ -248,6 +246,31 @@ pub unsafe fn update_rsp0(cpu_id: usize, rsp0: u64) {
     unsafe {
         CPU_TSS[cpu_id].rsp[0] = rsp0;
     }
+}
+
+/// Returns `true` if `rsp` lies inside CPU `cpu_id`'s dedicated guarded NMI IST stack (P5.1).
+#[inline]
+pub fn rsp_in_nmi_ist(cpu_id: usize, rsp: u64) -> bool {
+    if cpu_id >= MAX_CPUS {
+        return false;
+    }
+    // SAFETY: reading initialized TSS IST top (read-only after boot).
+    let ist_top = unsafe { CPU_TSS[cpu_id].ist[IST_NMI] };
+    if ist_top < IST_STACK_SIZE as u64 {
+        return false;
+    }
+    let ist_bottom = ist_top - IST_STACK_SIZE as u64;
+    rsp >= ist_bottom && rsp <= ist_top
+}
+
+/// Returns the configured NMI IST top address for CPU `cpu_id`.
+#[inline]
+pub fn nmi_ist_top(cpu_id: usize) -> u64 {
+    if cpu_id >= MAX_CPUS {
+        return 0;
+    }
+    // SAFETY: reading initialized TSS IST top.
+    unsafe { CPU_TSS[cpu_id].ist[IST_NMI] }
 }
 
 /// Loads TSS into TR register via LTR

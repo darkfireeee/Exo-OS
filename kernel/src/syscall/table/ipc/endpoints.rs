@@ -107,7 +107,7 @@ pub(super) fn reserve_ipc_endpoint_owner(
             if entry.owner_pid == owner_pid {
                 return Ok(ReserveEndpointOwnerOutcome::AlreadyOwned);
             }
-            if !crate::process::is_alive(entry.owner_pid) {
+            if !crate::process::is_alive(entry.owner_pid) || is_system {
                 owners[idx] = IpcEndpointOwner {
                     endpoint,
                     owner_pid,
@@ -171,6 +171,24 @@ pub(super) fn release_ipc_endpoint_owner(endpoint: u64, owner_pid: u32) -> Resul
         idx += 1;
     }
     Ok(())
+}
+
+pub(crate) fn endpoint_owner_pid(endpoint: u64) -> Option<u32> {
+    ipc_endpoint_owner_pid(endpoint)
+}
+
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) fn force_release_named_endpoint(ep_name: &[u8]) {
+    if let Some(ep) = crate::ipc::endpoint::lookup_endpoint(ep_name) {
+        crate::ipc::channel::raw::mailbox_close(ep);
+        let mut owners = IPC_ENDPOINT_OWNERS.lock();
+        for slot in owners.iter_mut() {
+            if slot.endpoint == ep.get() {
+                *slot = IpcEndpointOwner::EMPTY;
+            }
+        }
+    }
+    let _ = crate::ipc::endpoint::unregister_endpoint(ep_name);
 }
 
 pub(super) fn ipc_endpoint_owner_pid(endpoint: u64) -> Option<u32> {

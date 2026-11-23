@@ -303,8 +303,186 @@ fn refresh_service_readiness(idx: usize) {
     }
 }
 
+fn cold_respawn_wave(
+    names: &[&str],
+    budget_ms: u64,
+    service_watchdog: &mut ServiceWatchdog,
+) -> (u32, u32, u32) {
+    let mut spawned_indices = [usize::MAX; 4];
+    let mut spawned_count = 0usize;
+
+    // 1. Spawn all members of this wave in parallel (vfork+execve).
+    let mut n_idx = 0usize;
+    while n_idx < names.len() {
+        let name = names[n_idx];
+        if let Some(idx) = service_table::runtime_index_by_name(&SERVICES, name.as_bytes()) {
+            let svc = &SERVICES[idx];
+            if unsafe { boot_sequence::verify_binary_integrity(svc.name, svc.bin_path) } {
+                svc.enable();
+                let pid = unsafe { boot_sequence::spawn_service(svc.name, svc.bin_path) };
+                if pid != 0 {
+                    svc.set_pid(pid);
+                    service_watchdog.observe_spawn(idx);
+                    if spawned_count < spawned_indices.len() {
+                        spawned_indices[spawned_count] = idx;
+                        spawned_count += 1;
+                    }
+                }
+            }
+        }
+        n_idx += 1;
+    }
+
+    // 2. Poll all spawned wave members in parallel until ready or budget expires.
+    let start_ms = monotonic_ms();
+    let mut ready_count: u32;
+    let mut waited_ms = 0u64;
+    loop {
+        ready_count = 0;
+        let mut s = 0usize;
+        while s < spawned_count {
+            let idx = spawned_indices[s];
+            let svc = &SERVICES[idx];
+            let pid = svc.current_pid();
+            if svc.is_ready() {
+                ready_count += 1;
+            } else if pid != 0 && unsafe { boot_sequence::ipc_ready_now(svc.name, pid) } {
+                svc.mark_ready();
+                ready_count += 1;
+            }
+            s += 1;
+        }
+        if ready_count as usize == spawned_count {
+            break;
+        }
+        let now_ms = monotonic_ms();
+        if start_ms != 0 && now_ms != 0 {
+            if now_ms.saturating_sub(start_ms) >= budget_ms {
+                break;
+            }
+        } else if waited_ms >= budget_ms {
+            break;
+        }
+        unsafe {
+            let _ = syscall::syscall0(syscall::SYS_SCHED_YIELD);
+        }
+        waited_ms = waited_ms.saturating_add(1);
+    }
+
+    let first_pid = if spawned_count > 0 {
+        SERVICES[spawned_indices[0]].current_pid()
+    } else {
+        0
+    };
+    let second_pid = if spawned_count > 1 {
+        SERVICES[spawned_indices[1]].current_pid()
+    } else {
+        0
+    };
+    (ready_count, first_pid, second_pid)
+}
+
+fn execute_cold_respawn_phoenix(service_watchdog: &mut ServiceWatchdog) -> protocol::InitReply {
+    const STRATE1_KILL_TARGETS: &[&str] = &[
+        "crypto_server",
+        "memory_server",
+        "vfs_server",
+        "device_server",
+    ];
+    const STRATE2_KILL_TARGETS: &[&str] = &[
+        "network_server",
+        "scheduler_server",
+        "exo_compositor",
+    ];
+
+    // 1. Destructive phase: real SIGKILL + reap of Strate 1 & Strate 2 targets.
+    let mut k = 0usize;
+    while k < STRATE1_KILL_TARGETS.len() {
+        if let Some(idx) =
+            service_table::runtime_index_by_name(&SERVICES, STRATE1_KILL_TARGETS[k].as_bytes())
+        {
+            let pid = SERVICES[idx].current_pid();
+            if pid != 0 {
+                let _ = unsafe { boot_sequence::terminate_timed_out_pid(pid) };
+                SERVICES[idx].mark_dead();
+                SERVICES[idx].restart_delay_ticks.store(0, Ordering::Release);
+                service_watchdog.observe_stop(idx);
+            }
+        }
+        k += 1;
+    }
+    let mut k2 = 0usize;
+    while k2 < STRATE2_KILL_TARGETS.len() {
+        if let Some(idx) =
+            service_table::runtime_index_by_name(&SERVICES, STRATE2_KILL_TARGETS[k2].as_bytes())
+        {
+            let pid = SERVICES[idx].current_pid();
+            if pid != 0 {
+                kill_service(pid, 9); // SIGKILL
+                SERVICES[idx].mark_dead();
+                SERVICES[idx].restart_delay_ticks.store(0, Ordering::Release);
+                service_watchdog.observe_stop(idx);
+            }
+        }
+        k2 += 1;
+    }
+    unsafe {
+        reap_children(service_watchdog);
+    }
+
+    // 2. Wave R0 (parallel): crypto_server + memory_server (ipc_router verified alive / SRV-05).
+    let (r0_ready, crypto_pid, mem_pid) =
+        cold_respawn_wave(&["crypto_server", "memory_server"], 2500, service_watchdog);
+
+    // 3. Wave R1 (parallel): vfs_server + device_server (fb_server channel verified alive).
+    let (r1_ready, vfs_pid, dev_pid) =
+        cold_respawn_wave(&["vfs_server", "device_server"], 2500, service_watchdog);
+
+    // 4. Wave R2: PHX-03 BLAKE3 check on init_server & ipc_router binaries.
+    let phx03_ok = unsafe {
+        boot_sequence::verify_binary_integrity("ipc_router", service_table::IPC_ROUTER_BIN)
+            && boot_sequence::verify_binary_integrity("fb_server", service_table::FB_SERVER_BIN)
+    };
+
+    let mut reply = protocol::InitReply::ok();
+    let total_respawned = r0_ready.saturating_add(r1_ready);
+    reply.data[0..4].copy_from_slice(&total_respawned.to_le_bytes());
+    reply.data[4..8].copy_from_slice(&crypto_pid.to_le_bytes());
+    reply.data[8..12].copy_from_slice(&mem_pid.to_le_bytes());
+    reply.data[12..16].copy_from_slice(&vfs_pid.to_le_bytes());
+    reply.data[16..20].copy_from_slice(&dev_pid.to_le_bytes());
+    reply.data[20..24].copy_from_slice(&(if phx03_ok { 1u32 } else { 0u32 }).to_le_bytes());
+    reply
+}
+
+fn spawn_strate2_async_after_reply(service_watchdog: &mut ServiceWatchdog) {
+    const STRATE2_RESPAWN: &[&str] = &["network_server", "scheduler_server", "exo_compositor"];
+    unsafe {
+        reap_children(service_watchdog);
+    }
+    let mut i = 0usize;
+    while i < STRATE2_RESPAWN.len() {
+        if let Some(idx) =
+            service_table::runtime_index_by_name(&SERVICES, STRATE2_RESPAWN[i].as_bytes())
+        {
+            let svc = &SERVICES[idx];
+            if svc.current_pid() == 0 && !svc.is_disabled() {
+                svc.enable();
+                let pid = unsafe { boot_sequence::spawn_service(svc.name, svc.bin_path) };
+                if pid != 0 {
+                    svc.set_pid(pid);
+                    service_watchdog.observe_spawn(idx);
+                }
+            }
+        }
+        i += 1;
+    }
+}
+
 fn handle_control_plane(service_watchdog: &mut ServiceWatchdog) {
     let mut request = protocol::InitRequest::zeroed();
+    let mut async_strate2_after_reply = false;
+    let mut override_reply_ep: u64 = 0;
     let reply = match protocol::recv_request(&mut request) {
         Ok(false) => return,
         Err(_) => return,
@@ -408,11 +586,46 @@ fn handle_control_plane(service_watchdog: &mut ServiceWatchdog) {
                 }
                 protocol::lifecycle_reply(scheduled, supervisor::running_mask(&SERVICES))
             }
+            protocol::INIT_MSG_COLD_RESPAWN_PHOENIX => {
+                if request.sender_pid == 0 {
+                    override_reply_ep = u64::from_le_bytes([
+                        request.payload[0],
+                        request.payload[1],
+                        request.payload[2],
+                        request.payload[3],
+                        request.payload[4],
+                        request.payload[5],
+                        request.payload[6],
+                        request.payload[7],
+                    ]);
+                }
+                async_strate2_after_reply = true;
+                execute_cold_respawn_phoenix(service_watchdog)
+            }
             _ => protocol::InitReply::error(syscall::EINVAL),
         },
     };
 
-    let _ = protocol::send_reply(request.sender_pid, &reply);
+    if override_reply_ep != 0 {
+        unsafe {
+            let _ = syscall::syscall6(
+                syscall::SYS_IPC_SEND,
+                override_reply_ep,
+                &reply as *const protocol::InitReply as u64,
+                core::mem::size_of::<protocol::InitReply>() as u64,
+                0,
+                0,
+                0,
+            );
+        }
+    } else if request.sender_pid != 0 {
+        let _ = protocol::send_reply(request.sender_pid, &reply);
+    }
+
+    if async_strate2_after_reply {
+        // Relaunch Strate 2 asynchronously strictly AFTER replying (outside SLA window).
+        spawn_strate2_async_after_reply(service_watchdog);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

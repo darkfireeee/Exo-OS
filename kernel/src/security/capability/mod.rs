@@ -238,6 +238,11 @@ pub fn create(
     if !rights_val.contains(Rights::IPC_SEND) {
         return Err(KernelCapError::InvalidArg);
     }
+    // T20-001: Ring 3 callers can NEVER mint `IPC_MANAGE` (reserved for Ring 0
+    // kernel-authenticated control messages such as `PHOENIX_WAKE_ENTROPY`).
+    if rights_val.contains(Rights::IPC_MANAGE) {
+        return Err(KernelCapError::PermissionDenied);
+    }
 
     let verdict = crate::security::check_direct_ipc(
         crate::process::core::pid::Pid(owner_pid),
@@ -274,6 +279,91 @@ pub fn create(
     crate::security::exokairos::register_ttl_for_cap(oid, rights_val);
 
     Ok(token)
+}
+
+/// Mints a Ring 0 kernel-authenticated IPC capability token (e.g. `PHOENIX_WAKE_ENTROPY`
+/// with `Rights::IPC_SEND | Rights::IPC_MANAGE`, `T20-001`).
+///
+/// Userspace `exo_cap_create()` can never mint `Rights::IPC_MANAGE`, so servers verifying
+/// `IPC_SEND | IPC_MANAGE` via `exo_cap_check` get cryptographic proof that the message
+/// originated from Ring 0. Caller MUST revoke the token once consumed.
+pub fn mint_kernel_ipc_token(
+    target_pid: u32,
+    rights: Rights,
+) -> Result<token::CapToken, KernelCapError> {
+    if !is_initialized() {
+        return Err(KernelCapError::NotSupported);
+    }
+    if target_pid == 0 {
+        return Err(KernelCapError::InvalidArg);
+    }
+
+    let oid = alloc_object_id();
+    let mut guard = KERNEL_CAP_TABLE.lock();
+    let table = guard.as_mut().ok_or(KernelCapError::NotSupported)?;
+    let token = table
+        .grant(oid, rights, token::CapObjectType::IpcEndpoint)
+        .map_err(|_| KernelCapError::InvalidArg)?;
+    drop(guard);
+
+    if let Err(err) = insert_service_cap_meta(oid, 0, target_pid, token::CapObjectType::IpcEndpoint)
+    {
+        let guard = KERNEL_CAP_TABLE.lock();
+        if let Some(table) = guard.as_ref() {
+            revocation::revoke(table, oid);
+        }
+        return Err(err);
+    }
+
+    Ok(token)
+}
+
+/// Mints a `CAP_PHOENIX_FAULT_INJECT` capability reserved exclusively for the qualification
+/// runner under `#[cfg(feature = "phoenix-fault-injection")]` (P5.0).
+#[cfg(feature = "phoenix-fault-injection")]
+pub fn mint_phoenix_fault_inject_token(owner_pid: u32) -> Result<token::CapToken, KernelCapError> {
+    if !is_initialized() {
+        return Err(KernelCapError::NotSupported);
+    }
+    if owner_pid == 0 {
+        return Err(KernelCapError::InvalidArg);
+    }
+    let rights = Rights::IPC_SEND | Rights::IPC_MANAGE;
+    let oid = alloc_object_id();
+    let mut guard = KERNEL_CAP_TABLE.lock();
+    let table = guard.as_mut().ok_or(KernelCapError::NotSupported)?;
+    let token = table
+        .grant(oid, rights, token::CapObjectType::IpcEndpoint)
+        .map_err(|_| KernelCapError::InvalidArg)?;
+    drop(guard);
+
+    if let Err(err) =
+        insert_service_cap_meta(oid, owner_pid, owner_pid, token::CapObjectType::IpcEndpoint)
+    {
+        let guard = KERNEL_CAP_TABLE.lock();
+        if let Some(table) = guard.as_ref() {
+            revocation::revoke(table, oid);
+        }
+        return Err(err);
+    }
+    Ok(token)
+}
+
+/// Verifies a `CAP_PHOENIX_FAULT_INJECT` token presented by `caller_pid` (P5.0).
+#[cfg(feature = "phoenix-fault-injection")]
+pub fn verify_phoenix_fault_inject_token(
+    token: token::CapToken,
+    caller_pid: u32,
+) -> Result<(), KernelCapError> {
+    let required = (Rights::IPC_SEND | Rights::IPC_MANAGE).bits();
+    let _ = check_token_owner(
+        token,
+        required,
+        caller_pid,
+        caller_pid,
+        token::CapObjectType::IpcEndpoint as u32,
+    )?;
+    Ok(())
 }
 
 /// Verifies a serialized IPC service token issued via `create()`.

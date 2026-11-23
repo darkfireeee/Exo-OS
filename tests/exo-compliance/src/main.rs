@@ -1,3 +1,4 @@
+mod phoenix_qualification;
 mod raw;
 mod security_and_phoenix;
 
@@ -58,6 +59,18 @@ fn main() {
     }
     if args.len() >= 3 && args[1] == "--sec-helper" {
         security_and_phoenix::run_security_helper(&args[2..]);
+    }
+    if args.len() >= 3 && args[1] == "--qual-helper" {
+        phoenix_qualification::run_qual_helper(&args[2..]);
+    }
+    if args.len() >= 2 && args[1] == "--phoenix-qual" {
+        let exit_qemu = args.iter().any(|a| a == "--exit-qemu");
+        let suite = args
+            .windows(2)
+            .find(|w| w[0] == "--suite")
+            .map(|w| w[1].as_str())
+            .unwrap_or("all");
+        phoenix_qualification::run_phoenix_qualification(suite, exit_qemu);
     }
     if args.len() >= 2 && args[1] == "--security-audit" {
         let exit_qemu = args.iter().any(|a| a == "--exit-qemu");

@@ -122,6 +122,9 @@ strict-exec-signatures = ["strict_exec_signatures"]
 # Isole le port QEMU isa-debug-exit (0xf4) aux seuls builds de conformite/audit QEMU.
 # Desactive par defaut : 0 reference au port 0xf4 dans les noyaux standard et release.
 qemu-compliance-exit = []
+# Confinement absolu des hooks d'injection de fautes destructives ExoPhoenix (P5.0 / F0).
+# Desactive par defaut : JAMAIS incluse dans default, make release ou EXO_PROFILE=pure.
+phoenix-fault-injection = []
 
 #  Cible par defaut (peut etre surchargee en ligne de commande) 
 
