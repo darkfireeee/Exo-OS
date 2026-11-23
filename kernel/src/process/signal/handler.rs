@@ -215,8 +215,8 @@ pub fn extract_and_sanitize_sigframe(uc_ptr: u64) -> Option<(UContextRegs, [u8; 
     if !(0x1000..USER_SPACE_TOP).contains(&uc_ptr) {
         return None;
     }
-    // SAFETY: userspace address validated above.
-    let uc = unsafe { &*(uc_ptr as *const UContext) };
+    // SMAP-safe copy from userspace UContext via validated kernel physmap.
+    let uc = crate::syscall::validation::read_user_typed::<UContext>(uc_ptr).ok()?;
     let mc = &uc.uc_mcontext;
 
     // Extract ALL data before checking magic (LAC-01 constant-time).
@@ -328,7 +328,9 @@ pub fn setup_signal_frame(
     let sig_tcb_opt = pcb_opt.and_then(|pcb| {
         let vaddr = pcb.signal_tcb_vaddr.load(Ordering::Acquire);
         if (0x1000..USER_SPACE_TOP).contains(&vaddr) {
-            Some(unsafe { &*(vaddr as *const super::tcb::SignalTcb) })
+            crate::syscall::validation::resolve_user_page_kernel_alias(vaddr, true)
+                .ok()
+                .map(|alias| unsafe { &*(alias as *const super::tcb::SignalTcb) })
         } else {
             None
         }
@@ -425,10 +427,15 @@ pub fn setup_signal_frame(
         },
     };
 
-    // Write frame onto user stack.
-    unsafe {
-        let ptr = sig_rsp as *mut SignalFrame;
-        ptr.write(sig_frame);
+    // Write frame onto user stack via SMAP-safe kernel physmap copy.
+    if crate::syscall::validation::copy_to_user(
+        sig_rsp as *mut u8,
+        &sig_frame as *const SignalFrame as *const u8,
+        core::mem::size_of::<SignalFrame>(),
+    )
+    .is_err()
+    {
+        return;
     }
 
     // Update per-thread mask during handler execution (SA_NODEFER excludes sig_n).
@@ -467,8 +474,10 @@ pub fn restore_signal_frame(thread: &mut ProcessThread, frame: &mut SyscallFrame
         return;
     }
 
-    // SAFETY: uc_ptr was written by setup_signal_frame; reread it.
-    let uc = unsafe { &*(uc_ptr as *const UContext) };
+    // SMAP-safe copy from userspace UContext via validated kernel physmap.
+    let Ok(uc) = crate::syscall::validation::read_user_typed::<UContext>(uc_ptr) else {
+        return;
+    };
     let mc = &uc.uc_mcontext;
 
     // SIG-13 (constant-time): extract data BEFORE checking magic.
@@ -544,9 +553,13 @@ pub fn restore_signal_frame(thread: &mut ProcessThread, frame: &mut SyscallFrame
         if pcb.thread_count.load(Ordering::Acquire) <= 1 {
             let vaddr = pcb.signal_tcb_vaddr.load(Ordering::Acquire);
             if (0x1000..USER_SPACE_TOP).contains(&vaddr) {
-                let stcb = unsafe { &*(vaddr as *const super::tcb::SignalTcb) };
-                stcb.set_mask(restored_mask.0);
-                stcb.in_handler.store(0, Ordering::Release);
+                if let Ok(alias) =
+                    crate::syscall::validation::resolve_user_page_kernel_alias(vaddr, true)
+                {
+                    let stcb = unsafe { &*(alias as *const super::tcb::SignalTcb) };
+                    stcb.set_mask(restored_mask.0);
+                    stcb.in_handler.store(0, Ordering::Release);
+                }
             }
         }
     }

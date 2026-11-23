@@ -264,8 +264,10 @@ pub fn handle_pending_signals(
     const USER_SPACE_TOP: u64 = 0x0000_7FFF_FFFF_F000;
     let sig_tcb_vaddr = pcb.signal_tcb_vaddr.load(Ordering::Acquire);
     let sig_tcb_opt = if (0x1000..USER_SPACE_TOP).contains(&sig_tcb_vaddr) {
-        // SAFETY: handle_pending_signals executes in CR3 of current process (syscall/exception return).
-        Some(unsafe { &*(sig_tcb_vaddr as *const super::tcb::SignalTcb) })
+        // SAFETY: resolved via kernel physmap alias (SMAP-safe, CoW-safe).
+        crate::syscall::validation::resolve_user_page_kernel_alias(sig_tcb_vaddr, true)
+            .ok()
+            .map(|alias| unsafe { &*(alias as *const super::tcb::SignalTcb) })
     } else {
         None
     };

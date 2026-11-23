@@ -134,9 +134,14 @@ pub fn handle_sigreturn_inplace(frame: &mut SyscallFrame) {
             if pcb.thread_count.load(Ordering::Acquire) <= 1 {
                 let vaddr = pcb.signal_tcb_vaddr.load(Ordering::Acquire);
                 if (0x1000..0x0000_7FFF_FFFF_F000).contains(&vaddr) {
-                    let stcb = unsafe { &*(vaddr as *const crate::process::signal::tcb::SignalTcb) };
-                    stcb.set_mask(safe_mask);
-                    stcb.in_handler.store(0, Ordering::Release);
+                    if let Ok(alias) =
+                        crate::syscall::validation::resolve_user_page_kernel_alias(vaddr, true)
+                    {
+                        let stcb =
+                            unsafe { &*(alias as *const crate::process::signal::tcb::SignalTcb) };
+                        stcb.set_mask(safe_mask);
+                        stcb.in_handler.store(0, Ordering::Release);
+                    }
                 }
             }
         }

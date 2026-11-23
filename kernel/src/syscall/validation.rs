@@ -748,6 +748,26 @@ pub fn resolve_user_read_u32_and_phys(uaddr: u64) -> Result<(u32, u64), SyscallE
     }
 }
 
+/// Resolves a page-aligned userspace structure address (such as `SignalTcb`) to its
+/// SMAP-safe kernel physmap alias, handling demand-paging and CoW when `write == true`.
+pub fn resolve_user_page_kernel_alias(uaddr: u64, write: bool) -> Result<u64, SyscallError> {
+    validate_user_range(uaddr, core::mem::size_of::<u64>(), 8)?;
+    #[cfg(target_os = "none")]
+    {
+        let user_as = current_user_address_space().ok_or_else(|| {
+            record_fault();
+            SyscallError::Fault
+        })?;
+        let phys = resolve_user_page(user_as, uaddr, write)?;
+        Ok(crate::memory::core::phys_to_virt(phys).as_u64())
+    }
+    #[cfg(not(target_os = "none"))]
+    {
+        let _ = write;
+        Ok(uaddr)
+    }
+}
+
 /// Validates a buffer `(ptr, len)` and copies data into a kernel `Vec`.
 ///
 /// `max` is the allowed size limit (e.g. `IO_BUF_MAX` for `read()`).

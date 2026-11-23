@@ -100,7 +100,9 @@ pub fn sys_rt_sigaction(
     let sig_tcb_opt = {
         let vaddr = pcb.signal_tcb_vaddr.load(core::sync::atomic::Ordering::Acquire);
         if (0x1000..USER_ADDR_MAX).contains(&vaddr) {
-            Some(unsafe { &*(vaddr as *const crate::process::signal::tcb::SignalTcb) })
+            crate::syscall::validation::resolve_user_page_kernel_alias(vaddr, act_ptr != 0)
+                .ok()
+                .map(|alias| unsafe { &*(alias as *const crate::process::signal::tcb::SignalTcb) })
         } else {
             None
         }
@@ -263,8 +265,13 @@ pub fn sys_rt_sigprocmask(
                     .signal_tcb_vaddr
                     .load(core::sync::atomic::Ordering::Acquire);
                 if (0x1000..USER_ADDR_MAX).contains(&vaddr) {
-                    let stcb = unsafe { &*(vaddr as *const crate::process::signal::tcb::SignalTcb) };
-                    stcb.set_mask(safe_mask);
+                    if let Ok(alias) =
+                        crate::syscall::validation::resolve_user_page_kernel_alias(vaddr, true)
+                    {
+                        let stcb =
+                            unsafe { &*(alias as *const crate::process::signal::tcb::SignalTcb) };
+                        stcb.set_mask(safe_mask);
+                    }
                 }
             }
         }
