@@ -842,9 +842,11 @@ fn test_f7_dma_quiescence_and_iommu_fault(token: &[u8; CAP_TOKEN_WIRE_SIZE]) -> 
 
     let vtd_hw = (mask & (1 << 1)) != 0;
     let pci_enum = (mask & (1 << 2)) != 0;
+    let hw_dmar_fault = (mask & (1 << 3)) != 0;
     Ok(format!(
-        "fault_queue_64_zero_drop=1 dmar_victim_sigkill=1 victim_pid={victim_pid} intel_vtd_hw={} pci_devices_ok={}",
+        "fault_queue_64_zero_drop=1 dmar_victim_sigkill=1 victim_pid={victim_pid} intel_vtd_hw={} hw_dmar_fault_trapped={} pci_devices_ok={}",
         u8::from(vtd_hw),
+        u8::from(hw_dmar_fault),
         u8::from(pci_enum)
     ))
 }

@@ -801,7 +801,7 @@ fn emit_phoenix_sla_telemetry(record: &PhoenixTimingRecord, strate1_online: u32)
     let s2_reconverge_us = record.delta_full_us.saturating_sub(record.delta_sla_us);
     let _ = writeln!(
         line,
-        "[EXO_PHOENIX_SLA] CYCLE={} REASON={} S0_FREEZE_US={} S0_FORGE_US={} S0_TOTAL_US={} CRYPTO_US={} S1_TOTAL_US={} FULL_S2_US={} DEGRADED={} RESULT=PASS EPOCH={} S1_ONLINE={} MODE={} SMP={} ACCEL={} S0_US={} S1_RESPAWN_US={} S2_RECONVERGE_US={} HEALED={}",
+        "[EXO_PHOENIX_SLA] CYCLE={} REASON={} S0_FREEZE_US={} S0_FORGE_US={} S0_TOTAL_US={} CRYPTO_US={} S1_TOTAL_US={} FULL_S2_US={} DEGRADED={} RESULT=PASS EPOCH={} S1_ONLINE={} MODE={} SMP={} ACCEL={} S0_US={} S1_RESPAWN_US={} S2_RECONVERGE_US={} HEALED={} MIRROR_BYTES={}",
         record.cycle_id,
         record.reason_str(),
         record.delta_s0_freeze_us,
@@ -820,6 +820,7 @@ fn emit_phoenix_sla_telemetry(record: &PhoenixTimingRecord, strate1_online: u32)
         s1_respawn_us,
         s2_reconverge_us,
         if record.text_healed() { 1u32 } else { 0u32 },
+        golden_mirror::last_verified_bytes(),
     );
     crate::arch::x86_64::terminal::debug_write(line.as_bytes());
 }

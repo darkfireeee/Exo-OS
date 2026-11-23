@@ -98,6 +98,21 @@ pub fn pci_read_dword(bus: u8, device: u8, function: u8, offset: u8) -> u32 {
 }
 
 #[inline(always)]
+pub fn pci_write_dword(bus: u8, device: u8, function: u8, offset: u8, value: u32) {
+    let addr = 0x8000_0000u32
+        | ((bus as u32) << 16)
+        | ((device as u32) << 11)
+        | ((function as u32) << 8)
+        | ((offset as u32) & 0xFC);
+
+    // SAFETY: CF8/CFC config space write in ring0.
+    unsafe {
+        x86_64::outl(PCI_CFG_ADDR, addr);
+        x86_64::outl(PCI_CFG_DATA, value);
+    }
+}
+
+#[inline(always)]
 pub fn pci_vendor_id(bus: u8, device: u8, function: u8) -> u16 {
     (pci_read_dword(bus, device, function, 0x00) & 0xFFFF) as u16
 }

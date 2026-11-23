@@ -223,6 +223,12 @@ pub const FIXMAP_HPET: usize = 4;
 /// Fixmap index for temporary mapping (used by page table builder).
 pub const FIXMAP_TEMP_MAP: usize = 5;
 
+/// Fixmap base index for Intel VT-d DRHD MMIO pages (slots 6..14, up to 8 units).
+pub const FIXMAP_VTD_BASE: usize = 6;
+
+/// Fixmap index for QEMU `edu` PCI DMA device BAR0 MMIO (used by F7 fault qualification).
+pub const FIXMAP_EDU_MMIO: usize = 14;
+
 /// Total number of system-reserved fixmap slots.
 pub const FIXMAP_NR_RESERVED: usize = 16;
 

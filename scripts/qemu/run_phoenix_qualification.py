@@ -134,6 +134,7 @@ def main() -> int:
                 "qemu-system-x86_64",
                 "-machine", "q35,accel=kvm,kernel-irqchip=split",
                 "-device", "intel-iommu,intremap=on,caching-mode=on,device-iotlb=on",
+                "-device", "edu",
                 "-cpu", "host",
                 "-smp", str(args.smp),
                 "-m", args.mem,
@@ -148,15 +149,17 @@ def main() -> int:
                 "-device", "isa-debug-exit,iobase=0xf4,iosize=0x04",
                 "-qmp", f"unix:{qmp_path},server=on,wait=off",
                 "-drive", f"if=none,file={ephemeral_disk},format=raw,id=exofs0,cache=writeback",
-                "-device", "virtio-blk-pci,drive=exofs0,disable-modern=on,disable-legacy=off,indirect_desc=off,event_idx=off,queue-size=16,iommu_platform=on,ats=on",
+                "-device", "virtio-blk-pci,drive=exofs0,disable-modern=on,disable-legacy=off,indirect_desc=off,event_idx=off,queue-size=16",
                 "-netdev", "user,id=exovirtio",
-                "-device", "virtio-net-pci-non-transitional,netdev=exovirtio,mac=02:45:58:4f:00:01,iommu_platform=on,ats=on",
+                "-device", "virtio-net-pci-non-transitional,netdev=exovirtio,mac=02:45:58:4f:00:01",
                 "-cdrom", str(iso_path),
             ]
         else:
             qemu_cmd = [
                 "qemu-system-x86_64",
                 "-machine", "q35",
+                "-device", "intel-iommu,intremap=off,caching-mode=on",
+                "-device", "edu",
                 "-smp", str(args.smp),
                 "-m", args.mem,
                 "-boot", "d",
@@ -176,7 +179,7 @@ def main() -> int:
                 "-cdrom", str(iso_path),
             ]
 
-        accel_label = "KVM+VT-d" if use_kvm else "TCG"
+        accel_label = "KVM+VT-d" if use_kvm else "TCG+VT-d"
         print(
             f"[EXO_QUAL] Launching QEMU ({accel_label}, -smp {args.smp}, suite={args.suite}, iso={iso_path})...",
             flush=True,

@@ -197,6 +197,7 @@ pub unsafe fn arch_boot_init(mb2_magic: u32, mb2_info: u64, rsdp_phys: u64) -> B
     let madt_missing_before_memory = acpi.madt_phys == 0;
     let hpet_missing_before_memory = acpi.hpet_phys == 0;
     let fadt_missing_before_memory = acpi.fadt_phys == 0;
+    let dmar_missing_before_memory = acpi.dmar_phys == 0;
 
     // MADT → LAPIC IDs + I/O APIC
     let mut madt_info = if acpi.madt_phys != 0 {
@@ -333,7 +334,10 @@ pub unsafe fn arch_boot_init(mb2_magic: u32, mb2_info: u64, rsdp_phys: u64) -> B
     }
 
     if boot_info.rsdp_phys != 0
-        && (madt_missing_before_memory || hpet_missing_before_memory || fadt_missing_before_memory)
+        && (madt_missing_before_memory
+            || hpet_missing_before_memory
+            || fadt_missing_before_memory
+            || dmar_missing_before_memory)
     {
         super::super::acpi::parser::init_acpi_from_rsdp(boot_info.rsdp_phys);
         let acpi_post_memory = super::super::acpi::parser::acpi_info();

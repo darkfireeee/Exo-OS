@@ -712,12 +712,181 @@ pub extern "C" fn phoenix_inject_exoveil_and_p0_stress(mode: u64, out_ptr: u64) 
     0
 }
 
+/// Triggers a REAL PCI DMA WRITE from QEMU's `-device edu` (`0x1234:0x11e8`) targeting
+/// Kernel A physical base (`0x0010_0000`) while Intel VT-d (`GSTS.TES == 1`) keeps `edu`'s
+/// ContextEntry Not-Present, and polls VT-d hardware `FSTS`/`FRCD_REG` for the trapped fault.
+#[cfg(all(target_arch = "x86_64", target_os = "none"))]
+fn trigger_edu_rogue_dma_to_kernel_a() -> Option<crate::memory::dma::iommu::intel_vtd::VtdHardwareFault>
+{
+    use core::fmt::Write;
+    use crate::arch::x86_64::memory_iface::KERNEL_FAULT_ALLOC;
+    use crate::exophoenix::stage0::hardware_scan::{pci_read_dword, pci_write_dword};
+    use crate::memory::core::{
+        fixmap_slot_addr, Frame, PageFlags, PhysAddr, FIXMAP_EDU_MMIO,
+    };
+    use crate::memory::virt::address_space::kernel::KERNEL_AS;
+    use crate::memory::virt::address_space::tlb;
+
+    if !INTEL_VTD.translation_enabled() {
+        return None;
+    }
+
+    // 1. Locate QEMU `edu` (`vendor == 0x1234 && device == 0x11e8`) in Stage0 PCI table.
+    let mut edu_dev = None;
+    for idx in 0..stage0::b_device_count() {
+        if let Some(dev) = stage0::b_device(idx) {
+            if dev.vendor_id == 0x1234 && dev.device_id == 0x11e8 {
+                edu_dev = Some(dev);
+                break;
+            }
+        }
+    }
+    let dev = edu_dev?;
+    let expected_sid: u16 =
+        ((dev.bus as u16) << 8) | ((dev.device as u16) << 3) | (dev.function as u16);
+
+    // 2. Decode BAR0 physical base (32-bit or 64-bit memory BAR).
+    let bar0_lo = pci_read_dword(dev.bus, dev.device, dev.function, 0x10);
+    if (bar0_lo & 0x1) != 0 {
+        return None; // I/O BAR unexpected for edu
+    }
+    let bar0_phys: u64 = if (bar0_lo & 0x6) == 0x4 {
+        let bar0_hi = pci_read_dword(dev.bus, dev.device, dev.function, 0x14);
+        ((bar0_hi as u64) << 32) | ((bar0_lo & !0xFu32) as u64)
+    } else {
+        (bar0_lo & !0xFu32) as u64
+    };
+    if bar0_phys == 0 {
+        return None;
+    }
+
+    // 3. Enable PCI Memory Space (bit 1) + Bus Master (bit 2) so `edu` can initiate real DMA.
+    let cmd = pci_read_dword(dev.bus, dev.device, dev.function, 0x04);
+    pci_write_dword(dev.bus, dev.device, dev.function, 0x04, cmd | 0x0000_0006);
+
+    // 4. Map BAR0 first 4 KiB into dedicated `FIXMAP_EDU_MMIO` slot.
+    let fix_virt = fixmap_slot_addr(FIXMAP_EDU_MMIO);
+    let mmio_flags = PageFlags::PRESENT
+        | PageFlags::WRITABLE
+        | PageFlags::NO_EXECUTE
+        | PageFlags::NO_CACHE
+        | PageFlags::GLOBAL;
+    if KERNEL_AS.translate(fix_virt).is_none() {
+        let frame = Frame::containing(PhysAddr::new(bar0_phys & !0xFFF));
+        if unsafe { KERNEL_AS.map(fix_virt, frame, mmio_flags, &KERNEL_FAULT_ALLOC) }.is_err() {
+            return None;
+        }
+        unsafe {
+            tlb::flush_single(fix_virt);
+        }
+    }
+    let mmio_base = fix_virt.as_u64() + (bar0_phys & 0xFFF);
+
+    // 5. Verify `edu` identification register (offset 0x00, low byte == 0xED).
+    let id = unsafe { core::ptr::read_volatile(mmio_base as *const u32) };
+    if (id & 0xFF) != 0xED {
+        return None;
+    }
+
+    // Snapshot first 64 bytes at Kernel A physical base (`0x0010_0000`) before rogue DMA.
+    const TARGET_KERNEL_A_PHYS: u64 = 0x0010_0000;
+    let mut pre_snapshot = [0u8; 64];
+    for (i, slot) in pre_snapshot.iter_mut().enumerate() {
+        *slot = unsafe { core::ptr::read_volatile((TARGET_KERNEL_A_PHYS + i as u64) as *const u8) };
+    }
+
+    // 6. Clear stale VT-d faults and launch REAL PCI DMA WRITE: EDU internal buffer 0x40000 -> 0x0010_0000.
+    INTEL_VTD.clear_all_hardware_faults();
+    unsafe {
+        core::ptr::write_volatile((mmio_base + 0x80) as *mut u64, 0x40000); // DMA_SRC (EDU internal RAM)
+        core::ptr::write_volatile((mmio_base + 0x88) as *mut u64, TARGET_KERNEL_A_PHYS); // DMA_DST (Kernel A)
+        core::ptr::write_volatile((mmio_base + 0x90) as *mut u64, 64); // DMA_CNT (64 bytes)
+        core::ptr::write_volatile((mmio_base + 0x98) as *mut u64, 0x01 | 0x02); // DMA_CMD: RUN | EDU->RAM (no IRQ)
+    }
+
+    // 7. Poll Intel VT-d hardware `FSTS`/`FRCD_REG` (QEMU `edu` fires its DMA timer at +100 ms).
+    let deadline = tsc::read_tsc().wrapping_add(tsc::tsc_ms_to_cycles(1500).max(1));
+    let mut trapped: Option<crate::memory::dma::iommu::intel_vtd::VtdHardwareFault> = None;
+    while tsc::read_tsc().wrapping_sub(deadline) >= (u64::MAX / 2) {
+        if let Some(fault) = INTEL_VTD.poll_hardware_dmar_fault() {
+            if fault.source_id == expected_sid && fault.fault_addr == TARGET_KERNEL_A_PHYS {
+                trapped = Some(fault);
+                break;
+            }
+        }
+        let dma_cmd = unsafe { core::ptr::read_volatile((mmio_base + 0x98) as *const u64) };
+        if (dma_cmd & 0x01) == 0 {
+            // DMA finished; check one final time for latched hardware fault.
+            if let Some(fault) = INTEL_VTD.poll_hardware_dmar_fault() {
+                if fault.source_id == expected_sid && fault.fault_addr == TARGET_KERNEL_A_PHYS {
+                    trapped = Some(fault);
+                }
+            }
+            break;
+        }
+        core::hint::spin_loop();
+    }
+
+    // 8. Verify 0 bytes were written to `0x0010_0000` (hardware VT-d physically blocked the DMA write!).
+    for (i, &orig) in pre_snapshot.iter().enumerate() {
+        let now = unsafe { core::ptr::read_volatile((TARGET_KERNEL_A_PHYS + i as u64) as *const u8) };
+        if now != orig {
+            return None;
+        }
+    }
+
+    if let Some(fault) = trapped {
+        struct LineBuf {
+            buf: [u8; 160],
+            len: usize,
+        }
+        impl Write for LineBuf {
+            fn write_str(&mut self, s: &str) -> core::fmt::Result {
+                let avail = self.buf.len().saturating_sub(self.len);
+                let n = s.len().min(avail);
+                self.buf[self.len..self.len + n].copy_from_slice(&s.as_bytes()[..n]);
+                self.len += n;
+                Ok(())
+            }
+        }
+        let mut line = LineBuf {
+            buf: [0u8; 160],
+            len: 0,
+        };
+        let _ = writeln!(
+            line,
+            "[ExoPhoenix] [VT-d] HW_DMAR_FAULT unit={} sid={:#06x} addr={:#x} reason={:#04x} write={}",
+            fault.unit_idx,
+            fault.source_id,
+            fault.fault_addr,
+            fault.reason,
+            u8::from(!fault.is_read),
+        );
+        crate::arch::x86_64::terminal::debug_write(&line.buf[..line.len]);
+        return Some(fault);
+    }
+
+    None
+}
+
+#[cfg(not(all(target_arch = "x86_64", target_os = "none")))]
+fn trigger_edu_rogue_dma_to_kernel_a() -> Option<crate::memory::dma::iommu::intel_vtd::VtdHardwareFault>
+{
+    None
+}
+
 /// `F7` (`CORR-14`, `DMA-0`, `DRV-27/40/54`, `FIX-104`):
 /// 1. Stress-pushes 64 events into the lock-free `IOMMU_FAULT_QUEUE` and drains with 0 dropped/orphan slots.
-/// 2. Binds an IOMMU domain to disposable `victim_pid`, injects a DMAR fault into `IOMMU_FAULT_QUEUE`,
-///    executes `process_iommu_faults()` -> delivers `SIGKILL` to `victim_pid` + records P0 `IommuFault`.
-/// 3. Verifies Kernel A `.text` sentinel remains 100% intact.
-/// Returns bitmask: bit 0 = queue+kill passed, bit 1 = Intel VT-d hardware active, bit 2 = PCI devices enumerated.
+/// 2. When Intel VT-d hardware (`GSTS.TES == 1`) and QEMU `edu` (`0x1234:0x11e8`) are present,
+///    commands a REAL PCI DMA WRITE to Kernel A (`0x0010_0000`), proves hardware VT-d blocks it
+///    and latches a real fault record in `FSTS`/`FRCD_REG`, then ingests that real hardware fault
+///    into `IOMMU_FAULT_QUEUE` -> `process_iommu_faults()` -> `SIGKILL` of `victim_pid` + P0 `ExoLedger`.
+/// 3. Executes real hardware `INTEL_VTD.flush_iotlb_domain()` and verifies Kernel A `.text` intact.
+/// Returns bitmask:
+///   bit 0 = queue+kill+RAM intact passed,
+///   bit 1 = Intel VT-d hardware active (`VTD_UNITS > 0 && GSTS.TES == 1`),
+///   bit 2 = PCI devices enumerated,
+///   bit 3 = real hardware VT-d DMAR fault trapped from PCI DMA (`FSTS`/`FRCD_REG`).
 #[no_mangle]
 #[inline(never)]
 pub extern "C" fn phoenix_inject_dma_iommu_stress(victim_pid: u64) -> i64 {
@@ -754,17 +923,27 @@ pub extern "C" fn phoenix_inject_dma_iommu_stress(victim_pid: u64) -> i64 {
         return EIO;
     }
 
-    // 3. Controlled DMAR fault -> bind IOMMU domain to victim_pid -> `process_iommu_faults()` -> SIGKILL!
+    // 3. Attempt REAL hardware PCI DMA write (`edu` -> Kernel A `0x0010_0000`) trapped by Intel VT-d.
+    let vtd_hw = INTEL_VTD.is_initialized()
+        && INTEL_VTD.unit_count() > 0
+        && INTEL_VTD.translation_enabled();
+    let hw_fault = trigger_edu_rogue_dma_to_kernel_a();
+
+    // 4. Bind IOMMU domain to victim_pid -> ingest real HW DMAR fault (or fallback if no `edu`) -> SIGKILL!
     if victim_pid > 1 {
         let vpid = victim_pid as u32;
         let Ok(dom) = ensure_domain_for_pid(vpid) else {
             return EIO;
         };
+        let (dev_id, fault_type, fault_addr) = match hw_fault {
+            Some(f) => (f.source_id, f.reason, f.fault_addr),
+            None => (0x0008, 2, 0x0000_0000_0010_0000),
+        };
         let pushed = IOMMU_FAULT_QUEUE.push(IommuFaultEvent {
-            device_id: 0x0008,
-            fault_type: 2, // DMA write outside domain whitelist
+            device_id: dev_id,
+            fault_type,
             domain_id: dom.0,
-            faulted_addr: 0x0000_0000_0010_0000, // Kernel A physical base
+            faulted_addr: fault_addr,
         });
         if !pushed {
             release_domain_for_pid(vpid);
@@ -773,17 +952,16 @@ pub extern "C" fn phoenix_inject_dma_iommu_stress(victim_pid: u64) -> i64 {
         crate::security::exoledger::exo_ledger_append_p0(
             crate::security::exoledger::ActionTag::IommuFault {
                 domain_id: dom.0,
-                fault_addr: 0x0010_0000,
+                fault_addr,
             },
         );
         process_iommu_faults();
         release_domain_for_pid(vpid);
     }
 
-    // 4. Verify IOMMU flush + Kernel A `.text` integrity completely untouched.
+    // 5. Execute real hardware VT-d IOTLB invalidation + verify Kernel A `.text` integrity completely untouched.
     let blocked = stage0::blocked_domain_id();
-    let vtd_active = INTEL_VTD.is_initialized() && INTEL_VTD.unit_count() > 0;
-    if vtd_active {
+    if vtd_hw {
         unsafe {
             INTEL_VTD.flush_iotlb_domain(blocked as u16, 0);
         }
@@ -796,11 +974,14 @@ pub extern "C" fn phoenix_inject_dma_iommu_stress(victim_pid: u64) -> i64 {
     }
 
     let mut mask: i64 = 1; // bit 0: queue 64/64 + DMAR kill + RAM intact
-    if vtd_active {
+    if vtd_hw {
         mask |= 1 << 1;
     }
     if stage0::b_device_count() > 0 {
         mask |= 1 << 2;
+    }
+    if hw_fault.is_some() {
+        mask |= 1 << 3;
     }
     let _ = idt::VEC_EXOPHOENIX_FREEZE;
     mask

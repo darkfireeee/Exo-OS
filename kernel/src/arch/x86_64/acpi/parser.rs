@@ -73,6 +73,7 @@ pub struct AcpiInfo {
     pub hpet_phys: u64,
     pub fadt_phys: u64,
     pub srat_phys: u64,
+    pub dmar_phys: u64,
 }
 
 impl AcpiInfo {
@@ -86,6 +87,7 @@ impl AcpiInfo {
             hpet_phys: 0,
             fadt_phys: 0,
             srat_phys: 0,
+            dmar_phys: 0,
         }
     }
 }
@@ -298,6 +300,7 @@ fn classify_table(phys: u64, info: &mut AcpiInfo) {
         b"HPET" => info.hpet_phys = phys,
         b"FACP" => info.fadt_phys = phys,
         b"SRAT" => info.srat_phys = phys,
+        b"DMAR" => info.dmar_phys = phys,
         _ => {}
     }
 }

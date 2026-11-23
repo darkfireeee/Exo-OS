@@ -210,6 +210,13 @@ pub fn update_iommu_protected_regions(pool_r3_base: u64, pool_r3_size: u64) {
 
 /// Step 9: deny-by-default IOMMU config + region policy + ACS root-ports.
 pub fn setup_iommu_stage0(pool_r3_size_bytes: u64) {
+    if !INTEL_VTD.is_initialized() {
+        let dmar_phys = crate::arch::x86_64::acpi::parser::acpi_info().dmar_phys;
+        if dmar_phys != 0 {
+            let _ = crate::memory::dma::iommu::intel_vtd::init_from_acpi_dmar(dmar_phys);
+        }
+    }
+
     if IOMMU_DOMAINS.domain_count() == 0 {
         IOMMU_DOMAINS.init();
     }
