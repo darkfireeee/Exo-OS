@@ -154,6 +154,15 @@ ifneq ($(wildcard /tmp/.X11-unix/X0),)
 export DISPLAY := :0
 endif
 endif
+# FIX-WSLG-GTK : sous WSLg, le backend Wayland natif de GTK3 dans QEMU finit par figer
+# l'entrée/affichage puis planter avec "Gdk-Message: Error 71 (Protocol error) dispatching
+# to Wayland display". Forcer GDK_BACKEND=x11 route QEMU via XWayland (DISPLAY=:0) de
+# manière stable tout en conservant le curseur et la fenêtre interactive.
+ifeq ($(GDK_BACKEND),)
+ifneq ($(wildcard /mnt/wslg/.),)
+export GDK_BACKEND := x11
+endif
+endif
 
 # Paramètres QEMU communs (machine Q35 moderne, 4 GiB, boot ISO)
 QEMU = qemu-system-x86_64
