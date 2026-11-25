@@ -35,7 +35,7 @@ fn halt_forever() -> ! {
     loop {
         // SAFETY: thread terminated, CPU must never return to this context.
         unsafe {
-            core::arch::asm!("hlt", options(nomem, nostack));
+            crate::arch::x86_64::halt_once();
         }
     }
 }

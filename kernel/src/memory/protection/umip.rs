@@ -33,18 +33,12 @@ static UMIP_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 #[inline(always)]
 unsafe fn read_cr4() -> u64 {
-    let val: u64;
-    core::arch::asm!(
-        "mov {v}, cr4",
-        v = out(reg) val,
-        options(nostack, nomem, preserves_flags),
-    );
-    val
+    crate::arch::x86_64::read_cr4()
 }
 
 #[inline(always)]
 unsafe fn write_cr4(val: u64) {
-    core::arch::asm!("mov cr4, {v}", v = in(reg) val, options(nostack, nomem));
+    crate::arch::x86_64::write_cr4(val);
 }
 
 #[inline]

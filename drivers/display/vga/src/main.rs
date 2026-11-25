@@ -7,7 +7,6 @@
 #![no_std]
 #![no_main]
 
-use core::panic::PanicInfo;
 use exo_syscall_abi as syscall;
 use exo_vga_text::{ColorCode, VgaCell, VgaTextBuffer, VGA_CELLS, VGA_TEXT_PHYS};
 
@@ -80,9 +79,4 @@ pub extern "C" fn _start() -> ! {
     }
 }
 
-#[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
-    loop {
-        core::hint::spin_loop();
-    }
-}
+exo_syscall_abi::ring1_nostd_panic_handler!(b"");

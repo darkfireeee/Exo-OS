@@ -36,105 +36,24 @@
 //! - SYS_EXOFS_OPEN_BY_PATH = 519 (path, flags, mode, _, _, rights)
 //! - SYS_IPC_REGISTER = 304, SYS_IPC_RECV = 301, SYS_IPC_SEND = 300
 
-use core::cell::UnsafeCell;
-use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicU32, Ordering};
 use exo_syscall_abi as syscall;
+use exo_vfs_server::{
+    compat,
+    mount_table::{check_vfs_write_access, fnv32, FsType, MountEntry, MAX_MOUNTS},
+    ops, translation_layer,
+};
 use spin::Mutex as SpinMutex;
 
-mod compat;
-mod ops;
-mod translation_layer;
-
-// ── Table de montages ─────────────────────────────────────────────────────────
-
-/// Types de pseudo-FS supportés.
-#[repr(u8)]
-#[derive(Copy, Clone, PartialEq)]
-enum FsType {
-    None = 0,
-    ExoFs = 1,
-    ProcFs = 2,
-    SysFs = 3,
-    DevFs = 4,
-}
-
-impl FsType {
-    fn from_wire(value: u8) -> Option<Self> {
-        match value {
-            compat::FS_EXOFS => Some(Self::ExoFs),
-            compat::FS_PROCFS => Some(Self::ProcFs),
-            compat::FS_SYSFS => Some(Self::SysFs),
-            compat::FS_DEVFS => Some(Self::DevFs),
-            _ => None,
-        }
-    }
-}
-
-/// Entrée de la table de montages.
-#[derive(Copy, Clone)]
-#[allow(dead_code)]
-struct MountEntry {
-    fs_type: FsType,
-    /// Hash FNV-32 du chemin de montage (ex : hash("/proc")).
-    path_hash: u32,
-    /// BlobId du répertoire racine ExoFS (0 pour pseudo-FS).
-    root_blob: u64,
-    active: bool,
-}
-
-impl MountEntry {
-    const fn empty() -> Self {
-        Self {
-            fs_type: FsType::None,
-            path_hash: 0,
-            root_blob: 0,
-            active: false,
-        }
-    }
-}
-
 static MOUNT_COUNT: AtomicU32 = AtomicU32::new(0);
-const MAX_MOUNTS: usize = 32;
 
-// FIX-VFS-MOUNT (ANALYSE_SERVERS_EXOOS §P2) : l'ancienne MountTable utilisait
-// un UnsafeCell avec unsafe impl Sync — aucune protection contre les accès
-// concurrents. Si deux requêtes IPC arrivaient simultanément (scheduler multi-CPU),
-// la table pouvait être corrompue silencieusement.
-//
-// Correction : spin::Mutex enveloppant le tableau. Le vfs_server est mono-thread
-// dans la boucle principale, donc le verrou n'est jamais contenu (zero-contention
-// en pratique), mais il documente l'invariant et protège contre de futures
-// évolutions multi-thread.
+// FIX-VFS-MOUNT (ANALYSE_SERVERS_EXOOS §P2) : spin::Mutex enveloppant le tableau.
 static MOUNTS: SpinMutex<[MountEntry; MAX_MOUNTS]> =
     SpinMutex::new([MountEntry::empty(); MAX_MOUNTS]);
 static IPC_RECV_TIMEOUTS: AtomicU32 = AtomicU32::new(0);
 const CROSS_PROCESS_CHUNK: usize = 4096;
 const LINUX_STAT_SIZE: usize = 144;
 const SERVER_ENDPOINT_ID: u64 = 3;
-
-#[inline]
-fn boot_log(bytes: &[u8]) {
-    if bytes.is_empty() {
-        return;
-    }
-    unsafe {
-        let _ = syscall::syscall3(
-            syscall::SYS_EXO_LOG,
-            bytes.as_ptr() as u64,
-            bytes.len() as u64,
-            1,
-        );
-    }
-}
-
-fn fnv32(s: &[u8]) -> u32 {
-    let mut h: u32 = 2166136261;
-    for &b in s {
-        h = h.wrapping_mul(16777619).wrapping_add(b as u32);
-    }
-    h
-}
 
 // ── Messages IPC ─────────────────────────────────────────────────────────────
 
@@ -750,16 +669,6 @@ fn handle_fsync(payload: &[u8]) -> VfsReply {
     reply_status(if rc < 0 { rc } else { 0 })
 }
 
-// FIX-APP-06 (Security_Application_Audit §GAP-06) : garde d'accès VFS.
-// En v0.2.0, validation basée sur les PIDs de confiance Ring1.
-// Règle : PIDs 2..9 (serveurs Ring1 non-storage) ont accès READ seul sauf PID 1,5.
-// PID 1 (init) et PID 5 (vfs lui-même) peuvent toujours écrire.
-// PIDs >= 10 (exosh, apps) peuvent lire et écrire leurs propres fichiers.
-#[inline]
-fn check_vfs_write_access(sender_pid: u32) -> bool {
-    sender_pid == 1 || sender_pid == 5 || sender_pid >= 10
-}
-
 fn handle_request(req: &VfsRequest) -> VfsReply {
     match req.msg_type {
         ops::VFS_MOUNT => handle_mount(req.sender_pid, &req.payload),
@@ -842,10 +751,10 @@ pub extern "C" fn _start() -> ! {
         )
     };
     if register_rc < 0 {
-        boot_log(b"vfs_server: register failed\n");
+        syscall::boot_log(b"vfs_server: register failed\n");
         halt_forever();
     }
-    boot_log(b"vfs_server: registered\n");
+    syscall::boot_log(b"vfs_server: registered\n");
 
     // ── 3. Boucle de service ──────────────────────────────────────────────────
     let mut req = VfsRequest {
@@ -889,11 +798,8 @@ pub extern "C" fn _start() -> ! {
     }
 }
 
-#[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
-    boot_log(b"vfs_server: panic\n");
-    halt_forever();
-}
+exo_syscall_abi::ring1_panic_exit_handler!(b"vfs_server: panic
+");
 
 fn halt_forever() -> ! {
     unsafe {

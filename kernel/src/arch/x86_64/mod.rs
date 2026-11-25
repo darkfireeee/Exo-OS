@@ -8,10 +8,12 @@ pub mod apic;
 pub mod boot;
 pub mod boot_display;
 pub mod cpu;
+pub mod cpu_ops;
 pub mod exceptions;
 pub mod framebuffer_early;
 pub mod gdt;
 pub mod idt;
+pub mod ipc_asm;
 pub mod irq;
 pub mod memory_iface;
 pub mod paging;
@@ -24,6 +26,8 @@ pub mod time;
 pub mod tss;
 pub mod vga_early;
 pub mod virt;
+
+pub use cpu_ops::*;
 
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -333,6 +337,42 @@ pub unsafe fn inb(port: u16) -> u8 {
             "in al, dx",
             in("dx") port,
             out("al") val,
+            options(nostack, nomem)
+        );
+    }
+    val
+}
+
+/// Performs an OUT word (16-bit) to an I/O port
+///
+/// # SAFETY
+/// Same as `outb`.
+#[inline(always)]
+pub unsafe fn outw(port: u16, val: u16) {
+    // SAFETY: delegated to caller
+    unsafe {
+        core::arch::asm!(
+            "out dx, ax",
+            in("dx") port,
+            in("ax") val,
+            options(nostack, nomem)
+        );
+    }
+}
+
+/// Performs an IN word (16-bit) from an I/O port
+///
+/// # SAFETY
+/// Same as `inb`.
+#[inline(always)]
+pub unsafe fn inw(port: u16) -> u16 {
+    let val: u16;
+    // SAFETY: delegated to caller
+    unsafe {
+        core::arch::asm!(
+            "in ax, dx",
+            in("dx") port,
+            out("ax") val,
             options(nostack, nomem)
         );
     }

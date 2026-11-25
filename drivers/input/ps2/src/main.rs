@@ -1,8 +1,6 @@
 #![cfg_attr(target_os = "none", no_std)]
 #![cfg_attr(target_os = "none", no_main)]
 
-#[cfg(target_os = "none")]
-use core::panic::PanicInfo;
 
 #[cfg(target_os = "none")]
 use exo_ps2_input::{
@@ -61,17 +59,7 @@ impl PortIo for SyscallPorts {
 
 #[cfg(target_os = "none")]
 fn boot_log(bytes: &[u8]) {
-    if bytes.is_empty() {
-        return;
-    }
-    unsafe {
-        let _ = syscall::syscall3(
-            syscall::SYS_EXO_LOG,
-            bytes.as_ptr() as u64,
-            bytes.len() as u64,
-            1,
-        );
-    }
+    syscall::boot_log(bytes);
 }
 
 #[cfg(target_os = "none")]
@@ -344,10 +332,4 @@ pub extern "C" fn _start() -> ! {
 #[cfg(not(target_os = "none"))]
 fn main() {}
 
-#[cfg(target_os = "none")]
-#[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
-    loop {
-        core::hint::spin_loop();
-    }
-}
+exo_syscall_abi::ring1_panic_handler!(b"");

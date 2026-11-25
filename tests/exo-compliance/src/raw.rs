@@ -1,65 +1,27 @@
 //! Minimal raw x86_64 Exo-OS syscall wrappers for low-level compliance probes.
 #![allow(dead_code)]
 
-pub const SYS_READ: u64 = 0;
-pub const SYS_WRITE: u64 = 1;
-pub const SYS_OPEN: u64 = 2;
-pub const SYS_CLOSE: u64 = 3;
-pub const SYS_STAT: u64 = 4;
-pub const SYS_POLL: u64 = 7;
-pub const SYS_LSEEK: u64 = 8;
-pub const SYS_MMAP: u64 = 9;
-pub const SYS_MPROTECT: u64 = 10;
-pub const SYS_MUNMAP: u64 = 11;
-pub const SYS_RT_SIGACTION: u64 = 13;
-pub const SYS_RT_SIGPROCMASK: u64 = 14;
-pub const SYS_RT_SIGRETURN: u64 = 15;
-pub const SYS_IOCTL: u64 = 16;
-pub const SYS_GETPID: u64 = 39;
-pub const SYS_SOCKET: u64 = 41;
-pub const SYS_CONNECT: u64 = 42;
-pub const SYS_ACCEPT: u64 = 43;
-pub const SYS_SENDTO: u64 = 44;
-pub const SYS_RECVFROM: u64 = 45;
-pub const SYS_SENDMSG: u64 = 46;
-pub const SYS_RECVMSG: u64 = 47;
-pub const SYS_SHUTDOWN: u64 = 48;
-pub const SYS_BIND: u64 = 49;
-pub const SYS_LISTEN: u64 = 50;
-pub const SYS_GETSOCKNAME: u64 = 51;
-pub const SYS_GETPEERNAME: u64 = 52;
-pub const SYS_SOCKETPAIR: u64 = 53;
-pub const SYS_SETSOCKOPT: u64 = 54;
-pub const SYS_GETSOCKOPT: u64 = 55;
-pub const SYS_KILL: u64 = 62;
-pub const SYS_UNAME: u64 = 63;
-pub const SYS_FCNTL: u64 = 72;
-pub const SYS_FLOCK: u64 = 73;
-pub const SYS_FTRUNCATE: u64 = 77;
-pub const SYS_SYMLINK: u64 = 88;
-pub const SYS_REBOOT: u64 = 169;
-pub const SYS_GETTID: u64 = 186;
-pub const SYS_FUTEX: u64 = 202;
-pub const SYS_EPOLL_WAIT: u64 = 232;
-pub const SYS_EPOLL_CTL: u64 = 233;
-pub const SYS_OPENAT: u64 = 257;
-pub const SYS_NEWFSTATAT: u64 = 262;
-pub const SYS_UNLINKAT: u64 = 263;
-pub const SYS_UTIMENSAT: u64 = 280;
-pub const SYS_EVENTFD2: u64 = 290;
-pub const SYS_EPOLL_CREATE1: u64 = 291;
-pub const SYS_GETRANDOM: u64 = 318;
-pub const SYS_EXECVE: u64 = 59;
-pub const SYS_MEMFD_CREATE: u64 = 319;
-pub const SYS_EXO_IPC_SEND: u64 = 300;
-pub const SYS_EXO_IPC_RECV: u64 = 301;
-pub const SYS_EXO_IPC_LOOKUP: u64 = 306;
-pub const SYS_EXO_CAP_CREATE: u64 = 320;
-pub const SYS_EXO_PLEDGE: u64 = 324;
-pub const SYS_EXO_LOG: u64 = 350;
-pub const SYS_EXO_PROCESS_LIST: u64 = 351;
-pub const SYS_PHOENIX_FORCE: u64 = 523;
-pub const SYS_EXOPHOENIX_TEST: u64 = 524;
+pub use exo_abi::errno::{
+    EACCES, EAGAIN, ECONNREFUSED, EINPROGRESS, ELOOP, EMFILE, ENOSPC, ENOTDIR, ENOTTY, EPERM,
+    ETIMEDOUT,
+};
+pub use exo_abi::numbers::{
+    SYS_ACCEPT, SYS_BIND, SYS_CLOSE, SYS_CONNECT, SYS_EPOLL_CREATE1, SYS_EPOLL_CTL,
+    SYS_EPOLL_WAIT, SYS_EVENTFD2, SYS_EXECVE, SYS_EXOPHOENIX_TEST, SYS_EXO_CAP_CREATE,
+    SYS_EXO_LOG, SYS_EXO_PLEDGE, SYS_EXO_PROCESS_LIST, SYS_FCNTL, SYS_FLOCK, SYS_FTRUNCATE,
+    SYS_FUTEX, SYS_GETPEERNAME, SYS_GETPID, SYS_GETRANDOM, SYS_GETSOCKNAME, SYS_GETSOCKOPT,
+    SYS_GETTID, SYS_IOCTL, SYS_IPC_LOOKUP as SYS_EXO_IPC_LOOKUP, SYS_IPC_RECV as SYS_EXO_IPC_RECV,
+    SYS_IPC_SEND as SYS_EXO_IPC_SEND, SYS_KILL, SYS_LISTEN, SYS_LSEEK, SYS_MEMFD_CREATE,
+    SYS_MMAP, SYS_MPROTECT, SYS_MUNMAP, SYS_NEWFSTATAT, SYS_OPEN, SYS_OPENAT, SYS_PHOENIX_FORCE,
+    SYS_POLL, SYS_READ, SYS_REBOOT, SYS_RECVFROM, SYS_RECVMSG, SYS_RT_SIGACTION,
+    SYS_RT_SIGPROCMASK, SYS_RT_SIGRETURN, SYS_SENDMSG, SYS_SENDTO, SYS_SETSOCKOPT, SYS_SHUTDOWN,
+    SYS_SOCKET, SYS_SOCKETPAIR, SYS_STAT, SYS_SYMLINK, SYS_UNAME, SYS_UNLINKAT, SYS_UTIMENSAT,
+    SYS_WRITE,
+};
+pub use exo_abi::{
+    syscall0, syscall1, syscall2, syscall3, syscall4, syscall5, syscall6,
+    ExoProcessInfo as ExoProcessInfoWire,
+};
 
 pub const PHOENIX_FLAG_DEGRADED_FREEZE_TIMEOUT: u32 = 1 << 0;
 pub const PHOENIX_FLAG_COLD_DISK_FALLBACK: u32 = 1 << 1;
@@ -67,18 +29,6 @@ pub const PHOENIX_FLAG_TEXT_HEALED: u32 = 1 << 2;
 pub const PHOENIX_FLAG_COLD_RESPAWN: u32 = 1 << 3;
 pub const PHOENIX_FLAG_CRASH_NMI: u32 = 1 << 4;
 pub const PHOENIX_FLAG_KVM_ACCEL: u32 = 1 << 5;
-
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-pub struct ExoProcessInfoWire {
-    pub pid: u32,
-    pub ppid: u32,
-    pub state: u32,
-    pub threads: u32,
-    pub name: [u8; 16],
-    pub utime_ns: u64,
-    pub stime_ns: u64,
-}
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -101,11 +51,6 @@ pub const MFD_ALLOW_SEALING: u64 = 0x0002;
 pub const F_ADD_SEALS: u64 = 1033;
 pub const F_GET_SEALS: u64 = 1034;
 pub const F_SEAL_SHRINK: u64 = 0x0002;
-
-pub const EPERM: i64 = -1;
-pub const EACCES: i64 = -13;
-pub const EMFILE: i64 = -24;
-pub const ENOSPC: i64 = -28;
 
 pub const PHOENIX_METRICS_MAGIC: u32 = 0x504D_4554;
 
@@ -198,14 +143,6 @@ pub const LOCK_NB: u64 = 4;
 pub const LOCK_UN: u64 = 8;
 
 pub const AT_FDCWD: i32 = -100;
-
-pub const EAGAIN: i64 = -11;
-pub const ENOTDIR: i64 = -20;
-pub const ENOTTY: i64 = -25;
-pub const ELOOP: i64 = -40;
-pub const ETIMEDOUT: i64 = -110;
-pub const ECONNREFUSED: i64 = -111;
-pub const EINPROGRESS: i64 = -115;
 
 #[repr(C, packed)]
 #[derive(Clone, Copy, Default)]
@@ -313,53 +250,6 @@ impl Default for UtsName {
     fn default() -> Self {
         unsafe { core::mem::zeroed() }
     }
-}
-
-#[inline(always)]
-pub unsafe fn syscall6(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64, a6: u64) -> i64 {
-    let ret: i64;
-    unsafe {
-        core::arch::asm!(
-            "syscall",
-            in("rax") nr,
-            in("rdi") a1,
-            in("rsi") a2,
-            in("rdx") a3,
-            in("r10") a4,
-            in("r8") a5,
-            in("r9") a6,
-            lateout("rax") ret,
-            out("rcx") _,
-            out("r11") _,
-            options(nostack),
-        );
-    }
-    ret
-}
-
-#[inline(always)]
-pub unsafe fn syscall0(nr: u64) -> i64 {
-    unsafe { syscall6(nr, 0, 0, 0, 0, 0, 0) }
-}
-#[inline(always)]
-pub unsafe fn syscall1(nr: u64, a1: u64) -> i64 {
-    unsafe { syscall6(nr, a1, 0, 0, 0, 0, 0) }
-}
-#[inline(always)]
-pub unsafe fn syscall2(nr: u64, a1: u64, a2: u64) -> i64 {
-    unsafe { syscall6(nr, a1, a2, 0, 0, 0, 0) }
-}
-#[inline(always)]
-pub unsafe fn syscall3(nr: u64, a1: u64, a2: u64, a3: u64) -> i64 {
-    unsafe { syscall6(nr, a1, a2, a3, 0, 0, 0) }
-}
-#[inline(always)]
-pub unsafe fn syscall4(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64) -> i64 {
-    unsafe { syscall6(nr, a1, a2, a3, a4, 0, 0) }
-}
-#[inline(always)]
-pub unsafe fn syscall5(nr: u64, a1: u64, a2: u64, a3: u64, a4: u64, a5: u64) -> i64 {
-    unsafe { syscall6(nr, a1, a2, a3, a4, a5, 0) }
 }
 
 pub fn exo_log_line(line: &str) {

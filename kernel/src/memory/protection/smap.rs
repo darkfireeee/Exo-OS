@@ -68,15 +68,13 @@ static SMAP_ACTIVE: AtomicBool = AtomicBool::new(false);
 /// # Safety: CPL 0.
 #[inline(always)]
 unsafe fn read_cr4() -> u64 {
-    let val: u64;
-    core::arch::asm!("mov {v}, cr4", v = out(reg) val, options(nostack, nomem, preserves_flags));
-    val
+    crate::arch::x86_64::read_cr4()
 }
 
 /// # Safety: CPL 0.
 #[inline(always)]
 unsafe fn write_cr4(val: u64) {
-    core::arch::asm!("mov cr4, {v}", v = in(reg) val, options(nostack, nomem));
+    crate::arch::x86_64::write_cr4(val);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -86,23 +84,7 @@ unsafe fn write_cr4(val: u64) {
 /// Tests SMAP support: CPUID leaf 7, subleaf 0, EBX bit 20.
 #[inline]
 pub fn smap_supported() -> bool {
-    let ebx_r: u64;
-    // SAFETY: CPUID available on x86_64; xchg preserves rbx reserved by LLVM.
-    unsafe {
-        core::arch::asm!(
-            "xchg {tmp:r}, rbx",
-            "mov eax, 7",
-            "xor ecx, ecx",
-            "cpuid",
-            "xchg {tmp:r}, rbx",
-            lateout("eax") _,
-            lateout("ecx") _,
-            lateout("edx") _,
-            tmp = inout(reg) 0u64 => ebx_r,
-            options(nostack, nomem),
-        );
-    }
-    let ebx = ebx_r as u32;
+    let (_, ebx, _, _) = crate::arch::x86_64::cpuid_ex(7, 0);
     ebx & (1 << 20) != 0
 }
 
@@ -120,7 +102,7 @@ pub unsafe fn stac() {
     if !SMAP_ACTIVE.load(Ordering::Acquire) {
         return;
     }
-    core::arch::asm!("stac", options(nostack, nomem));
+    crate::arch::x86_64::stac_raw();
     SMAP_STATS.stac_count.fetch_add(1, Ordering::Relaxed);
 }
 
@@ -133,7 +115,7 @@ pub unsafe fn clac() {
     if !SMAP_ACTIVE.load(Ordering::Acquire) {
         return;
     }
-    core::arch::asm!("clac", options(nostack, nomem));
+    crate::arch::x86_64::clac_raw();
     SMAP_STATS.clac_count.fetch_add(1, Ordering::Relaxed);
 }
 
@@ -156,7 +138,7 @@ pub unsafe fn enable_smap() {
         return;
     }
     // Ensure AC = 0 before enabling SMAP to avoid opening a window.
-    core::arch::asm!("clac", options(nostack, nomem));
+    crate::arch::x86_64::clac_raw();
     write_cr4(cr4 | CR4_SMAP_BIT);
     SMAP_STATS.enable_count.fetch_add(1, Ordering::Relaxed);
     SMAP_ACTIVE.store(true, Ordering::Release);

@@ -37,6 +37,9 @@ CLASS_TO_ID = {
     "VirtioDriver": "VirtioDrivers",
     "ExoShield": "ExoShield",
     "Exosh": "Exosh",
+    "AudioServer": "Audio",
+    "UsbServer": "Usb",
+    "ExoCompositor": "ExoCompositor",
 }
 
 KERNEL_PAIR = re.compile(

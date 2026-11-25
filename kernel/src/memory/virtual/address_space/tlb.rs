@@ -78,9 +78,7 @@ pub unsafe fn flush_single(addr: VirtAddr) {
 /// The active PML4 must remain valid after this operation.
 #[inline]
 pub unsafe fn flush_all() {
-    let cr3: u64;
-    core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack));
-    core::arch::asm!("mov cr3, {}", in(reg) cr3, options(nomem, nostack));
+    crate::arch::x86_64::reload_cr3();
     TLB_STATS.full_flushes.fetch_add(1, Ordering::Relaxed);
 }
 
@@ -91,10 +89,7 @@ pub unsafe fn flush_all() {
 /// Must be executed with interrupts disabled.
 #[inline]
 pub unsafe fn flush_all_including_global() {
-    let cr4: u64;
-    core::arch::asm!("mov {}, cr4", out(reg) cr4, options(nomem, nostack));
-    core::arch::asm!("mov cr4, {}", in(reg) cr4 & !(1u64 << 7), options(nomem, nostack));
-    core::arch::asm!("mov cr4, {}", in(reg) cr4, options(nomem, nostack));
+    crate::arch::x86_64::flush_tlb_global_cr4();
     TLB_STATS.full_flushes.fetch_add(1, Ordering::Relaxed);
 }
 

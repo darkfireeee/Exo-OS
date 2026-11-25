@@ -65,9 +65,7 @@ const MAX_EAGER_KERNEL_A_BLOB_BYTES: usize = (1usize << BUDDY_MAX_ORDER) * PAGE_
 #[cfg(exophoenix_resurrection_test)]
 fn phoenix_test_log(s: &str) {
     for &b in s.as_bytes() {
-        unsafe {
-            core::arch::asm!("out 0xE9, al", in("al") b, options(nomem, nostack));
-        }
+        crate::arch::x86_64::debug_e9_byte(b);
     }
 }
 
@@ -308,11 +306,7 @@ fn verify_merkle(elf: &ElfImage<'_>) -> Result<(), ForgeError> {
     // return Err explicitly instead of allowing verification
     // to silently succeed — total Merkle bypass otherwise.
     if kernel_a_hash_is_zero() {
-        // SAFETY: QEMU debug port 0xE9, ignored on bare metal without QEMU.
-        #[cfg(target_arch = "x86_64")]
-        unsafe {
-            core::arch::asm!("out 0xe9, al", in("al") b'M', options(nomem, nostack));
-        }
+        crate::arch::x86_64::debug_e9_byte(b'M');
         return Err(ForgeError::MerkleVerifyFailed);
     }
     // Blake3 hash of .text ++ .rodata compared to A_MERKLE_ROOT
@@ -690,29 +684,15 @@ fn checklist_idt_has_exophoenix_vectors() -> Result<(), ForgeError> {
     //   verify_idt_entry(idt_phys, 0xF1)?;
     //   verify_idt_entry(idt_phys, 0xF2)?;
     //   verify_idt_entry(idt_phys, 0xF3)?;
-    #[repr(C, packed)]
-    struct Idtr {
-        limit: u16,
-        base: u64,
-    }
-
-    let mut idtr = Idtr { limit: 0, base: 0 };
-    // SAFETY: reading current IDTR in Ring 0.
-    unsafe {
-        core::arch::asm!(
-            "sidt [{ptr}]",
-            ptr = in(reg) &mut idtr,
-            options(nostack, preserves_flags)
-        );
-    }
+    let (idtr_base, idtr_limit) = crate::arch::x86_64::sidt_raw();
 
     let has_vector = |vector: u8| -> bool {
         let entry_size = 16usize;
         let off = (vector as usize).saturating_mul(entry_size);
-        if off + (entry_size - 1) > idtr.limit as usize {
+        if off + (entry_size - 1) > idtr_limit as usize {
             return false;
         }
-        let flags_ptr = (idtr.base as usize + off + 5) as *const u8;
+        let flags_ptr = (idtr_base as usize + off + 5) as *const u8;
         let flags = unsafe { core::ptr::read_volatile(flags_ptr) };
         let present = (flags & 0x80) != 0;
         let gate = flags & 0x0F;

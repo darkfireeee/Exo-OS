@@ -4,10 +4,13 @@
 //! RULE SYS-03: these files contain ONLY thin wrappers.
 //! All business logic is delegated to internal modules (fd::, process::, etc.).
 
+pub mod creds_info;
 pub mod fd;
 pub mod fs_posix;
 pub mod memory;
 pub mod misc;
+pub mod prctl;
 pub mod process;
+pub mod sched;
 pub mod signal;
 pub mod time;

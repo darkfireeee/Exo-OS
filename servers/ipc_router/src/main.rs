@@ -21,52 +21,10 @@
 //! - SYS_IPC_SEND      = 300 (envoie un message)
 //! - SYS_GETPID        = 39  (récupère notre PID)
 
-use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use exo_ipc_router::registry::Registry;
 use exo_ipc_router::security_gate;
 use exo_syscall_abi as syscall;
-
-/// Registre d'endpoints : max 64 services simultanés.
-///
-/// FIX-FNV64 (ANALYSE_SERVERS_EXOOS §P1) : l'ancienne implémentation utilisait
-/// FNV-32 dont l'espace de 2³² valeurs produit des collisions pratiques.
-/// Un attaquant peut forger un nom collisionant pour hijacker un endpoint enregistré.
-/// Remplacé par FNV-64a (espace 2⁶⁴) — probabilité de collision négligeable.
-///
-/// Chaque entrée = (nom hash 64-bit, endpoint_id 32-bit).
-struct Registry {
-    names:     [u64; 64],
-    endpoints: [u32; 64],
-    count:     AtomicU32,
-}
-
-impl Registry {
-    const fn new() -> Self {
-        Self {
-            names:     [0u64; 64],
-            endpoints: [0u32; 64],
-            count:     AtomicU32::new(0),
-        }
-    }
-
-    /// Enregistre ou met à jour un endpoint de manière idempotente. Retourne false si la table est pleine.
-    fn register_hash(&mut self, h: u64, endpoint: u32) -> bool {
-        let n = (self.count.load(Ordering::Relaxed) as usize).min(64);
-        for i in 0..n {
-            if self.names[i] == h {
-                self.endpoints[i] = endpoint;
-                return true;
-            }
-        }
-        if n >= 64 {
-            return false;
-        }
-        self.names[n] = h;
-        self.endpoints[n] = endpoint;
-        self.count.store((n + 1) as u32, Ordering::Release);
-        true
-    }
-}
 
 const IPC_MSG_REGISTER: u32 = 0;
 const IPC_MSG_ROUTE: u32 = 1;
@@ -355,13 +313,4 @@ pub extern "C" fn _start() -> ! {
     }
 }
 
-#[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
-    // En cas de panique inattendue : exit et attendre le watchdog init.
-    unsafe {
-        let _ = syscall::syscall1(syscall::SYS_EXIT, 1);
-    }
-    loop {
-        core::hint::spin_loop();
-    }
-}
+exo_syscall_abi::ring1_panic_exit_handler!(b"");

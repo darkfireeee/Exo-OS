@@ -226,22 +226,7 @@ impl IrqGuard {
     #[inline(always)]
     #[must_use]
     pub fn new() -> Self {
-        let rflags: u64;
-        #[cfg(all(target_arch = "x86_64", not(test)))]
-        // SAFETY: pushfq/popq read RFLAGS; cli clears IRQs; correct order (save before clearing).
-        unsafe {
-            core::arch::asm!(
-                "pushfq",
-                "pop {flags}",
-                "cli",
-                flags = out(reg) rflags,
-                options(nomem)
-            );
-        }
-        #[cfg(any(not(target_arch = "x86_64"), test))]
-        {
-            rflags = 0;
-        }
+        let rflags = crate::arch::x86_64::save_and_cli();
 
         preempt_disable_raw();
         Self {
@@ -277,12 +262,7 @@ impl IrqGuard {
     /// `rflags` must originate from an `IrqGuard` acquired on this CPU.
     #[inline(always)]
     pub unsafe fn restore_irq_flags(rflags: u64) {
-        if rflags & (1 << 9) != 0 {
-            #[cfg(all(target_arch = "x86_64", not(test)))]
-            unsafe {
-                core::arch::asm!("sti", options(nomem, nostack));
-            }
-        }
+        crate::arch::x86_64::restore_if_enabled(rflags);
     }
 }
 
@@ -290,12 +270,9 @@ impl Drop for IrqGuard {
     #[inline(always)]
     fn drop(&mut self) {
         preempt_enable_raw();
-        if self.rflags & (1 << 9) != 0 {
-            #[cfg(all(target_arch = "x86_64", not(test)))]
-            // SAFETY: sti restores IF bit; rflags comes from pushfq/popq in new(); atomic restore.
-            unsafe {
-                core::arch::asm!("sti", options(nomem, nostack));
-            }
+        // SAFETY: restores IF saved in `IrqGuard::new()` on this CPU.
+        unsafe {
+            crate::arch::x86_64::restore_if_enabled(self.rflags);
         }
     }
 }

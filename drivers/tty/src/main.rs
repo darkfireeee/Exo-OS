@@ -8,7 +8,6 @@
 #![no_std]
 #![no_main]
 
-use core::panic::PanicInfo;
 use exo_syscall_abi as syscall;
 use exo_tty::{LineDiscipline, LineEvent, Signal};
 
@@ -136,9 +135,4 @@ fn send_line_to_client(client_pid: u32, line: &[u8]) {
     };
 }
 
-#[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
-    loop {
-        core::hint::spin_loop();
-    }
-}
+exo_syscall_abi::ring1_nostd_panic_handler!(b"");

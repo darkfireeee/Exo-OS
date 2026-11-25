@@ -334,6 +334,26 @@ pub unsafe fn try_read_current_tcb() -> Option<u64> {
     Some(unsafe { read_current_tcb() })
 }
 
+/// Updates slot `gs:[0x08]` with the userspace stack pointer restored by `SYSRETQ`.
+///
+/// # Safety
+/// Kernel GS must be active (after `SWAPGS`).
+#[inline(always)]
+pub unsafe fn set_user_rsp(user_rsp: u64) {
+    #[cfg(test)]
+    {
+        let _ = user_rsp;
+    }
+    #[cfg(not(test))]
+    {
+        core::arch::asm!(
+            "mov qword ptr gs:[0x08], {rsp}",
+            rsp = in(reg) user_rsp,
+            options(nostack, nomem),
+        );
+    }
+}
+
 /// Updates slot `gs:[0x00]` with the incoming thread's kernel stack.
 ///
 /// INVARIANT P1-5: called in `context_switch()` after each selection

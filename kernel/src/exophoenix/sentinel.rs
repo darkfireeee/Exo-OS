@@ -261,19 +261,8 @@ fn generate_liveness_nonce() -> u64 {
         .map_or(false, |features| features.has_rdrand())
     {
         for _ in 0..10 {
-            let value: u64;
-            let ok: u8;
-            // SAFETY: RDRAND in ring0, with explicit CF verification via setc.
-            unsafe {
-                core::arch::asm!(
-                    "rdrand {val}",
-                    "setc {ok}",
-                    val = out(reg) value,
-                    ok = out(reg_byte) ok,
-                    options(nostack, nomem),
-                );
-            }
-            if ok != 0 {
+            // SAFETY: CPUID confirmed RDRAND support above.
+            if let Some(value) = unsafe { crate::arch::x86_64::rdrand64_once() } {
                 return value;
             }
             core::hint::spin_loop();

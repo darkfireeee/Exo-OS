@@ -74,23 +74,9 @@ fn normalize_driver_irq(
     }
 }
 
-#[inline]
-fn caller_is_ps2_driver(caller_pid: u32) -> bool {
-    matches!(
-        crate::security::service_class_of(Pid(caller_pid)),
-        crate::security::ServiceClass::Ps2Driver
-    )
-}
-
-#[inline]
-fn ps2_ioport_allowed(port: u64, width: u64) -> bool {
-    width == 1 && matches!(port, 0x60 | 0x64)
-}
-
-#[inline]
-fn ps2_keyboard_vector() -> u8 {
-    IrqVector::VECTOR_IRQ_BASE + 1
-}
+use crate::drivers::device_claims::{
+    caller_is_ps2_driver, ps2_ioport_allowed, ps2_keyboard_vector,
+};
 
 /// Simplified ABI 32-bit BDF encode/decode:
 /// - bits 31..16 : segment
@@ -765,18 +751,7 @@ pub fn sys_pci_find_device(
     }
 }
 
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct FramebufferInfoWire {
-    pub phys_addr: u64,
-    pub width: u32,
-    pub height: u32,
-    pub stride_pixels: u32,
-    pub bpp: u32,
-    pub format: u32,
-    pub _pad: u32,
-    pub size_bytes: u64,
-}
+pub use exo_wire::display::FramebufferInfoWire;
 
 /// `framebuffer_info(out)` -> boot framebuffer info for Ring1 fb_server.
 /// SYS_FRAMEBUFFER_INFO — exposed only to trusted Ring1 processes.

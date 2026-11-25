@@ -159,7 +159,8 @@ pub fn fork() -> Result<u32, i32> {
     runtime::fork()
 }
 
-/// Capability type tag (`CapabilityType`).
+/// Capability type tag (`CapabilityType`, aligned with Ring 0 `CapObjectType`:
+/// `IpcEndpoint = 1`, `MemoryPage = 2`).
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[stable(feature = "rust1", since = "1.0.0")]
@@ -167,9 +168,9 @@ pub enum CapabilityType {
     #[stable(feature = "rust1", since = "1.0.0")]
     Invalid = 0,
     #[stable(feature = "rust1", since = "1.0.0")]
-    MemoryPage = 1,
+    IpcEndpoint = 1,
     #[stable(feature = "rust1", since = "1.0.0")]
-    IpcEndpoint = 2,
+    MemoryPage = 2,
     #[stable(feature = "rust1", since = "1.0.0")]
     FileObject = 3,
     #[stable(feature = "rust1", since = "1.0.0")]

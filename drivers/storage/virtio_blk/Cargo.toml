@@ -19,7 +19,7 @@ bench = false
 virtio-drivers = { version = "0.7.2", default-features = false }
 spin = { workspace = true }
 log = { workspace = true }
-exo-syscall-abi = { path = "../../../servers/syscall_abi" }
+exo_syscall_abi = { package = "exo-srv-rt", path = "../../../libs/exo-srv-rt" }
 exo-storage-common-hal = { path = "../common_hal" }
 
 [features]

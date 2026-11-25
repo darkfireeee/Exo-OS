@@ -115,11 +115,7 @@ pub fn sys_wait4(pid: u64, status_ptr: u64, options: u64, _rusage: u64, _a5: u64
 
     // Read TCB of current thread from gs:[0x20].
     // SAFETY: kernel GS active in syscall context.
-    let tcb_ptr: u64 = unsafe {
-        let p: u64;
-        core::arch::asm!("mov {}, gs:[0x20]", out(reg) p, options(nostack, nomem));
-        p
-    };
+    let tcb_ptr: u64 = unsafe { crate::arch::x86_64::smp::percpu::read_current_tcb() };
     if tcb_ptr == 0 {
         return EFAULT;
     }
@@ -160,11 +156,7 @@ pub fn sys_waitid(idtype: u64, id: u64, infop: u64, options: u64, _rusage: u64, 
 
     // Read TCB of current thread from gs:[0x20].
     // SAFETY: kernel GS active in syscall context.
-    let tcb_ptr: u64 = unsafe {
-        let p: u64;
-        core::arch::asm!("mov {}, gs:[0x20]", out(reg) p, options(nostack, nomem));
-        p
-    };
+    let tcb_ptr: u64 = unsafe { crate::arch::x86_64::smp::percpu::read_current_tcb() };
     if tcb_ptr == 0 {
         return EFAULT;
     }

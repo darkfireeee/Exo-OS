@@ -1,7 +1,4 @@
-#[path = "../src/routing.rs"]
-mod routing;
-
-use routing::RouteTable;
+use exo_network_server::routing::RouteTable;
 
 #[test]
 fn lookup_uses_longest_prefix_then_metric() {

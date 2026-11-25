@@ -13,11 +13,12 @@
 //! 5. Live CMOS RTC Calendar & system HUD cards (`ExoDoctor`, `ExoFS Storage`, `Wayland`, `About Exo-OS`).
 
 use crate::shared_font::{glyph_for, FONT_GLYPH_HEIGHT, FONT_GLYPH_WIDTH};
-use crate::wayland::{WaylandState, MAX_SHM_SURFACES};
+use crate::surface_table::{SurfaceTable as WaylandState, MAX_SHM_SURFACES};
 use crate::Framebuffer;
 use exo_syscall_abi as syscall;
 
-static WALLPAPER_RGB565: &[u8] = include_bytes!("wallpaper_640x348_rgb565.bin");
+static WALLPAPER_RGB565: &[u8] =
+    include_bytes!("../../../assets/wallpapers/wallpaper_640x348_rgb565.bin");
 const WP_SRC_W: u32 = 640;
 const WP_SRC_H: u32 = 348;
 

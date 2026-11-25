@@ -267,11 +267,7 @@ fn save_fpu_regs_to_bytes() -> [u8; 512] {
     let mut fp = AlignedFpRegs([0u8; 512]);
     // SAFETY: fp is aligned on 16 bytes (required by fxsave64).
     unsafe {
-        core::arch::asm!(
-            "fxsave64 [{}]",
-            in(reg) fp.0.as_mut_ptr(),
-            options(nostack, preserves_flags)
-        );
+        crate::arch::x86_64::cpu::fpu::fxsave(fp.0.as_mut_ptr());
     }
     fp.0
 }
@@ -291,11 +287,7 @@ pub fn restore_fpu_regs_from_bytes(src: &[u8; 512]) {
     fp.0[24..28].copy_from_slice(&mxcsr.to_le_bytes());
     // SAFETY: fp is aligned on 16 bytes and MXCSR is sanitized.
     unsafe {
-        core::arch::asm!(
-            "fxrstor64 [{}]",
-            in(reg) fp.0.as_ptr(),
-            options(nostack, preserves_flags)
-        );
+        crate::arch::x86_64::cpu::fpu::fxrstor(fp.0.as_ptr());
     }
 }
 

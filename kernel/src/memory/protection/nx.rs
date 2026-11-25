@@ -140,7 +140,7 @@ static NX_REGION_RULES: [NxRegionRule; 6] = [
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Read / write MSR EFER via inline asm!
+// Read / write MSR EFER via arch::x86_64::cpu::msr
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Reads the MSR identified by `msr`.
@@ -149,16 +149,7 @@ static NX_REGION_RULES: [NxRegionRule; 6] = [
 /// Must be executed in CPL 0 (ring 0).
 #[inline(always)]
 unsafe fn rdmsr(msr: u32) -> u64 {
-    let lo: u32;
-    let hi: u32;
-    core::arch::asm!(
-        "rdmsr",
-        in("ecx") msr,
-        out("eax") lo,
-        out("edx") hi,
-        options(nostack, nomem),
-    );
-    ((hi as u64) << 32) | (lo as u64)
+    crate::arch::x86_64::cpu::msr::read_msr(msr)
 }
 
 /// Writes `val` into the MSR identified by `msr`.
@@ -167,15 +158,7 @@ unsafe fn rdmsr(msr: u32) -> u64 {
 /// Must be executed in CPL 0. Modifying EFER incorrectly can render the CPU unusable.
 #[inline(always)]
 unsafe fn wrmsr(msr: u32, val: u64) {
-    let lo = val as u32;
-    let hi = (val >> 32) as u32;
-    core::arch::asm!(
-        "wrmsr",
-        in("ecx") msr,
-        in("eax") lo,
-        in("edx") hi,
-        options(nostack, nomem),
-    );
+    crate::arch::x86_64::cpu::msr::write_msr(msr, val);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -284,11 +267,7 @@ where
             if new_pte != pte {
                 pte_ptr.write_volatile(new_pte);
                 // Invalidate TLB for this page.
-                core::arch::asm!(
-                    "invlpg [{addr}]",
-                    addr = in(reg) vaddr as usize,
-                    options(nostack, nomem, preserves_flags),
-                );
+                crate::arch::x86_64::invlpg(vaddr);
             }
         }
     }

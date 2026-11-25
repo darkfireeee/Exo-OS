@@ -103,18 +103,7 @@ pub fn recv_request(request: &mut SchedulerRequest) -> Result<bool, i64> {
 }
 
 pub fn send_reply(destination_pid: u32, reply: &SchedulerReply) -> i64 {
-    // SAFETY: `reply` est une structure POD locale envoyée telle quelle au noyau.
-    unsafe {
-        syscall::syscall6(
-            syscall::SYS_IPC_SEND,
-            destination_pid as u64,
-            reply as *const SchedulerReply as u64,
-            core::mem::size_of::<SchedulerReply>() as u64,
-            0,
-            0,
-            0,
-        )
-    }
+    syscall::send_reply(destination_pid as u64, reply)
 }
 
 pub fn send_heartbeat() -> SchedulerReply {

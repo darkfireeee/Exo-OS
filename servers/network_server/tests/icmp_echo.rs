@@ -1,5 +1,4 @@
-#[path = "../src/icmp.rs"]
-mod icmp;
+use exo_network_server::icmp;
 
 #[test]
 fn echo_request_is_rewritten_as_reply() {

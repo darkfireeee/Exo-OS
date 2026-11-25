@@ -43,6 +43,15 @@ use super::cpu::msr;
 use super::smp::percpu;
 use core::sync::atomic::{AtomicU64, Ordering};
 
+// ASM context switch — embedded via global_asm! under arch/x86_64/ so
+// scheduler/core/switch.rs keeps zero raw assembly while preserving its FPU
+// save/restore orchestration (`scheduler-switch-fpu-state`).
+#[cfg(target_arch = "x86_64")]
+core::arch::global_asm!(
+    include_str!("../../scheduler/asm/switch_asm.s"),
+    options(att_syntax)
+);
+
 // ─────────────────────────────────────────────────────────────────────────────
 // MSR Constants
 // ─────────────────────────────────────────────────────────────────────────────

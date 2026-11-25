@@ -16,7 +16,6 @@
 
 mod server;
 
-use core::panic::PanicInfo;
 use core::sync::atomic::Ordering;
 use exo_shield::{
     behavioral, engine, forensics, hooks, ipc_gate, ml, network, sandbox, signatures,
@@ -132,9 +131,4 @@ pub extern "C" fn _start() -> ! {
     }
 }
 
-#[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
-    loop {
-        core::hint::spin_loop();
-    }
-}
+exo_syscall_abi::ring1_nostd_panic_handler!(b"");

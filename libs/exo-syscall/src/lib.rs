@@ -6,7 +6,7 @@
 #![no_std]
 #![forbid(unsafe_op_in_unsafe_fn)]
 
-pub use exo_syscall_abi as abi;
+pub use exo_abi as abi;
 pub use exo_types::epoll::EpollEventAbi as EpollEvent;
 
 pub mod exofs;

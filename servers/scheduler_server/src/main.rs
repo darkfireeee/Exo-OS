@@ -8,7 +8,6 @@
 //! - budgets temps réel bornés ;
 //! - affinité CPU et métriques de yield.
 
-use core::panic::PanicInfo;
 
 use spin::Mutex;
 
@@ -464,15 +463,7 @@ fn dispatch(request: &SchedulerRequest) -> SchedulerReply {
     }
 }
 
-#[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
-    unsafe {
-        let _ = exo_syscall_abi::syscall1(exo_syscall_abi::SYS_EXIT, 1);
-    }
-    loop {
-        core::hint::spin_loop();
-    }
-}
+exo_syscall_abi::ring1_panic_exit_handler!(b"");
 
 fn apply_kernel_priority(tid: u32, nice: i8) -> Result<(), i64> {
     // SAFETY: ABI POSIX standard `setpriority(PRIO_PROCESS=0, tid, nice)`.

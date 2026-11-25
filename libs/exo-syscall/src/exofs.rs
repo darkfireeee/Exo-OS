@@ -3,10 +3,10 @@
 use crate::{abi, decode_ret, SysError, SysResult};
 
 pub use abi::{
-    ExoCapTokenWire, ExofsOpenArgs, ExofsPathResolveResult, EXOFS_RIGHT_ADMIN, EXOFS_RIGHT_ALL,
-    EXOFS_RIGHT_CREATE, EXOFS_RIGHT_DELETE, EXOFS_RIGHT_EXEC, EXOFS_RIGHT_LIST, EXOFS_RIGHT_READ,
-    EXOFS_RIGHT_READ_ONLY, EXOFS_RIGHT_READ_WRITE, EXOFS_RIGHT_SETMETA, EXOFS_RIGHT_STAT,
-    EXOFS_RIGHT_WRITE,
+    CapTokenUser, ExoCapTokenWire, ExofsOpenArgs, ExofsPathResolveResult, EXOFS_RIGHT_ADMIN,
+    EXOFS_RIGHT_ALL, EXOFS_RIGHT_CREATE, EXOFS_RIGHT_DELETE, EXOFS_RIGHT_EXEC, EXOFS_RIGHT_LIST,
+    EXOFS_RIGHT_READ, EXOFS_RIGHT_READ_ONLY, EXOFS_RIGHT_READ_WRITE, EXOFS_RIGHT_SETMETA,
+    EXOFS_RIGHT_STAT, EXOFS_RIGHT_WRITE,
 };
 
 pub const EXOFS_STAT_LEN: usize = 104;
@@ -27,36 +27,6 @@ pub const EXOFS_SEEK_END: u32 = 2;
 pub const EXOFS_MODE_FILE: u32 = 0o100644;
 pub const EXOFS_MODE_DIR: u32 = 0o040755;
 pub const EXOFS_MODE_SYMLINK: u32 = 0o120777;
-
-/// Token de capacité utilisateur 48 octets transmis via `AT_CAP_TOKEN = 52` ou `SYS_EXO_CAP_DELEGATE`.
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct CapTokenUser {
-    pub raw: [u8; 48],
-}
-
-impl Default for CapTokenUser {
-    fn default() -> Self {
-        Self { raw: [0u8; 48] }
-    }
-}
-
-impl CapTokenUser {
-    #[inline]
-    pub fn generation(&self) -> u32 {
-        u32::from_le_bytes([self.raw[32], self.raw[33], self.raw[34], self.raw[35]])
-    }
-
-    #[inline]
-    pub fn rights(&self) -> u32 {
-        u32::from_le_bytes([self.raw[36], self.raw[37], self.raw[38], self.raw[39]])
-    }
-
-    #[inline]
-    pub fn owner_pid(&self) -> u32 {
-        u32::from_le_bytes([self.raw[40], self.raw[41], self.raw[42], self.raw[43]])
-    }
-}
 
 /// Statut d'objet ExoFS (104 octets — `EXOFS_STAT_LEN`).
 #[repr(C)]

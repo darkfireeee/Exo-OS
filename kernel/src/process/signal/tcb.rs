@@ -345,53 +345,13 @@ impl SignalTcb {
 #[cfg(target_arch = "x86_64")]
 #[inline]
 unsafe fn read_u128_cmpxchg16b(ptr: *mut u64) -> (u64, u64) {
-    let mut lo = 0u64;
-    let mut hi = 0u64;
-    // Pin every operand to explicit non-rbx registers so LLVM can never alias
-    // `ptr`, outputs, or flags across manual rbx save/restore.
-    core::arch::asm!(
-        "mov r8, rbx",
-        "xor ebx, ebx",
-        "xor ecx, ecx",
-        "lock cmpxchg16b [rdi]",
-        "mov rbx, r8",
-        in("rdi") ptr,
-        inout("rax") lo,
-        inout("rdx") hi,
-        out("rcx") _,
-        out("r8") _,
-        options(nostack)
-    );
-    (lo, hi)
+    crate::arch::x86_64::cmpxchg16b_load(ptr)
 }
 
 #[cfg(target_arch = "x86_64")]
 #[inline]
 unsafe fn write_u128_cmpxchg16b(ptr: *mut u64, new_lo: u64, new_hi: u64) {
-    let mut prev_lo = ptr.read_volatile();
-    let mut prev_hi = ptr.add(1).read_volatile();
-    loop {
-        let ok: u64;
-        core::arch::asm!(
-            "mov r8, rbx",
-            "mov rbx, rsi",
-            "lock cmpxchg16b [rdi]",
-            "sete r9b",
-            "mov rbx, r8",
-            "movzx r9d, r9b",
-            in("rdi") ptr,
-            in("rsi") new_lo,
-            in("rcx") new_hi,
-            inout("rax") prev_lo,
-            inout("rdx") prev_hi,
-            out("r8") _,
-            lateout("r9") ok,
-            options(nostack)
-        );
-        if ok != 0 {
-            break;
-        }
-    }
+    crate::arch::x86_64::cmpxchg16b_store(ptr, new_lo, new_hi);
 }
 
 impl Default for SignalTcb {

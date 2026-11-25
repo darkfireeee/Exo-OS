@@ -211,13 +211,9 @@ pub unsafe fn block_current_thread() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ASM context switch — embedded via global_asm! (switch_asm.s)
-//
-// Including full .s file in the Rust compilation unit avoids needing a
-// build.rs/cc to compile an external .s. The linker sees the symbols
-// `context_switch_asm` and `switch_to_new_thread` directly in the produced rlib.
+// ASM context switch — assembled under `arch::x86_64::sched_iface`
+// (`context_switch_asm` and `switch_to_new_thread` symbols in rlib).
 // ─────────────────────────────────────────────────────────────────────────────
-core::arch::global_asm!(include_str!("../asm/switch_asm.s"), options(att_syntax));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FFI to context switch ASM

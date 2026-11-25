@@ -17,3 +17,6 @@ bench = false
 [features]
 default = []
 dynamic_linking = []
+
+[dependencies]
+exo-abi = { path = "../libs/exo-abi" }

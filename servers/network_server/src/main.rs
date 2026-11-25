@@ -9,17 +9,13 @@ use core::panic::PanicInfo;
 
 use spin::Mutex;
 
-mod buf_pool;
-mod dhcp;
+pub(crate) use exo_network_server::{
+    buf_pool, dhcp, protocol, routing, socket_table, stats, tcp_store,
+};
+
 mod driver_link;
-mod icmp;
-mod transient_drain;
-mod protocol;
-mod routing;
 mod smoltcp_iface;
-mod socket_table;
-mod stats;
-mod tcp_store;
+mod transient_drain;
 mod virtio_device;
 
 use buf_pool::{NetBufPool, VIRTIO_NET_HDR_SIZE_MODERN};

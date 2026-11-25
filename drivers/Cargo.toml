@@ -12,4 +12,4 @@ crate-type = ["rlib"]
 
 [dependencies]
 spin = { version = "0.9", default-features = false, features = ["spin_mutex"] }
-exo-syscall-abi = { path = "../servers/syscall_abi" }
+exo_syscall_abi = { package = "exo-srv-rt", path = "../libs/exo-srv-rt" }

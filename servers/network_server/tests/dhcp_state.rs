@@ -1,7 +1,4 @@
-#[path = "../src/dhcp.rs"]
-mod dhcp;
-
-use dhcp::{DhcpAction, DhcpClient, DhcpPhase, DHCP_FIXED_LEN, DHCP_MAGIC_COOKIE};
+use exo_network_server::dhcp::{DhcpAction, DhcpClient, DhcpPhase, DHCP_FIXED_LEN, DHCP_MAGIC_COOKIE};
 
 #[test]
 fn dhcp_discover_offer_request_ack_reaches_bound() {

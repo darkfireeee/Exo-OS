@@ -55,14 +55,7 @@ fn state_mut() -> &'static mut AudioServerState {
 }
 
 fn boot_log(msg: &[u8]) {
-    unsafe {
-        let _ = syscall::syscall3(
-            syscall::SYS_EXO_LOG,
-            msg.as_ptr() as u64,
-            msg.len() as u64,
-            1,
-        );
-    }
+    syscall::boot_log(msg);
 }
 
 /// Tente de détecter et d'attacher un périphérique audio PCI (Intel HDA ou VirtIO Sound).

@@ -15,7 +15,7 @@ test = false
 bench = false
 
 [dependencies]
-exo-syscall-abi = { path = "../../../servers/syscall_abi" }
+exo_syscall_abi = { package = "exo-srv-rt", path = "../../../libs/exo-srv-rt" }
 
 [features]
 default = []

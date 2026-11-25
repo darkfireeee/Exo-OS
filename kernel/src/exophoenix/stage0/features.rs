@@ -74,22 +74,7 @@ pub static B_FEATURES: BootFeatures = BootFeatures::new();
 
 #[inline(always)]
 pub fn cpuid_ex(leaf: u32, subleaf: u32) -> (u32, u32, u32, u32) {
-    let (eax, ecx, edx): (u32, u32, u32);
-    let ebx_result: u64;
-    // SAFETY: CPUID is non-privileged; xchg pattern to preserve rbx.
-    unsafe {
-        core::arch::asm!(
-            "xchg {tmp:r}, rbx",
-            "cpuid",
-            "xchg {tmp:r}, rbx",
-            inout("eax") leaf => eax,
-            inout("ecx") subleaf => ecx,
-            out("edx") edx,
-            tmp = inout(reg) 0u64 => ebx_result,
-            options(nostack, nomem),
-        );
-    }
-    (eax, ebx_result as u32, ecx, edx)
+    crate::arch::x86_64::cpuid_ex(leaf, subleaf)
 }
 
 #[inline(always)]
@@ -192,7 +177,7 @@ pub fn vmxoff_if_active() {
 
     // SAFETY: ring0 privileged instruction. We do not panic on VMXOFF failure.
     unsafe {
-        core::arch::asm!("vmxoff", options(nostack));
+        x86_64::vmxoff_raw();
         x86_64::write_cr4(cr4 & !CR4_VMXE);
     }
 

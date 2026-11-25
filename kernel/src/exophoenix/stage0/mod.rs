@@ -90,11 +90,8 @@ pub fn stage0_init_all_steps(kernel_a_boot: bool) -> Stage0Summary {
 
     #[inline(always)]
     fn s0dbg(tag: u8) {
-        // SAFETY: port 0xE9 = QEMU ISA debug device, no memory effect, available right from reset.
-        unsafe {
-            core::arch::asm!("out 0xE9, al", in("al") b'@', options(nomem, nostack));
-            core::arch::asm!("out 0xE9, al", in("al") tag, options(nomem, nostack));
-        }
+        crate::arch::x86_64::debug_e9_byte(b'@');
+        crate::arch::x86_64::debug_e9_byte(tag);
     }
     s0dbg(b'1'); // SSR ok/degraded
 
@@ -201,7 +198,7 @@ pub fn stage0_init() -> ! {
         PHOENIX_STATE.store(PhoenixState::Degraded as u8, Ordering::Release);
         loop {
             unsafe {
-                core::arch::asm!("hlt", options(nostack, nomem));
+                crate::arch::x86_64::halt_once();
             }
         }
     }
@@ -214,7 +211,7 @@ pub fn stage0_init() -> ! {
         PHOENIX_STATE.store(PhoenixState::Degraded as u8, Ordering::Release);
         loop {
             unsafe {
-                core::arch::asm!("hlt", options(nostack, nomem));
+                crate::arch::x86_64::halt_once();
             }
         }
     }

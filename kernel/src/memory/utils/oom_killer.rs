@@ -178,18 +178,7 @@ pub fn set_tsc_hz(hz: u64) {
 
 #[inline]
 fn rdtsc() -> u64 {
-    let lo: u32;
-    let hi: u32;
-    // SAFETY: rdtsc available on x86_64; non-serializing sufficient for OOM timestamp.
-    unsafe {
-        core::arch::asm!(
-            "rdtsc",
-            out("eax") lo,
-            out("edx") hi,
-            options(nostack, nomem),
-        );
-    }
-    ((hi as u64) << 32) | (lo as u64)
+    crate::arch::x86_64::cpu::tsc::read_tsc()
 }
 
 /// Returns `true` if enough time has elapsed since last OOM kill.

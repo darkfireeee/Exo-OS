@@ -45,21 +45,7 @@ pub fn hash_blake3(data: &[u8]) -> [u8; 32] {
 }
 
 pub fn send_reply(destination: u64, reply: &CryptoReply) {
-    if destination == 0 {
-        return;
-    }
-
-    let _ = unsafe {
-        syscall::syscall6(
-            syscall::SYS_IPC_SEND,
-            destination,
-            reply as *const CryptoReply as u64,
-            core::mem::size_of::<CryptoReply>() as u64,
-            0,
-            0,
-            0,
-        )
-    };
+    let _ = syscall::send_reply(destination, reply);
 }
 
 pub fn authorize_request_with_rights(req: &CryptoRequest, required_rights: u32) -> Result<u64, u32> {

@@ -1,184 +1,35 @@
-//! storage — Couche d'accès disque ExoFS
-//!
-//! Ce module implémente l'intégralité de la couche de stockage d'ExoFS :
-//! superblock, heap, blocs, cache, blobs, objets, checksums, compression,
-//! déduplication et I/O batch.
-//!
-//! # Architecture
-//!
-//! ```text
-//! ┌─────────────────────────────────────────────────────────────────────┐
-//! │  Couche objet  │  object_writer / object_reader                     │
-//! ├─────────────────────────────────────────────────────────────────────┤
-//! │  Couche blob   │  blob_writer / blob_reader                         │
-//! │                │  (pipeline : raw→BlobId→dédup→compress→encrypt→checksum) │
-//! ├───────────────────────────────────────────────────────────────────-─┤
-//! │  Extent / I/O  │  extent_writer / extent_reader / io_batch          │
-//! ├─────────────────────────────────────────────────────────────────────┤
-//! │  Compression   │  compression_choice / writer / reader              │
-//! │  Dédup         │  dedup_writer / dedup_reader                       │
-//! │  Checksum      │  checksum_writer / checksum_reader                 │
-//! ├─────────────────────────────────────────────────────────────────────┤
-//! │  Blocs         │  block_cache / block_allocator                     │
-//! ├─────────────────────────────────────────────────────────────────────┤
-//! │  Heap          │  heap / heap_allocator / heap_coalesce / heap_free_map │
-//! ├─────────────────────────────────────────────────────────────────────┤
-//! │  Superblock    │  superblock / superblock_backup                     │
-//! ├─────────────────────────────────────────────────────────────────────┤
-//! │  Layout        │  layout / storage_stats                            │
-//! └─────────────────────────────────────────────────────────────────────┘
-//! ```
-//!
-//! # Règles spec appliquées dans tout le module
-//!
-//! | Règle | Description |
-//! |-------|-------------|
-//! | **HASH-02** | BlobId = Blake3 sur données RAW, AVANT compression |
-//! | **WRITE-02** | `bytes_written == expected` après chaque écriture disque |
-//! | **HDR-03** | magic + checksum vérifiés AVANT tout accès au payload |
-//! | **ONDISK-03** | `AtomicXxx` INTERDIT dans les structs `#[repr(C)]` |
-//! | **OOM-02** | `try_reserve(1)` avant chaque `Vec::push` |
-//! | **ARITH-02** | `checked_add/mul()` pour toute arithmétique sur offsets |
-//! | **BACKUP-01** | 3 miroirs superblock écrits à chaque commit |
-//! | **BACKUP-02** | Recovery sélectionne le miroir avec epoch_current max |
-
-extern crate alloc;
-use alloc::vec::Vec;
-use core::sync::atomic::{AtomicBool, Ordering};
-
-// ─────────────────────────────────────────────────────────────
-// Déclarations de modules (25 fichiers)
-// ─────────────────────────────────────────────────────────────
-
-/// Constantes de layout disque et fonctions d'alignement
-pub mod layout;
-
-/// Superblock ExoFS : structure disque + gestionnaire en mémoire
-pub mod superblock;
-
-/// Gestion des miroirs de superblock (BACKUP-01/02)
-pub mod superblock_backup;
-
-/// Carte de bits du heap libre
-pub mod heap_free_map;
-
-/// Coalescence des blocs adjacents du heap
-pub mod heap_coalesce;
-
-/// Allocateur de plages du heap
-pub mod heap_allocator;
-
-/// Interface unifiée du heap ExoFS
-pub mod heap;
-
-/// Allocateur de blocs physiques avec support transactions
-pub mod block_allocator;
-
-/// Cache LRU de blocs (write-back)
-pub mod block_cache;
-
-/// Batching et coalescing d'opérations I/O
-pub mod io_batch;
-
-/// Écriture de checksums Blake3 sur flux/blocs
-pub mod checksum_writer;
-
-/// Lecture et vérification de checksums Blake3
-pub mod checksum_reader;
-
-/// Sélection de l'algorithme de compression
-pub mod compression_choice;
-
-/// Compression de blobs (Lz4 / Zstd)
-pub mod compression_writer;
-
-/// Décompression de blobs (Lz4 / Zstd)
-pub mod compression_reader;
-
-/// Index de déduplication (écriture)
-pub mod dedup_writer;
-
-/// Résolution de déduplication (lecture)
-pub mod dedup_reader;
-
-/// Écriture d'extents (listes de blocs contigus)
-pub mod extent_writer;
-
-/// Lecture d'extents
-pub mod extent_reader;
-
-/// Pipeline complet d'écriture de blobs
-pub mod blob_writer;
-
-/// Pipeline complet de lecture et vérification de blobs
-pub mod blob_reader;
-
-/// Pipeline complet d'écriture d'objets (multi-blobs)
-pub mod object_writer;
-
-/// Pipeline complet de lecture d'objets
-pub mod object_reader;
+//! storage — Couche d'accès disque ExoFS (façade de câblage).
 
 pub mod ata_pio;
-pub mod ramdisk;
-/// Statistiques globales du module storage
-pub mod storage_stats;
-pub mod virtio_adapter; // pilote ATA/IDE PIO (repli quand virtio absent : Bochs / QEMU pc)
-
-/// Résolution réelle de la partition ExoFS via GPT (parseur partagé `exo-partition`).
-/// Remplace l'hypothèse « disque entier = volume » par une localisation par type-GUID.
+pub mod blob_reader;
+pub mod blob_writer;
+pub mod block_allocator;
+pub mod block_cache;
+pub mod checksum_reader;
+pub mod checksum_writer;
+pub mod compression_choice;
+pub mod compression_reader;
+pub mod compression_writer;
+pub mod dedup_reader;
+pub mod dedup_writer;
+pub mod extent_reader;
+pub mod extent_writer;
+pub mod heap;
+pub mod heap_allocator;
+pub mod heap_coalesce;
+pub mod heap_free_map;
+pub mod io_batch;
+pub mod layout;
+mod lifecycle;
+pub mod object_reader;
+pub mod object_writer;
 pub mod partition_scan;
+pub mod ramdisk;
+pub mod storage_stats;
+pub mod superblock;
+pub mod superblock_backup;
+pub mod virtio_adapter;
 
-// ─────────────────────────────────────────────────────────────
-// Re-exports principaux
-// ─────────────────────────────────────────────────────────────
-
-// Layout
-pub use layout::{align_down, align_up, DiskZone, LayoutMap, BLOCK_SIZE, HEAP_START_OFFSET};
-
-// Superblock
-pub use superblock::{
-    superblock_mirror_offsets, verify_superblock_bytes, ExoSuperblockDisk, MirrorSlot,
-    SbManagerState, SuperblockManager, SuperblockSnapshot, EXOFS_MAGIC, FORMAT_VERSION_MAJOR,
-    SUPERBLOCK_DISK_SIZE,
-};
-
-// Superblock backup
-pub use superblock_backup::{recover_superblock, write_superblock_mirrors};
-
-// Heap
-pub use heap::{ExofsHeap, HeapConfig};
-pub use heap_allocator::{AllocationPolicy, HeapAllocator};
-pub use heap_coalesce::{CoalesceReport, HeapCoalescer};
-pub use heap_free_map::HeapFreeMap;
-
-// Block allocator
-pub use block_allocator::{BlockAllocator, ExtentHandle, ExtentState};
-
-// Block cache
-pub use block_cache::BlockCache;
-
-// I/O batch
-pub use io_batch::{BatchStats, IoBatch, IoBatchQueue, IoBatchReport};
-
-// Checksums
-pub use checksum_reader::{ChecksumReader, VerifyMode};
-pub use checksum_writer::{BlockChecksumMap, ChecksumTag, ChecksumWriter};
-
-// Compression
-pub use compression_choice::{choose_compression, CompressionType, ContentHint};
-pub use compression_reader::DecompressReader;
-pub use compression_writer::{CompressWriter, CompressedBlockHeader};
-
-// Déduplication
-pub use dedup_reader::DedupReader;
-pub use dedup_writer::{DedupDecision, DedupEntry, DedupWriter};
-
-// Extents
-pub use extent_reader::{ExtentBlockIterator, ExtentReader};
-pub use extent_writer::{Extent, ExtentMap, ExtentWriter};
-
-// Blobs
 pub use blob_reader::{
     verify_blob_range, BatchBlobReadResult, BatchBlobReader, BlobReadRequest, BlobReadResult,
     BlobReader, BlobScanner, BlobVerifyMode, IntegrityReport, BLOB_READER_STATS,
@@ -187,8 +38,27 @@ pub use blob_writer::{
     blob_total_disk_size, verify_blob_header, BatchBlobWriter, BlobHeaderDisk, BlobWriteResult,
     BlobWriter, BlobWriterConfig, BLOB_HEADER_MAGIC, BLOB_HEADER_SIZE, BLOB_WRITER_STATS,
 };
-
-// Objets
+pub use block_allocator::{BlockAllocator, ExtentHandle, ExtentState};
+pub use block_cache::BlockCache;
+pub use checksum_reader::{ChecksumReader, VerifyMode};
+pub use checksum_writer::{BlockChecksumMap, ChecksumTag, ChecksumWriter};
+pub use compression_choice::{choose_compression, CompressionType, ContentHint};
+pub use compression_reader::DecompressReader;
+pub use compression_writer::{CompressWriter, CompressedBlockHeader};
+pub use dedup_reader::DedupReader;
+pub use dedup_writer::{DedupDecision, DedupEntry, DedupWriter};
+pub use extent_reader::{ExtentBlockIterator, ExtentReader};
+pub use extent_writer::{Extent, ExtentMap, ExtentWriter};
+pub use heap::{ExofsHeap, HeapConfig};
+pub use heap_allocator::{AllocationPolicy, HeapAllocator};
+pub use heap_coalesce::{CoalesceReport, HeapCoalescer};
+pub use heap_free_map::HeapFreeMap;
+pub use io_batch::{BatchStats, IoBatch, IoBatchQueue, IoBatchReport};
+pub use layout::{align_down, align_up, DiskZone, LayoutMap, BLOCK_SIZE, HEAP_START_OFFSET};
+pub use lifecycle::{
+    storage_init, storage_is_ready, storage_shutdown, StorageHealthReport, StorageInitError,
+    StorageInitResult,
+};
 pub use object_reader::{
     verify_objects, ObjectIntegrityReport, ObjectMeta, ObjectReadResult, ObjectReader,
     ObjectScanner, ObjectVerifyMode, OBJECT_READER_STATS,
@@ -197,319 +67,10 @@ pub use object_writer::{
     BlobRef, ObjectHeaderDisk, ObjectType, ObjectWriteResult, ObjectWriter, ObjectWriterConfig,
     OBJECT_HEADER_MAGIC, OBJECT_HEADER_SIZE, OBJECT_WRITER_STATS,
 };
-
-// Statistiques
 pub use storage_stats::{StorageStats, StorageStatsSnapshot, STORAGE_STATS};
-
-// ─────────────────────────────────────────────────────────────
-// Initialisation et arrêt du module storage
-// ─────────────────────────────────────────────────────────────
-
-/// Vrai si le module storage a été initialisé
-static STORAGE_INITIALIZED: AtomicBool = AtomicBool::new(false);
-
-/// Vrai si le module storage est en cours d'arrêt
-static STORAGE_SHUTDOWN: AtomicBool = AtomicBool::new(false);
-
-/// Résultat de l'initialisation
-#[derive(Debug, Clone)]
-pub struct StorageInitResult {
-    pub superblock_epoch: u64,
-    pub free_bytes: u64,
-    pub object_count: u64,
-    pub blob_count: u64,
-    pub disk_size: u64,
-}
-
-/// Erreurs d'initialisation spécifiques
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StorageInitError {
-    AlreadyInitialized,
-    InvalidDisk,
-    SuperblockCorrupted,
-    DiskTooSmall,
-    AllMirrorsFailed,
-}
-
-/// Initialise le module storage pour un volume existant.
-///
-/// Monte le superblock, initialise les statistiques globales.
-/// Idempotent : retourne une erreur si déjà initialisé.
-pub fn storage_init<ReadFn>(
-    disk_size: u64,
-    read_fn: ReadFn,
-) -> Result<StorageInitResult, StorageInitError>
-where
-    ReadFn: Fn(
-        crate::fs::exofs::core::DiskOffset,
-        usize,
-    ) -> crate::fs::exofs::core::ExofsResult<Vec<u8>>,
-{
-    if STORAGE_INITIALIZED.load(Ordering::Acquire) {
-        return Err(StorageInitError::AlreadyInitialized);
-    }
-    if disk_size < superblock::MIN_DISK_SIZE {
-        return Err(StorageInitError::DiskTooSmall);
-    }
-
-    let mgr = SuperblockManager::mount(disk_size, read_fn)
-        .map_err(|_| StorageInitError::AllMirrorsFailed)?;
-
-    let snap = mgr.snapshot();
-    let result = StorageInitResult {
-        superblock_epoch: snap.epoch,
-        free_bytes: snap.free_bytes,
-        object_count: snap.object_count,
-        blob_count: snap.blob_count,
-        disk_size: snap.disk_size,
-    };
-
-    STORAGE_INITIALIZED.store(true, Ordering::Release);
-
-    Ok(result)
-}
-
-/// Prépare le module pour l'arrêt du système.
-///
-/// Marque le module comme en cours d'arrêt ; les opérations d'écriture
-/// doivent être refusées après cet appel.
-pub fn storage_shutdown() {
-    STORAGE_SHUTDOWN.store(true, Ordering::SeqCst);
-    STORAGE_INITIALIZED.store(false, Ordering::SeqCst);
-}
-
-/// Vrai si le module storage est initialisé et prêt
-#[inline]
-pub fn storage_is_ready() -> bool {
-    STORAGE_INITIALIZED.load(Ordering::Acquire) && !STORAGE_SHUTDOWN.load(Ordering::Acquire)
-}
-
-// ─────────────────────────────────────────────────────────────
-// Rapport de santé du module
-// ─────────────────────────────────────────────────────────────
-
-/// Rapport de santé global du module storage
-#[derive(Debug)]
-pub struct StorageHealthReport {
-    pub is_ready: bool,
-    pub stats: StorageStatsSnapshot,
-    pub write_errors: u64,
-    pub read_errors: u64,
-    pub checksum_errors: u64,
-    pub dedup_hit_rate_pct: u64,
-    pub compress_ratio_pct: u64,
-}
-
-impl StorageHealthReport {
-    /// Collecte un rapport de santé à partir des compteurs globaux
-    pub fn collect() -> Self {
-        let snap = STORAGE_STATS.snapshot();
-        let total_ops = snap.blobs_created.saturating_add(snap.blobs_deleted);
-        let dedup_pct = if total_ops > 0 {
-            snap.dedup_hits.saturating_mul(100) / total_ops
-        } else {
-            0
-        };
-
-        let compress_ratio_pct = if snap.compress_bytes_in > 0 {
-            let saved = snap
-                .compress_bytes_in
-                .saturating_sub(snap.compress_bytes_out);
-            saved.saturating_mul(100) / snap.compress_bytes_in
-        } else {
-            0
-        };
-
-        Self {
-            is_ready: storage_is_ready(),
-            write_errors: snap.io_errors,
-            read_errors: snap.io_errors,
-            checksum_errors: snap.checksum_errors,
-            dedup_hit_rate_pct: dedup_pct,
-            compress_ratio_pct,
-            stats: snap,
-        }
-    }
-
-    /// Vrai si le storage est dans un état sain
-    pub fn is_healthy(&self) -> bool {
-        self.is_ready && self.checksum_errors == 0
-    }
-}
-
-// ─────────────────────────────────────────────────────────────
-// Tests de fumée du module
-// ─────────────────────────────────────────────────────────────
-
-#[cfg(test)]
-use crate::fs::exofs::test_support::TestUnwrapExt;
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::fs::exofs::core::{DiskOffset, EpochId, ObjectId};
-    use alloc::vec;
-
-    const DISK_SZ: u64 = 32 * 1024 * 1024;
-
-    /// Crée et formate un disque en mémoire, retourne les bytes
-    fn make_formatted_disk() -> Vec<u8> {
-        let mut disk = vec![0u8; DISK_SZ as usize];
-        let _ = SuperblockManager::format(DISK_SZ, b"TestVol", [0xAB; 16], 0, |off, buf| {
-            let s = off.0 as usize;
-            if s + buf.len() <= disk.len() {
-                disk[s..s + buf.len()].copy_from_slice(buf);
-            }
-            Ok(buf.len())
-        })
-        .test_unwrap();
-        disk
-    }
-
-    #[test]
-    fn all_modules_declared() {
-        // Compile-test : tous les modules doivent être accessibles
-        let _ = BLOCK_SIZE;
-        let _ = HEAP_START_OFFSET;
-        let _ = EXOFS_MAGIC;
-        let _ = BLOB_HEADER_MAGIC;
-        let _ = OBJECT_HEADER_MAGIC;
-    }
-
-    #[test]
-    fn storage_is_ready_false_before_init() {
-        // Sans init explicite, le flag doit être à false
-        // (ou true si un test précédent l'a initialisé — acceptable en test)
-        let _ = storage_is_ready(); // juste vérifie que ça compile
-    }
-
-    #[test]
-    fn health_report_collects() {
-        let report = StorageHealthReport::collect();
-        // Seulement vérifie que ça s'exécute sans panique
-        let _ = report.is_healthy();
-        let _ = report.dedup_hit_rate_pct;
-    }
-
-    #[test]
-    fn superblock_roundtrip_via_module() {
-        let disk = make_formatted_disk();
-
-        let mgr = SuperblockManager::mount(DISK_SZ, |off, sz| {
-            let s = off.0 as usize;
-            let e = (s + sz).min(disk.len());
-            let mut v = vec![0u8; sz];
-            v[..e - s].copy_from_slice(&disk[s..e]);
-            Ok(v)
-        })
-        .test_unwrap();
-
-        let snap = mgr.snapshot();
-        assert_eq!(snap.disk_size, DISK_SZ);
-        assert!(snap.epoch >= 1);
-    }
-
-    #[test]
-    fn blob_write_read_roundtrip() {
-        let data = b"Module-level blob write/read test";
-        let config = BlobWriterConfig::new(EpochId(1))
-            .no_dedup()
-            .with_algo(CompressionType::None);
-
-        let mut disk = vec![0u8; 65536usize];
-        let result = BlobWriter::write_blob(
-            data,
-            &config,
-            |_| Ok(DiskOffset(0)),
-            |off, buf| {
-                let s = off.0 as usize;
-                if s + buf.len() <= disk.len() {
-                    disk[s..s + buf.len()].copy_from_slice(buf);
-                }
-                Ok(buf.len())
-            },
-            |_| None,
-        )
-        .test_unwrap();
-
-        assert_eq!(result.original_size, data.len() as u64);
-        assert!(!result.dedup_hit);
-
-        let read_result = BlobReader::read_blob(
-            DiskOffset(0),
-            |off, sz| {
-                let s = off.0 as usize;
-                Ok(disk[s..s + sz].to_vec())
-            },
-            BlobVerifyMode::Full,
-        )
-        .test_unwrap();
-
-        assert_eq!(&read_result.data[..data.len()], data);
-        assert!(read_result.id_verified);
-    }
-
-    #[test]
-    fn object_write_read_roundtrip() {
-        let oid = ObjectId([0x42; 32]);
-        let data = b"Module-level object write/read test content";
-        let config = ObjectWriterConfig::new(EpochId(2))
-            .no_dedup()
-            .with_type(ObjectType::Regular);
-
-        let mut disk = vec![0u8; 65536usize];
-        let mut off = 0u64;
-
-        let result = ObjectWriter::write_object(
-            oid,
-            data,
-            &config,
-            |n| {
-                let o = DiskOffset(off);
-                off += n * BLOCK_SIZE as u64;
-                Ok(o)
-            },
-            |o, buf| {
-                let s = o.0 as usize;
-                if s + buf.len() <= disk.len() {
-                    disk[s..s + buf.len()].copy_from_slice(buf);
-                }
-                Ok(buf.len())
-            },
-            |_| None,
-        )
-        .test_unwrap();
-
-        assert_eq!(result.content_size, data.len() as u64);
-        assert_eq!(result.blob_count, 1);
-    }
-
-    #[test]
-    fn storage_stats_not_zero_after_writes() {
-        // Les tests précédents ont incrémenté les stats
-        let snap = STORAGE_STATS.snapshot();
-        let _ = snap; // Juste vérifie que ça fonctionne
-    }
-
-    #[test]
-    fn compression_type_reexport() {
-        let ct = CompressionType::Lz4;
-        assert_ne!(ct, CompressionType::None);
-    }
-
-    #[test]
-    fn verify_blob_range_empty() {
-        let disk = vec![0u8; 4096usize];
-        let report = verify_blob_range(DiskOffset(0), DiskOffset(0), &|off, sz| {
-            let s = off.0 as usize;
-            Ok(disk[s..s + sz].to_vec())
-        });
-        assert_eq!(report.checked, 0);
-    }
-
-    #[test]
-    fn health_report_compression_ratio() {
-        let report = StorageHealthReport::collect();
-        // Le ratio est entre 0 et 100
-        assert!(report.compress_ratio_pct <= 100);
-    }
-}
+pub use superblock::{
+    superblock_mirror_offsets, verify_superblock_bytes, ExoSuperblockDisk, MirrorSlot,
+    SbManagerState, SuperblockManager, SuperblockSnapshot, EXOFS_MAGIC, FORMAT_VERSION_MAJOR,
+    SUPERBLOCK_DISK_SIZE,
+};
+pub use superblock_backup::{recover_superblock, write_superblock_mirrors};

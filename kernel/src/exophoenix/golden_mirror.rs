@@ -37,22 +37,8 @@ pub const TEXT_SENTINEL_LEN: usize = 64;
 /// Byte offset inside the `.text` sentinel holding the first immediate byte of `movabs rax, imm64`.
 pub const TEXT_SENTINEL_CORRUPT_OFFSET: usize = 2;
 
-#[cfg(all(target_arch = "x86_64", target_os = "none"))]
-core::arch::global_asm!(
-    ".section .text",
-    ".balign 64",
-    ".global __exo_phoenix_sentinel_start",
-    ".global exo_phoenix_integrity_sentinel",
-    ".type exo_phoenix_integrity_sentinel, @function",
-    "__exo_phoenix_sentinel_start:",
-    "exo_phoenix_integrity_sentinel:",
-    // Machine encoding: 48 B8 37 58 49 4E 45 4F 48 50 (movabs rax, 0x50484F454E495837) ; C3 (ret)
-    ".byte 0x48, 0xB8, 0x37, 0x58, 0x49, 0x4E, 0x45, 0x4F, 0x48, 0x50, 0xC3",
-    ".fill 53, 1, 0x90",
-    ".global __exo_phoenix_sentinel_end",
-    "__exo_phoenix_sentinel_end:",
-    ".size exo_phoenix_integrity_sentinel, 64",
-);
+// Note: `__exo_phoenix_sentinel_start` and `exo_phoenix_integrity_sentinel`
+// are assembled in `arch::x86_64::cpu_ops`.
 
 #[cfg(all(target_arch = "x86_64", target_os = "none"))]
 extern "C" {
@@ -159,58 +145,9 @@ fn read_live_sentinel_bytes() -> [u8; TEXT_SENTINEL_LEN] {
 
 /// Temporarily clears `CR0.WP` under `cli`, executes `f`, restores `CR0` (re-enforcing W^X),
 /// and serializes ICache/TLB (`mfence` + `cpuid` + CR3 reload).
-#[cfg(all(target_arch = "x86_64", target_os = "none"))]
+#[inline(always)]
 unsafe fn with_cr0_wp_disabled<R>(f: impl FnOnce() -> R) -> R {
-    let rflags: u64;
-    let cr0_orig: u64;
-    core::arch::asm!(
-        "pushfq",
-        "pop {flags}",
-        "cli",
-        "mov {cr0}, cr0",
-        flags = out(reg) rflags,
-        cr0 = out(reg) cr0_orig,
-        options(nomem),
-    );
-    let cr0_nowp = cr0_orig & !(1u64 << 16);
-    core::arch::asm!(
-        "mov cr0, {cr0}",
-        cr0 = in(reg) cr0_nowp,
-        options(nostack, nomem),
-    );
-
-    let res = f();
-
-    core::arch::asm!(
-        "mfence",
-        "mov cr0, {cr0}",
-        cr0 = in(reg) cr0_orig,
-        options(nostack, nomem),
-    );
-    // Serializing instruction + local TLB flush to synchronize instruction fetch pipeline.
-    core::arch::asm!(
-        "push rbx",
-        "xor eax, eax",
-        "cpuid",
-        "pop rbx",
-        "mov {tmp}, cr3",
-        "mov cr3, {tmp}",
-        tmp = out(reg) _,
-        out("eax") _,
-        out("ecx") _,
-        out("edx") _,
-        options(nomem),
-    );
-
-    if (rflags & (1 << 9)) != 0 {
-        core::arch::asm!("sti", options(nostack, nomem));
-    }
-    res
-}
-
-#[cfg(not(all(target_arch = "x86_64", target_os = "none")))]
-unsafe fn with_cr0_wp_disabled<R>(f: impl FnOnce() -> R) -> R {
-    f()
+    crate::arch::x86_64::with_cr0_wp_disabled(f)
 }
 
 /// Closed Strate 1 `#![no_std]` binary paths eligible for the Golden RAM Mirror.

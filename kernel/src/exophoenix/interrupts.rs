@@ -77,10 +77,7 @@ unsafe fn save_current_fpu_before_freeze_ack() {
 /// - Write `FREEZE_ACK_DONE` with Release ordering + `sfence`
 /// - Bounded wait until Kernel B resumption (`CORR-33`)
 pub unsafe fn handle_freeze_ipi() {
-    // SAFETY: privileged instruction in ring0 IRQ handler context.
-    unsafe {
-        core::arch::asm!("cli", options(nostack, nomem));
-    }
+    crate::arch::x86_64::disable_interrupts();
 
     save_current_fpu_before_freeze_ack();
 
@@ -89,15 +86,11 @@ pub unsafe fn handle_freeze_ipi() {
         // Save kstack + TSC checkpoint into this core's 64-byte SSR PMC slot.
         let ssr_base = phys_to_virt(PhysAddr::new(ssr::SSR_BASE)).as_u64() as usize;
         let slot_base = ssr_base + ssr::pmc_snapshot_offset(slot);
-        let cur_rsp: u64;
-        #[cfg(all(target_arch = "x86_64", target_os = "none"))]
-        unsafe {
-            core::arch::asm!("mov {}, rsp", out(reg) cur_rsp, options(nostack, nomem));
-        }
-        #[cfg(not(all(target_arch = "x86_64", target_os = "none")))]
-        {
-            cur_rsp = 0;
-        }
+        let cur_rsp = if cfg!(all(target_arch = "x86_64", target_os = "none")) {
+            crate::arch::x86_64::read_rsp()
+        } else {
+            0
+        };
         unsafe {
             core::ptr::write_volatile(slot_base as *mut u64, cur_rsp);
             core::ptr::write_volatile((slot_base + 8) as *mut u64, tsc::read_tsc());
@@ -115,8 +108,8 @@ pub unsafe fn handle_freeze_ipi() {
             unsafe {
                 ssr::ssr_atomic_u32(ssr::freeze_ack_offset(slot))
                     .store(ssr::FREEZE_ACK_DONE, Ordering::Release);
-                core::arch::asm!("sfence", options(nostack, preserves_flags));
             }
+            crate::arch::x86_64::store_fence();
         }
     }
 
@@ -138,10 +131,7 @@ pub unsafe fn handle_freeze_ipi() {
             break;
         }
 
-        // SAFETY: intentional freeze loop.
-        unsafe {
-            core::arch::asm!("pause", options(nostack, nomem));
-        }
+        crate::arch::x86_64::cpu_pause();
     }
 
     apic_ack();
@@ -180,19 +170,11 @@ pub unsafe fn handle_pmc_snapshot_ipi() {
 
 /// 0xF2 — Local global TLB flush (reload CR3 + KPTI shadow sync) + ACK.
 pub unsafe fn handle_tlb_flush_ipi() {
-    // SAFETY: privileged instruction in ring0 IRQ handler context.
-    unsafe {
-        core::arch::asm!("cli", options(nostack, nomem));
-    }
+    crate::arch::x86_64::disable_interrupts();
 
     // SAFETY: reload current CR3 to invalidate local TLB.
     unsafe {
-        core::arch::asm!(
-            "mov {tmp}, cr3",
-            "mov cr3, {tmp}",
-            tmp = out(reg) _,
-            options(nostack)
-        );
+        crate::arch::x86_64::reload_cr3();
     }
 
     if let Some(slot) = current_slot() {

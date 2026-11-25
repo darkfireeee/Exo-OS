@@ -367,11 +367,11 @@ rules:
 
   - id: clone-settls-without-fs-base
     patterns:
-      - pattern-regex: '\bpub\s+fn\s+sys_clone\b'
-      - pattern-not-regex: '(?s)\bpub\s+fn\s+sys_clone\b.*?\btls_base\s*:\s*if\s+flags\s*&\s+CLONE_SETTLS\s*!=\s*0\s*\{\s*tls\s*\}\s*else\s*\{\s*0\s*\}'
+      - pattern-regex: '\bpub\s+fn\s+handle_clone_inplace\b'
+      - pattern-not-regex: '(?s)\bpub\s+fn\s+handle_clone_inplace\b.*?\btls_base\s*:\s*effective_tls\b.*?\btls_override\s*:\s*if\s*\(flags\s*&\s*CLONE_SETTLS\)\s*!=\s*0'
     paths:
       include:
-        - /kernel/src/syscall/table.rs
+        - /kernel/src/syscall/dispatch/process_ops.rs
     message: "M22: active clone path must carry CLONE_SETTLS into the FS/TLS thread state."
     languages: [rust]
     severity: ERROR

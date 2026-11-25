@@ -375,18 +375,7 @@ fn store_last_hash(hash: &[u8; 32]) {
 /// Reads current TSC (ISR-safe).
 #[inline]
 fn rdtsc() -> u64 {
-    let lo: u32;
-    let hi: u32;
-    // SAFETY: validated low-level operation — see block documentation.
-    unsafe {
-        core::arch::asm!(
-            "rdtsc",
-            out("eax") lo,
-            out("edx") hi,
-            options(nostack),
-        );
-    }
-    (hi as u64) << 32 | lo as u64
+    crate::arch::x86_64::cpu::tsc::read_tsc()
 }
 
 /// Returns ObjectId of current actor (active thread).

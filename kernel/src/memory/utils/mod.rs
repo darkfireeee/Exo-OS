@@ -2,6 +2,7 @@
 //
 // Utils module — futex table (UNIQUE), OOM killer, shrinker.
 
+mod futex;
 pub mod futex_table;
 pub mod oom_killer;
 pub mod shrinker;

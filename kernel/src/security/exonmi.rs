@@ -211,22 +211,7 @@ fn get_apic_timer_frequency() -> u64 {
     // EAX = denominator, EBX = numerator
     // Core crystal clock ratio = EBX/EAX
     // APIC timer frequency ≈ crystal_clock * EBX / EAX
-    let (eax, ebx, ecx): (u32, u32, u32);
-    // SAFETY: validated low-level operation — see block documentation.
-    unsafe {
-        let ebx_r: u64;
-        core::arch::asm!(
-            "xchg {tmp:r}, rbx",
-            "cpuid",
-            "xchg {tmp:r}, rbx",
-            inout("eax") 0x15u32 => eax,
-            inout("ecx") 0u32    => ecx,
-            lateout("edx") _,
-            tmp = inout(reg) 0u64 => ebx_r,
-            options(nostack, nomem)
-        );
-        ebx = ebx_r as u32;
-    }
+    let (eax, ebx, ecx, _) = crate::arch::x86_64::cpuid_ex(0x15, 0);
 
     if eax != 0 && ebx != 0 {
         let crystal_hz = if ecx != 0 { ecx as u64 } else { 24_000_000 };

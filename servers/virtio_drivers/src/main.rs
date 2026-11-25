@@ -8,7 +8,6 @@
 //! - `VIRTIO_GPU_MSG_TRANSFER_FLUSH` (`2`) : `VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D` + `RESOURCE_FLUSH` sur `controlq`
 //! - `VIRTIO_GPU_MSG_MOVE_CURSOR` (`3`) : `VIRTIO_GPU_CMD_MOVE_CURSOR` sur `cursorq`
 
-use core::panic::PanicInfo;
 use exo_syscall_abi as syscall;
 use exo_virtio_gpu::VirtioGpuDevice;
 
@@ -179,9 +178,4 @@ pub extern "C" fn _start() -> ! {
     }
 }
 
-#[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
-    loop {
-        core::hint::spin_loop();
-    }
-}
+exo_syscall_abi::ring1_nostd_panic_handler!(b"");

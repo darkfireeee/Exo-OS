@@ -10,7 +10,6 @@
 //! - Fallback resilient : Fonctionne silencieusement sans panique si aucun controleur USB n'est detecte.
 
 use core::cell::UnsafeCell;
-use core::panic::PanicInfo;
 use exo_os_drivers::{DeviceHandle, DeviceInfo};
 use exo_syscall_abi as syscall;
 use exo_usb_hid::{push_input_event, UsbHidKeyboard, UsbHidMouse};
@@ -104,14 +103,7 @@ fn state_mut() -> &'static mut UsbServerState {
 }
 
 fn boot_log(msg: &[u8]) {
-    unsafe {
-        let _ = syscall::syscall3(
-            syscall::SYS_EXO_LOG,
-            msg.as_ptr() as u64,
-            msg.len() as u64,
-            1,
-        );
-    }
+    syscall::boot_log(msg);
 }
 
 /// Decouvre et initialise un controleur xHCI ou EHCI via l'interface PCI.
@@ -254,10 +246,5 @@ pub extern "C" fn _start() -> ! {
     }
 }
 
-#[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
-    boot_log(b"usb_server: panic!\n");
-    loop {
-        core::hint::spin_loop();
-    }
-}
+exo_syscall_abi::ring1_nostd_panic_handler!(b"usb_server: panic!
+");

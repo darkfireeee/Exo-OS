@@ -12,7 +12,8 @@ path = "src/lib.rs"
 crate-type = ["rlib"]
 
 [dependencies]
-exo-syscall-abi = { path = "../../servers/syscall_abi" }
+exo-abi = { path = "../exo-abi" }
+exo-wire = { path = "../exo-wire" }
 
 [features]
 default = []

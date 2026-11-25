@@ -2,8 +2,7 @@
 
 use crate::{abi, decode_ret, SysResult};
 
-pub const SYS_EXO_RESURRECT: u64 = 523;
-pub const SYS_EXOPHOENIX_TEST: u64 = 524;
+pub use exo_abi::{SYS_EXOPHOENIX_TEST, SYS_EXO_RESURRECT};
 
 #[inline]
 pub fn trigger_resurrection(mode: u64) -> SysResult<usize> {

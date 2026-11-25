@@ -50,7 +50,10 @@ spinning_top = { version = "0.3", default-features = false }
 # Vérification de boot Ed25519+SHA-512 PARTAGÉE avec l'outil de signature
 # (tools/kernel_signer) — source UNIQUE du format + de la logique. TOUJOURS liée :
 # la crypto de secure-boot n'est plus optionnelle (fini la « fausse sécurité »).
-exo-verity = { path = "../drivers/security/verity", default-features = false }
+exo-verity = { path = "../libs/exo-verity", default-features = false }
+
+# Police bitmap PSF 8x16 partagée (zéro dépendance)
+exo-font = { path = "../libs/exo-font" }
 
 # Configuration formatage minimal sans std
 arrayvec = { version = "0.7", default-features = false }
@@ -58,7 +61,7 @@ arrayvec = { version = "0.7", default-features = false }
 # Parseur GPT/MBR réel PARTAGÉ avec le kernel (source unique, équiv. redox
 # partitionlib). no_std, aucune dépendance externe. Primitives sans allocateur
 # (BIOS) ; `alloc` (scan/BlockReader) activé via la feature uefi-boot.
-exo-partition = { path = "../drivers/storage/partition", default-features = false }
+exo-partition = { path = "../libs/exo-partition", default-features = false }
 
 # ─── DÉPENDANCES BUILD ────────────────────────────────────────────────────────
 [build-dependencies]

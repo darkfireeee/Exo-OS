@@ -10,8 +10,6 @@
 [workspace]
 resolver = "2"
 members = [
-    "libexo",
-    "apps/exosh",
     "apps/coreutils",
 ]
 

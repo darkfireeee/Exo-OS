@@ -76,8 +76,7 @@ pub fn sys_exit(status: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -
     // SAFETY: GS:[0x20] is current thread TCB initialized by context_switch.
     // Call is valid from syscall context (kernel GS active after SWAPGS).
     unsafe {
-        let tcb_ptr: u64;
-        core::arch::asm!("mov {}, gs:[0x20]", out(reg) tcb_ptr, options(nomem, nostack));
+        let tcb_ptr = crate::arch::x86_64::smp::percpu::read_current_tcb();
         if tcb_ptr != 0 {
             let tcb = &*(tcb_ptr as *const crate::scheduler::core::task::ThreadControlBlock);
             let pid = crate::process::core::pid::Pid(tcb.pid.0);
@@ -122,7 +121,7 @@ pub fn sys_exit(status: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -
     #[allow(clippy::empty_loop)]
     loop {
         unsafe {
-            core::arch::asm!("hlt", options(nomem, nostack));
+            crate::arch::x86_64::halt_once();
         }
     }
 }
@@ -134,8 +133,7 @@ pub fn sys_exit_group(status: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: 
 
     // SAFETY: GS:[0x20] is current TCB during syscall.
     unsafe {
-        let tcb_ptr: u64;
-        core::arch::asm!("mov {}, gs:[0x20]", out(reg) tcb_ptr, options(nomem, nostack));
+        let tcb_ptr = crate::arch::x86_64::smp::percpu::read_current_tcb();
         if tcb_ptr == 0 {
             return EFAULT;
         }
@@ -218,7 +216,7 @@ pub fn sys_exit_group(status: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: 
 
     loop {
         unsafe {
-            core::arch::asm!("hlt", options(nomem, nostack));
+            crate::arch::x86_64::halt_once();
         }
     }
 }

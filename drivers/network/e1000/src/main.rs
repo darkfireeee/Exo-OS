@@ -2,7 +2,6 @@
 #![no_main]
 #![allow(dead_code, static_mut_refs)]
 
-use core::panic::PanicInfo;
 
 use exo_syscall_abi as syscall;
 
@@ -23,92 +22,13 @@ const NETWORK_ENDPOINT_ID: u64 = 7;
 const PAGE_SIZE: usize = 4096;
 const DMA_DIR_BIDIR: u64 = 2;
 
-const NET_CTRL_DRIVER_INIT: u32 = 0x4F00;
-const NET_CTRL_RX_RELEASE: u32 = 0x4F01;
-const NET_CTRL_MAC_QUERY: u32 = 0x4F02;
-const NET_CTRL_MAC_REPLY: u32 = 0x4F03;
-const NET_CTRL_RX_READY: u32 = 0x4F04;
-const NET_CTRL_TX_SUBMIT: u32 = 0x4F05;
-const NET_CTRL_TX_COMPLETE: u32 = 0x4F06;
+use syscall::{
+    DriverCtrlMsg as NetCtrlEnvelope, DriverInitMsg, MacReplyMsg, RxPacketRef, RxReadyMsg,
+    RxReleaseMsg, TxCompleteMsg, TxSubmitMsg, NET_CTRL_DRIVER_INIT, NET_CTRL_MAC_QUERY,
+    NET_CTRL_MAC_REPLY, NET_CTRL_RX_READY, NET_CTRL_RX_RELEASE, NET_CTRL_TX_COMPLETE,
+    NET_CTRL_TX_SUBMIT,
+};
 const IPC_RECV_TIMEOUT_MS: u64 = 50;
-
-#[repr(C)]
-struct NetCtrlEnvelope {
-    sender_pid: u32,
-    msg_type: u32,
-    payload: [u8; syscall::IPC_INLINE_PAYLOAD_SIZE],
-}
-
-impl NetCtrlEnvelope {
-    const fn zeroed() -> Self {
-        Self {
-            sender_pid: 0,
-            msg_type: 0,
-            payload: [0; syscall::IPC_INLINE_PAYLOAD_SIZE],
-        }
-    }
-}
-
-const _: () = assert!(core::mem::size_of::<NetCtrlEnvelope>() == syscall::IPC_ENVELOPE_SIZE);
-const _: () = assert!(core::mem::offset_of!(NetCtrlEnvelope, payload) == syscall::IPC_HEADER_SIZE);
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct DriverInitMsg {
-    opcode: u32,
-    pool_count: u32,
-    rx_base_iova: u64,
-    tx_base_iova: u64,
-    hdr_size: u32,
-    _pad: u32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct RxReleaseMsg {
-    opcode: u32,
-    count: u32,
-    pool_idx: [u16; 20],
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct RxReadyMsg {
-    opcode: u32,
-    count: u32,
-    entries: [RxPacketRef; 20],
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct RxPacketRef {
-    pool_idx: u16,
-    len: u16,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct TxSubmitMsg {
-    opcode: u32,
-    pool_idx: u16,
-    len: u16,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct TxCompleteMsg {
-    opcode: u32,
-    count: u32,
-    pool_idx: [u16; 20],
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct MacReplyMsg {
-    opcode: u32,
-    mac: [u8; 6],
-    _pad: [u8; 2],
-}
 
 struct DmaRegion {
     virt: u64,
@@ -629,12 +549,4 @@ fn debug_errno(prefix: &[u8], err: i64) {
     debug_write(b"\n");
 }
 
-#[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
-    unsafe {
-        let _ = syscall::syscall1(syscall::SYS_EXIT, 1);
-    }
-    loop {
-        core::hint::spin_loop();
-    }
-}
+exo_syscall_abi::ring1_panic_exit_handler!(b"");

@@ -242,3 +242,23 @@ pub fn claim_contains(pid: u32, phys_base: PhysAddr, size: usize) -> bool {
         start >= claim_start && end <= claim_end
     })
 }
+
+// ── Legacy PS/2 i8042 Claim & I/O Port Policy Helpers ────────────────────────
+
+#[inline]
+pub fn caller_is_ps2_driver(caller_pid: u32) -> bool {
+    matches!(
+        crate::security::service_class_of(Pid(caller_pid)),
+        crate::security::ServiceClass::Ps2Driver
+    )
+}
+
+#[inline]
+pub fn ps2_ioport_allowed(port: u64, width: u64) -> bool {
+    width == 1 && matches!(port, 0x60 | 0x64)
+}
+
+#[inline]
+pub fn ps2_keyboard_vector() -> u8 {
+    crate::arch::x86_64::irq::IrqVector::VECTOR_IRQ_BASE + 1
+}

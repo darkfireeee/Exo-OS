@@ -17,6 +17,11 @@ jobs:
       - run: python3 tools/audit_constants.py --fail-on-warn
       - run: python3 tools/check_service_order.py
       - run: python3 tools/check_phoenix_strata.py
+      - run: python3 tools/check_ipc_policy_mirror.py
+      - run: python3 tools/check_abi_sync.py
+      - run: python3 tools/check_crate_dag.py
+      - run: python3 tools/check_arch_asm_border.py
+      - run: python3 tools/check_module_hygiene.py
 
   semgrep:
     runs-on: ubuntu-latest

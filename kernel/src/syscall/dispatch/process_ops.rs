@@ -70,10 +70,7 @@ fn handle_fork_like_with_clone(
 
     // Read current TCB.
     // SAFETY: Active kernel GS, gs:[0x20] = TCB pointer (PerCpuData).
-    let tcb_ptr: u64;
-    unsafe {
-        core::arch::asm!("mov {}, gs:[0x20]", out(reg) tcb_ptr, options(nostack, nomem));
-    }
+    let tcb_ptr = unsafe { crate::arch::x86_64::smp::percpu::read_current_tcb() };
     if tcb_ptr == 0 {
         return EAGAIN;
     }
@@ -217,10 +214,7 @@ pub fn handle_clone_inplace(frame: &SyscallFrame) -> i64 {
             0
         };
 
-        let tcb_ptr: u64;
-        unsafe {
-            core::arch::asm!("mov {}, gs:[0x20]", out(reg) tcb_ptr, options(nostack, nomem));
-        }
+        let tcb_ptr = unsafe { crate::arch::x86_64::smp::percpu::read_current_tcb() };
         if tcb_ptr == 0 {
             return EAGAIN;
         }
@@ -430,10 +424,7 @@ pub fn handle_execve_inplace(frame: &mut SyscallFrame) {
 
     // Read current TCB.
     // SAFETY: Active kernel GS.
-    let tcb_ptr: u64;
-    unsafe {
-        core::arch::asm!("mov {}, gs:[0x20]", out(reg) tcb_ptr, options(nostack, nomem));
-    }
+    let tcb_ptr = unsafe { crate::arch::x86_64::smp::percpu::read_current_tcb() };
     if tcb_ptr == 0 {
         exec_trace(b"execve: no tcb\n");
         frame.rax = EFAULT as u64;
@@ -515,11 +506,7 @@ pub fn handle_execve_inplace(frame: &mut SyscallFrame) {
             // SYSRETQ reads gs:[0x08] to restore userspace RSP (ASM stub).
             // SAFETY: Active kernel GS, gs:[0x08] = user_rsp slot of PerCpuData.
             unsafe {
-                core::arch::asm!(
-                    "mov qword ptr gs:[0x08], {rsp}",
-                    rsp = in(reg) new_rsp,
-                    options(nostack, nomem)
-                );
+                crate::arch::x86_64::smp::percpu::set_user_rsp(new_rsp);
             }
 
             // FIX-EXEC-CR3: execve replaces address space WITHOUT context
@@ -533,7 +520,7 @@ pub fn handle_execve_inplace(frame: &mut SyscallFrame) {
             // ever loading the new image.
             // DIAG E9: 'K' = execve CR3 fix path executed.
             #[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
-            unsafe { core::arch::asm!("out 0xE9, al", in("al") b'K', options(nomem, nostack)) };
+            crate::arch::x86_64::debug_e9_byte(b'K');
             let new_kernel_cr3 = thread.sched_tcb.cr3_phys;
             let new_user_cr3 = thread.sched_tcb.kpti_user_cr3();
             if crate::arch::x86_64::spectre::kpti::kpti_enabled() {
@@ -550,7 +537,7 @@ pub fn handle_execve_inplace(frame: &mut SyscallFrame) {
                 // SAFETY: new_kernel_cr3 = PML4 of new image, kernel half
                 // synchronized by do_execve(); Ring 0.
                 unsafe {
-                    core::arch::asm!("mov cr3, {}", in(reg) new_kernel_cr3, options(nostack, nomem));
+                    crate::arch::x86_64::write_cr3(new_kernel_cr3);
                 }
             }
         }

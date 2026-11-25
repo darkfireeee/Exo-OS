@@ -1,6 +1,8 @@
-// kernel/src/memory/dma/iommu/mod.rs
-//
-// IOMMU module — domains, page tables, Intel VT-d and AMD IOMMU drivers.
+//! # memory/dma/iommu — Layer 0 Hardware IOMMU Engine
+//!
+//! Owns VT-d (`intel_vtd`), AMD-Vi (`amd_iommu`), I/O page tables (`page_table`),
+//! and hardware domain descriptors (`domain`).
+//! Per-PID ownership leases and fault queues live above in `crate::drivers::iommu`.
 
 pub mod amd_iommu;
 pub mod domain;

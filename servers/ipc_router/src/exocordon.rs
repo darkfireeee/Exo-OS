@@ -36,6 +36,7 @@ pub enum ServiceId {
     Ps2            = 15,  // ps2_driver    — driver clavier/souris PS/2
     Audio          = 16,  // audio_server  — audio système Ring 1
     Usb            = 17,  // usb_server    — contrôleur xHCI / périphériques USB
+    ExoCompositor  = 18,  // exo_compositor — compositeur Wayland isolé Strate 2
 }
 
 impl ServiceId {
@@ -58,6 +59,7 @@ impl ServiceId {
             15 => Some(Self::Ps2),
             16 => Some(Self::Audio),
             17 => Some(Self::Usb),
+            18 => Some(Self::ExoCompositor),
             _  => None,
         }
     }
@@ -87,6 +89,7 @@ pub fn service_id_for_name(name: &[u8]) -> Option<ServiceId> {
         b"exosh" | b"exosh_input_reply" => Some(ServiceId::Exosh),
         b"audio_server" => Some(ServiceId::Audio),
         b"usb_server" => Some(ServiceId::Usb),
+        b"exo_compositor" => Some(ServiceId::ExoCompositor),
         _ => None,
     }
 }
@@ -153,7 +156,7 @@ impl AuthEdge {
 ///   50_000   — services d'infrastructure (fs, crypto, réseau)
 ///   100_000  — services d'affichage/entrée (tty, fb, input)
 ///   500_000+ — drivers et shell (haut débit)
-static AUTHORIZED_GRAPH: [AuthEdge; 111] = [
+static AUTHORIZED_GRAPH: [AuthEdge; 125] = [
     // ── Init ↔ services de base (requêtes + réponses) ────────────────────────
     AuthEdge::new(ServiceId::Init,      ServiceId::Memory,        4, 10_000),
     AuthEdge::new(ServiceId::Memory,    ServiceId::Init,          2, 50_000),
@@ -294,6 +297,21 @@ static AUTHORIZED_GRAPH: [AuthEdge; 111] = [
     AuthEdge::new(ServiceId::Scheduler, ServiceId::ExoShield,     2, 50_000),
     AuthEdge::new(ServiceId::ExoShield, ServiceId::Fb,            2, 50_000),
     AuthEdge::new(ServiceId::Fb,        ServiceId::ExoShield,     2, 50_000),
+    AuthEdge::new(ServiceId::Fb,        ServiceId::VirtioDrivers, 2, 100_000),
+    AuthEdge::new(ServiceId::VirtioDrivers, ServiceId::Fb,        2, 100_000),
+    // ── S5B: ExoCompositor <-> Fb/Input/Init/ExoShield/Memory/Exosh ─────────
+    AuthEdge::new(ServiceId::ExoCompositor, ServiceId::Fb,        4, 500_000),
+    AuthEdge::new(ServiceId::Fb,            ServiceId::ExoCompositor, 4, 500_000),
+    AuthEdge::new(ServiceId::ExoCompositor, ServiceId::Input,     2, 100_000),
+    AuthEdge::new(ServiceId::Input,         ServiceId::ExoCompositor, 2, 100_000),
+    AuthEdge::new(ServiceId::ExoCompositor, ServiceId::Init,      2, 50_000),
+    AuthEdge::new(ServiceId::Init,          ServiceId::ExoCompositor, 4, 10_000),
+    AuthEdge::new(ServiceId::ExoCompositor, ServiceId::ExoShield, 2, 50_000),
+    AuthEdge::new(ServiceId::ExoShield,     ServiceId::ExoCompositor, 2, 50_000),
+    AuthEdge::new(ServiceId::ExoCompositor, ServiceId::Memory,    2, 100_000),
+    AuthEdge::new(ServiceId::Memory,        ServiceId::ExoCompositor, 2, 100_000),
+    AuthEdge::new(ServiceId::Exosh,         ServiceId::ExoCompositor, 4, 500_000),
+    AuthEdge::new(ServiceId::ExoCompositor, ServiceId::Exosh,     4, 500_000),
 ];
 
 const _: () = assert!(
@@ -302,11 +320,11 @@ const _: () = assert!(
 );
 
 // FIX-EXOCORDON-02 : miroir strict — même cardinalité que la politique kernel.
-// kernel/src/security/ipc_policy.rs vérifie `POLICY.len() == 111` ; toute
+// kernel/src/security/ipc_policy.rs vérifie `POLICY.len() == 125` ; toute
 // évolution de la politique kernel doit être répercutée ici (et inversement).
 const _: () = assert!(
-    AUTHORIZED_GRAPH.len() == 111,
-    "DAG ExoCordon doit rester le miroir exact des 111 paires de ipc_policy.rs"
+    AUTHORIZED_GRAPH.len() == 125,
+    "DAG ExoCordon doit rester le miroir exact des 125 paires de ipc_policy.rs"
 );
 
 static LAST_REFILL_TSC: AtomicU64 = AtomicU64::new(0);
@@ -458,7 +476,7 @@ pub fn check_ipc(src: Pid, dst: Pid) -> Result<(), IpcError> {
     edge.consume_quota()
 }
 
-#[cfg(test)]
+#[cfg(not(target_os = "none"))]
 pub fn reset_quotas() {
     LAST_REFILL_TSC.store(0, Ordering::Release);
     for edge in AUTHORIZED_GRAPH.iter() {
@@ -466,7 +484,7 @@ pub fn reset_quotas() {
     }
 }
 
-#[cfg(test)]
+#[cfg(not(target_os = "none"))]
 pub fn remaining_quota(src: Pid, dst: Pid) -> Option<u64> {
     let src = service_id_of(src)?;
     let dst = service_id_of(dst)?;

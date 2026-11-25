@@ -11,7 +11,7 @@ name = "exo_libc"
 path = "src/lib.rs"
 
 [dependencies]
-exo-syscall-abi = { path = "../../servers/syscall_abi" }
+exo_syscall_abi = { package = "exo-abi", path = "../exo-abi" }
 exo-syscall = { path = "../exo-syscall" }
 exo-rt = { path = "../exo-rt" }
 exo-alloc = { path = "../exo-alloc" }

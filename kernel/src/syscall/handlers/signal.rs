@@ -35,9 +35,7 @@ struct LinuxSigaction {
 /// Kernel GS must be active (SWAPGS executed in syscall stub).
 #[inline]
 unsafe fn current_tcb_ptr() -> *const ThreadControlBlock {
-    let p: u64;
-    core::arch::asm!("mov {}, gs:[0x20]", out(reg) p, options(nostack, nomem));
-    p as *const ThreadControlBlock
+    crate::arch::x86_64::smp::percpu::read_current_tcb() as *const ThreadControlBlock
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -308,9 +306,7 @@ pub fn sys_kill(pid: u64, signum: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -
         // pid<0: process groups — not implemented.
         if target_pid == 0 {
             unsafe {
-                let ptr: u64;
-                core::arch::asm!("mov {}, gs:[0x20]", out(reg) ptr,
-                    options(nostack, nomem));
+                let ptr = crate::arch::x86_64::smp::percpu::read_current_tcb();
                 if ptr == 0 {
                     return EFAULT;
                 }
@@ -380,8 +376,7 @@ pub fn sys_tgkill(tgid: u64, tid: u64, signum: u64, _a4: u64, _a5: u64, _a6: u64
     // Read caller PID to fill SigInfo.
     // SAFETY: kernel GS active in syscall context.
     let sender_pid: u32 = unsafe {
-        let ptr: u64;
-        core::arch::asm!("mov {}, gs:[0x20]", out(reg) ptr, options(nostack, nomem));
+        let ptr = crate::arch::x86_64::smp::percpu::read_current_tcb();
         if ptr == 0 {
             return EFAULT;
         }

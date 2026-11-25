@@ -13,12 +13,7 @@ pub const INIT_PATH: &str = "/sbin/exo-init-server";
 
 #[inline(always)]
 fn debug_byte(byte: u8) {
-    #[cfg(target_arch = "x86_64")]
-    unsafe {
-        core::arch::asm!("out 0xE9, al", in("al") byte, options(nomem, nostack));
-    }
-    #[cfg(not(target_arch = "x86_64"))]
-    let _ = byte;
+    crate::arch::x86_64::debug_e9_byte(byte);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

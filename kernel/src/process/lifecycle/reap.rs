@@ -255,9 +255,7 @@ fn sleep_until_work() {
 /// NEVER returns.
 fn reaper_loop(_arg: usize) -> ! {
     #[cfg(all(target_arch = "x86_64", debug_assertions))]
-    unsafe {
-        core::arch::asm!("mov al, 0x57", "out 0xe9, al", options(nomem, nostack));
-    }
+    crate::arch::x86_64::debug_e9_byte(b'W');
 
     loop {
         let mut processed = 0usize;
@@ -330,11 +328,7 @@ fn reap_entry(entry: ReaperEntry) {
 /// # Safety
 /// Called after `scheduler::init()` from the BSP.
 pub fn init_reaper() {
-    // SAFETY: bounded E9 trace to accurately pinpoint reaper init at boot.
-    unsafe {
-        core::arch::asm!("mov al, 0x52", "out 0xe9, al", options(nomem, nostack));
-        // 'R'
-    }
+    crate::arch::x86_64::debug_e9_byte(b'R');
     let reaper = create_kthread(&KthreadParams {
         name: "reaper",
         entry: reaper_loop,
@@ -346,16 +340,10 @@ pub fn init_reaper() {
         // Boot must not panic in low memory path. Zombies
         // will remain observable via waitpid(), and counters will signal
         // lack of progress from the reaper.
-        unsafe {
-            core::arch::asm!("mov al, 0x21", "out 0xe9, al", options(nomem, nostack));
-        }
+        crate::arch::x86_64::debug_e9_byte(b'!');
         return;
     }
-    // SAFETY: bounded E9 trace to confirm completion of init_reaper.
-    unsafe {
-        core::arch::asm!("mov al, 0x72", "out 0xe9, al", options(nomem, nostack));
-        // 'r'
-    }
+    crate::arch::x86_64::debug_e9_byte(b'r');
 }
 
 /// Number of processes/threads freed since boot.

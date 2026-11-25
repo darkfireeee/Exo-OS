@@ -197,17 +197,7 @@ static EVENTS_CRITICAL: AtomicU64 = AtomicU64::new(0);
 
 #[inline]
 fn rdtsc() -> u64 {
-    let lo: u32;
-    let hi: u32;
-    // SAFETY: rdtsc available on x86_64; non-serialized sufficient for log timestamp.
-    unsafe {
-        core::arch::asm!(
-            "rdtsc",
-            out("eax") lo,
-            out("edx") hi,
-        );
-    }
-    (hi as u64) << 32 | lo as u64
+    crate::arch::x86_64::cpu::tsc::read_tsc()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -65,6 +65,13 @@ pub struct CwdMap {
     pub slots: [CwdEntry; CWD_MAP_SIZE],
 }
 
+// SAFETY: access protected by `CWD_LOCK` below.
+unsafe impl Sync for CwdMap {}
+
+pub static mut CWD_MAP: CwdMap = CwdMap {
+    slots: [const { CwdEntry::empty() }; CWD_MAP_SIZE],
+};
+
 pub static CWD_LOCK: SpinMutex<()> = SpinMutex::new(());
 
 /// Gets CWD slot index for `pid`. Creates slot if absent.

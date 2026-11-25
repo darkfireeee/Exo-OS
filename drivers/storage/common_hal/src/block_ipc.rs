@@ -6,101 +6,10 @@
 //! - SRV-02 : #![no_std], arithmétique entière pure, aucun flottant ni SIMD.
 
 use exo_syscall_abi as syscall;
-
-/// Opcodes du protocole IPC de stockage Exo-OS
-pub const BLOCK_OP_READ: u32 = 0x3001;
-pub const BLOCK_OP_WRITE: u32 = 0x3002;
-pub const BLOCK_OP_FLUSH: u32 = 0x3003;
-pub const BLOCK_OP_GET_INFO: u32 = 0x3004;
-
-pub const BLOCK_DEFAULT_SIZE: usize = 4096;
-
-/// Commande de transfert de bloc (format fil encapsulé dans le payload IPC)
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct BlockCmdWire {
-    pub opcode: u32,
-    pub flags: u32,
-    pub lba: u64,
-    pub count: u32,
-    pub _pad: u32,
-    pub dma_phys: u64,
-    pub cap_token: [u8; 20],
-    pub _reserved: [u8; 8],
-}
-
-impl BlockCmdWire {
-    pub const fn zeroed() -> Self {
-        Self {
-            opcode: 0,
-            flags: 0,
-            lba: 0,
-            count: 0,
-            _pad: 0,
-            dma_phys: 0,
-            cap_token: [0u8; 20],
-            _reserved: [0u8; 8],
-        }
-    }
-}
-
-/// Réponse du serveur de stockage (format fil encapsulé dans le payload IPC)
-#[repr(C)]
-#[derive(Clone, Copy, Debug)]
-pub struct BlockReplyWire {
-    pub status: i64,
-    pub lba: u64,
-    pub count: u32,
-    pub block_size: u32,
-    pub total_blocks: u64,
-    pub _reserved: [u8; 32],
-}
-
-impl BlockReplyWire {
-    pub const fn ok(lba: u64, count: u32, block_size: u32, total_blocks: u64) -> Self {
-        Self {
-            status: 0,
-            lba,
-            count,
-            block_size,
-            total_blocks,
-            _reserved: [0u8; 32],
-        }
-    }
-
-    pub const fn error(status: i64) -> Self {
-        Self {
-            status,
-            lba: 0,
-            count: 0,
-            block_size: 0,
-            total_blocks: 0,
-            _reserved: [0u8; 32],
-        }
-    }
-}
-
-/// Enveloppe complète de requête IPC compatible avec `syscall::IPC_ENVELOPE_SIZE`
-#[repr(C)]
-pub struct BlockIpcRequest {
-    pub sender_pid: u32,
-    pub msg_type: u32,
-    pub cmd: BlockCmdWire,
-    pub _pad: [u8; syscall::IPC_INLINE_PAYLOAD_SIZE - core::mem::size_of::<BlockCmdWire>()],
-}
-
-const _: () = assert!(core::mem::size_of::<BlockIpcRequest>() == syscall::IPC_ENVELOPE_SIZE);
-
-/// Enveloppe complète de réponse IPC compatible avec `syscall::IPC_ENVELOPE_SIZE`
-#[repr(C)]
-pub struct BlockIpcReply {
-    pub sender_pid: u32,
-    pub msg_type: u32,
-    pub reply: BlockReplyWire,
-    pub _pad: [u8; syscall::IPC_INLINE_PAYLOAD_SIZE - core::mem::size_of::<BlockReplyWire>()],
-}
-
-const _: () = assert!(core::mem::size_of::<BlockIpcReply>() == syscall::IPC_ENVELOPE_SIZE);
+pub use syscall::{
+    BlockCmdWire, BlockIpcReply, BlockIpcRequest, BlockReplyWire, BLOCK_DEFAULT_SIZE,
+    BLOCK_OP_FLUSH, BLOCK_OP_GET_INFO, BLOCK_OP_READ, BLOCK_OP_WRITE,
+};
 
 /// Trait unifié de périphérique bloc abstrait pour les drivers Ring 3
 pub trait BlockDeviceOps {

@@ -183,20 +183,8 @@ pub extern "C" fn phoenix_inject_kernel_a_panic() -> i64 {
 
     #[cfg(all(target_arch = "x86_64", target_os = "none"))]
     let recovered: u64 = unsafe {
-        let mut out: u64;
         resurrection::arm_runtime_recovery(1, 1, 1);
-        // Real hardware Ring 0 `#UD` trap (`ud2` = 2 bytes `0x0F 0x0B`) caught by
-        // `do_invalid_opcode` -> `kernel_panic_exception` -> `try_recover_exception`,
-        // which records SSR crash context (`0x0480..0x0498`), locks IOMMU, and advances
-        // `frame.rip` by 2 bytes with `frame.rax = 1`.
-        core::arch::asm!(
-            "xor eax, eax",
-            "ud2",
-            "mov {flag}, rax",
-            flag = lateout(reg) out,
-            out("rax") _,
-            options(nostack, nomem),
-        );
+        let out = crate::arch::x86_64::phoenix_ud2_probe();
         resurrection::disarm_runtime_recovery();
         out
     };
@@ -266,19 +254,16 @@ pub extern "C" fn phoenix_inject_kernel_a_deadlock() -> i64 {
     resurrection::arm_nmi_deadlock_recovery();
     #[cfg(all(target_arch = "x86_64", target_os = "none"))]
     unsafe {
-        let rflags: u64;
-        core::arch::asm!("pushfq", "pop {}", "cli", out(reg) rflags, options(nomem));
+        let rflags = crate::arch::x86_64::save_and_cli();
         send_self_hardware_nmi();
         let deadline = tsc::read_tsc().wrapping_add(tsc::tsc_ms_to_cycles(200).max(1));
         while !resurrection::nmi_deadlock_broken() {
             if tsc::read_tsc().wrapping_sub(deadline) < (u64::MAX / 2) {
                 break;
             }
-            core::arch::asm!("pause", options(nostack, nomem));
+            crate::arch::x86_64::cpu_pause();
         }
-        if (rflags & (1 << 9)) != 0 {
-            core::arch::asm!("sti", options(nostack, nomem));
-        }
+        crate::arch::x86_64::restore_if_enabled(rflags);
     }
 
     if !resurrection::nmi_deadlock_broken() || !resurrection::nmi_executed_on_ist() {

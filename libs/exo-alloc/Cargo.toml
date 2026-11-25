@@ -16,4 +16,5 @@ global-alloc = []
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("exo"))'] }
 
 [dependencies]
+exo-abi = { path = "../exo-abi" }
 exo-phoenix-ssr = { path = "../exo-phoenix-ssr" }

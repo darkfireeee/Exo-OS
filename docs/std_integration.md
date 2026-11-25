@@ -72,7 +72,7 @@ Le portage de `library/std` dans [`library/std/src/`](../library/std/src/) s'art
 - [`runtime.rs`](../library/std/src/sys/pal/exo_os/runtime.rs) :
   - `GenericTcb` / `ExoTcb`, `SignalTcb`, `sigaction_0syscall` (`LOCK CMPXCHG16B`), `sigprocmask_0syscall`, `exo_sigreturn_trampoline`, `fork()`, `execve()`.
 - [`syscall.rs`](../library/std/src/sys/pal/exo_os/syscall.rs) :
-  - Appels système directs en assembleur inline `syscall` x86_64 couvrant les descripteurs POSIX (`read`, `write`, `open`, `close`, `stat`, `lseek`, `dup`, `dup2`, `pipe2`, `fcntl`, `getcwd`, `chdir`, `mkdir`, `rmdir`, `unlink`, `rename`, `getdents64`), la mémoire (`mmap`, `mprotect`, `munmap`, `mremap`), les processus/threads (`clone`, `fork`, `execve`, `exit`, `exit_group`, `wait4`, `kill`, `getpid`, `gettid`, `arch_prctl`, `futex`, `sched_yield`), le temps (`clock_gettime`, `nanosleep`), les sockets réseau (`socket`, `connect`, `accept`, `sendto`, `recvfrom`, `bind`, `listen`, `setsockopt`, `getsockopt`, `shutdown`), ainsi que les appels natifs ExoFS (`500..=520`), ExoPledge (`530..=531`) et ExoPhoenix (`548`).
+  - Appels système directs en assembleur inline `syscall` x86_64 couvrant les descripteurs POSIX (`read`, `write`, `open`, `close`, `stat`, `lseek`, `dup`, `dup2`, `pipe2`, `fcntl`, `getcwd`, `chdir`, `mkdir`, `rmdir`, `unlink`, `rename`, `getdents64`), la mémoire (`mmap`, `mprotect`, `munmap`, `mremap`), les processus/threads (`clone`, `fork`, `execve`, `exit`, `exit_group`, `wait4`, `kill`, `getpid`, `gettid`, `arch_prctl`, `futex`, `sched_yield`), le temps (`clock_gettime`, `nanosleep`), les sockets réseau (`socket`, `connect`, `accept`, `sendto`, `recvfrom`, `bind`, `listen`, `setsockopt`, `getsockopt`, `shutdown`), ainsi que les appels natifs ExoPledge (`SYS_EXO_PLEDGE = 324`, `SYS_EXO_UNVEIL = 325`), ExoFS (`500..=520`), ExoPhoenix (`SYS_PHOENIX_FORCE = 523`, `SYS_PHOENIX_CHECKPOINT = 548`) et le contrôle GI-03 (`530..=549`).
 - [`alloc_dlmalloc.rs`](../library/std/src/sys/pal/exo_os/alloc_dlmalloc.rs) :
   - Implémentation 100 % Rust de l'algorithme Doug Lea (`dlmalloc`) adossée à `SYS_MMAP`, `SYS_MREMAP` et `SYS_MUNMAP`, protégée par un spinlock atomique sur `SYS_FUTEX` et intégrant le marquage `PhoenixSafe` (`SYS_MPROTECT` avec `PROT_PHOENIX_SAFE = 0x10`). Aucun symbole C externe.
 - [`futex.rs`](../library/std/src/sys/pal/exo_os/futex.rs) :
@@ -98,8 +98,8 @@ Le module [`std::os::exo`](../library/std/src/os/exo/mod.rs) expose les capacit�
 - **`std::os::exo::io`** : `AsFd`, `AsRawFd`, `BorrowedFd`, `FromRawFd`, `IntoRawFd`, `OwnedFd`, `RawFd`.
 - **`CapTokenExt`** : inspection du `CapTokenUser` initial reçu via `AT_CAP_TOKEN = 52`, `clone_for_child(reduced_rights)`, `delegate(target_pid)`.
 - **`ExoFsExt`** : opérations natives ExoFS sur `std::fs::File` (`snapshot`, `bptree_search`, `xattr_get`, `xattr_set`).
-- **`PhoenixSafeExt`** : wrapper `PhoenixSafe<T>` allouant dans une arène marquée `PROT_PHOENIX_SAFE` (`0x10`) et déclenchant `SYS_PHOENIX_CHECKPOINT` (`548`) pour la reprise instantanée après faute.
-- **`ExoPledgeExt`** : confinement Zero-Trust par processus via `pledge(promises)` (`SYS_EXO_PLEDGE = 530`) et `unveil(path, permissions)` (`SYS_EXO_UNVEIL = 531`).
+- **`PhoenixSafeExt`** : wrapper `PhoenixSafe<T>` allouant dans une arène marquée `PROT_PHOENIX_SAFE` (`0x10`) et déclenchant `SYS_PHOENIX_CHECKPOINT` (`548`) / `SYS_PHOENIX_FORCE` (`523`) pour la reprise instantanée après faute.
+- **`ExoPledgeExt`** : confinement Zero-Trust par processus via `pledge(promises)` (`SYS_EXO_PLEDGE = 324`) et `unveil(path, permissions)` (`SYS_EXO_UNVEIL = 325`).
 
 ---
 

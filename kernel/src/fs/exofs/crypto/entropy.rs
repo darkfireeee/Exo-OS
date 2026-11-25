@@ -149,31 +149,11 @@ impl EntropyPool {
 
     /// Lecture RDRAND directe — retourne None si RDRAND absent ou échec.
     ///
-    /// Utilisé pour des besoins spécifiques de bas niveau.
-    /// En pratique, préférer `random_u64()` qui mixe RDRAND + ChaCha20.
-    #[cfg(target_arch = "x86_64")]
+    /// Délègue au trait plateforme `crate::fs::exofs::platform::try_hw_random_u64()`
+    /// afin d'éviter tout `asm!` direct dans `fs/exofs/`.
+    #[inline]
     pub fn read_rdrand() -> Option<u64> {
-        let v: u64;
-        let ok: u8;
-        unsafe {
-            core::arch::asm!(
-                "rdrand {v}",
-                "setc {ok}",
-                v = out(reg) v,
-                ok = out(reg_byte) ok,
-                options(nostack, nomem),
-            );
-        }
-        if ok != 0 {
-            Some(v)
-        } else {
-            None
-        }
-    }
-
-    #[cfg(not(target_arch = "x86_64"))]
-    pub fn read_rdrand() -> Option<u64> {
-        None
+        crate::fs::exofs::platform::try_hw_random_u64()
     }
 }
 
@@ -209,25 +189,7 @@ fn fallback_entropy_u64() -> u64 {
 
 #[inline]
 fn read_tsc_fallback() -> u64 {
-    #[cfg(target_arch = "x86_64")]
-    {
-        let lo: u32;
-        let hi: u32;
-        // SAFETY: RDTSC est non privilégiée sur x86_64 et n'écrit que dans les registres de sortie.
-        unsafe {
-            core::arch::asm!(
-                "rdtsc",
-                out("eax") lo,
-                out("edx") hi,
-                options(nomem, nostack),
-            );
-        }
-        ((hi as u64) << 32) | lo as u64
-    }
-    #[cfg(not(target_arch = "x86_64"))]
-    {
-        0xD1CE_FA11_BA0C_0001u64
-    }
+    crate::fs::exofs::platform::monotonic_ticks()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

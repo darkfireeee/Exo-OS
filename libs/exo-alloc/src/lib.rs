@@ -33,10 +33,7 @@ pub const MAP_ANONYMOUS: u64 = 0x20;
 
 pub const MREMAP_MAYMOVE: u64 = 1;
 
-pub const SYS_MMAP: u64 = 9;
-pub const SYS_MPROTECT: u64 = 10;
-pub const SYS_MUNMAP: u64 = 11;
-pub const SYS_MREMAP: u64 = 25;
+pub use exo_abi::{SYS_MMAP, SYS_MPROTECT, SYS_MREMAP, SYS_MUNMAP};
 
 pub const PAGE_SIZE: usize = 4096;
 const ARENA_SIZE: usize = 16 * PAGE_SIZE; // 64 KiB par arène dlmalloc

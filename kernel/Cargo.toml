@@ -28,9 +28,12 @@ bench = false
 #  Dependances (no_std uniquement) 
 
 [dependencies]
+exo-abi          = { path = "../libs/exo-abi" }
+exo-wire         = { path = "../libs/exo-wire" }
+exo-font         = { path = "../libs/exo-font" }
 exo-types        = { path = "../libs/exo_types" }
 exo-phoenix-ssr  = { path = "../libs/exo-phoenix-ssr" }
-exo-virtio-blk = { path = "../drivers/storage/virtio_blk" }
+exo-virtio-blk   = { path = "../drivers/storage/virtio_blk" }
 
 #  Workspace partage 
 spin                  = { workspace = true }
@@ -85,11 +88,11 @@ x25519-dalek     = { workspace = true }          # security/crypto/x25519.rs
 ed25519-dalek    = { workspace = true }          # security/crypto/ed25519.rs + code_signing.rs
 # Crypto de chiffrement-at-rest ExoFS, source UNIQUE partagée avec exofs-mkroot
 # (XChaCha20 u32 pur + MAC BLAKE3 + Argon2id — compatible bare-metal, pas de chacha20 crate).
-exo-fscrypt      = { path = "../drivers/storage/fscrypt" }
+exo-fscrypt      = { path = "../libs/exo-fscrypt" }
 # Parseur GPT/MBR réel (équiv. redox partitionlib), source UNIQUE partagée avec
 # le bootloader — no_std + alloc, aucune dépendance externe. Localise la partition
 # ExoFS ROOT par type-GUID au lieu d'un LBA codé en dur. Cf. storage/partition_scan.rs.
-exo-partition    = { path = "../drivers/storage/partition" }
+exo-partition    = { path = "../libs/exo-partition" }
 
 [dev-dependencies]
 proptest          = { workspace = true }

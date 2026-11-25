@@ -374,17 +374,7 @@ pub(crate) unsafe fn scoped_domain_access(
 // SAFETY: validated low-level operation — see block documentation.
 pub unsafe fn exoveil_init() {
     // Detect PKS: CPUID.07H.0H:ECX bit 6
-    let ecx: u32;
-    core::arch::asm!(
-        "push rbx",
-        "mov eax, 7",
-        "xor ecx, ecx",
-        "cpuid",
-        "pop rbx",
-        out("ecx") ecx,
-        lateout("eax") _,
-        lateout("edx") _,
-    );
+    let (_, _, ecx, _) = crate::arch::x86_64::cpuid_ex(7, 0);
     let pks_supported = ecx & (1 << 6) != 0;
 
     PKS_AVAILABLE.store(pks_supported, Ordering::Release);

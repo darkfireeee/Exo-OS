@@ -199,16 +199,7 @@ static PKU_KEY_ALLOC: Mutex<PkuKeyAllocator> = Mutex::new(PkuKeyAllocator::new()
 /// CPL 0, PKE must be active.
 #[inline(always)]
 pub unsafe fn rdpkru() -> u32 {
-    let val: u32;
-    core::arch::asm!(
-        "xor ecx, ecx",
-        "rdpkru",
-        out("eax") val,
-        lateout("edx") _,
-        lateout("ecx") _,
-        options(nostack, nomem),
-    );
-    val
+    crate::arch::x86_64::rdpkru_raw()
 }
 
 /// Writes `val` into the PKRU register.
@@ -217,13 +208,7 @@ pub unsafe fn rdpkru() -> u32 {
 /// CPL 0 or user (RDPKRU user-mode ok if CR4.PKE).
 #[inline(always)]
 pub unsafe fn wrpkru(val: u32) {
-    core::arch::asm!(
-        "xor ecx, ecx",
-        "xor edx, edx",
-        "wrpkru",
-        in("eax") val,
-        options(nostack, nomem),
-    );
+    crate::arch::x86_64::wrpkru_raw(val);
     PKU_STATS.pkru_write_count.fetch_add(1, Ordering::Relaxed);
 }
 
@@ -234,15 +219,13 @@ pub unsafe fn wrpkru(val: u32) {
 /// # Safety: CPL 0.
 #[inline(always)]
 unsafe fn read_cr4() -> u64 {
-    let v: u64;
-    core::arch::asm!("mov {v}, cr4", v = out(reg) v, options(nostack, nomem, preserves_flags));
-    v
+    crate::arch::x86_64::read_cr4()
 }
 
 /// # Safety: CPL 0.
 #[inline(always)]
 unsafe fn write_cr4(val: u64) {
-    core::arch::asm!("mov cr4, {v}", v = in(reg) val, options(nostack, nomem));
+    crate::arch::x86_64::write_cr4(val);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -252,22 +235,7 @@ unsafe fn write_cr4(val: u64) {
 /// PKU supported: CPUID.7.0:ECX bit 3.
 #[inline]
 pub fn pku_supported() -> bool {
-    let ecx: u32;
-    // SAFETY: CPUID available on x86_64; xchg preserves rbx reserved by LLVM.
-    unsafe {
-        core::arch::asm!(
-            "xchg {tmp:r}, rbx",
-            "mov eax, 7",
-            "xor ecx, ecx",
-            "cpuid",
-            "xchg {tmp:r}, rbx",
-            out("ecx") ecx,
-            lateout("eax") _,
-            lateout("edx") _,
-            tmp = inout(reg) 0u64 => _,
-            options(nostack, nomem),
-        );
-    }
+    let (_, _, ecx, _) = crate::arch::x86_64::cpuid_ex(7, 0);
     ecx & (1 << 3) != 0
 }
 

@@ -5,5 +5,7 @@
 // process/, security/. Initialized in Phase 7 of kernel_init().
 
 pub mod elf_loader_impl;
-/// ExoFS — native Exo-OS file system (epoch-journaled)
+/// ExoFS — native Exo-OS file system (epoch-journaled, ISA-independent core)
 pub mod exofs;
+/// ExoFS hardware & platform adapters (VirtIO-Blk, ATA PIO, Multiboot2 ramdisk, x86 clock/RNG/trace)
+pub mod exofs_hal;

@@ -15,24 +15,19 @@
 //!   - SIGKILL/SIGSTOP sont non-masquables (SIG-07 respecté par le kernel).
 //!   - Un service crashé est relancé avec un délai exponentiel (max 32s).
 
-use core::panic::PanicInfo;
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::Ordering;
+pub(crate) use exo_init_server::{dependency, service_manager, service_table, supervisor, Service};
 pub(crate) use exo_syscall_abi as syscall;
 
 mod boot_info;
 mod boot_sequence;
-mod dependency;
 mod isolation;
 mod log;
 mod protocol;
-mod service_manager;
-mod service_table;
 mod sigchld_handler;
-mod supervisor;
 mod watchdog;
 
 const CLOCK_MONOTONIC: u64 = 1;
-const SERVICE_STABLE_MS: u64 = 5_000;
 
 #[repr(C)]
 #[derive(Default)]
@@ -56,105 +51,6 @@ fn monotonic_ms() -> u64 {
     (ts.tv_sec as u64)
         .saturating_mul(1_000)
         .saturating_add((ts.tv_nsec as u64) / 1_000_000)
-}
-
-/// Descripteur d'un service supervisé.
-struct Service {
-    #[allow(dead_code)]
-    name: &'static str,
-    bin_path: &'static [u8], // chemin u8 null-terminated vers le binaire
-    pid: AtomicU32,          // PID courant (0 = non démarré)
-    restart_delay_ticks: AtomicU32, // délai avant relance (backoff exponentiel)
-    spawn_time_ms: AtomicU64,
-    disabled: AtomicBool,
-    dead: AtomicBool,
-    ready: AtomicBool,
-}
-
-impl Service {
-    const fn new(name: &'static str, bin: &'static [u8]) -> Self {
-        Self {
-            name,
-            bin_path: bin,
-            pid: AtomicU32::new(0),
-            restart_delay_ticks: AtomicU32::new(1),
-            spawn_time_ms: AtomicU64::new(0),
-            disabled: AtomicBool::new(false),
-            dead: AtomicBool::new(false),
-            ready: AtomicBool::new(false),
-        }
-    }
-
-    fn current_pid(&self) -> u32 {
-        self.pid.load(Ordering::Acquire)
-    }
-
-    fn is_disabled(&self) -> bool {
-        self.disabled.load(Ordering::Acquire)
-    }
-
-    fn is_dead(&self) -> bool {
-        self.dead.load(Ordering::Acquire)
-    }
-
-    fn is_ready(&self) -> bool {
-        self.ready.load(Ordering::Acquire)
-    }
-
-    fn set_pid(&self, pid: u32) {
-        self.pid.store(pid, Ordering::Release);
-        self.disabled.store(false, Ordering::Release);
-        self.dead.store(false, Ordering::Release);
-        self.ready.store(false, Ordering::Release);
-        self.spawn_time_ms.store(monotonic_ms(), Ordering::Release);
-    }
-
-    fn mark_ready(&self) {
-        if self.current_pid() != 0 {
-            self.ready.store(true, Ordering::Release);
-        }
-    }
-
-    fn enable(&self) {
-        self.disabled.store(false, Ordering::Release);
-        self.dead.store(false, Ordering::Release);
-    }
-
-    fn disable(&self) {
-        self.disabled.store(true, Ordering::Release);
-        self.dead.store(true, Ordering::Release);
-        self.ready.store(false, Ordering::Release);
-        self.pid.store(0, Ordering::Release);
-        self.spawn_time_ms.store(0, Ordering::Release);
-        self.restart_delay_ticks.store(1, Ordering::Relaxed);
-    }
-
-    fn mark_dead(&self) {
-        let now = monotonic_ms();
-        let spawn = self.spawn_time_ms.load(Ordering::Acquire);
-        self.pid.store(0, Ordering::Release);
-        self.dead.store(true, Ordering::Release);
-        self.ready.store(false, Ordering::Release);
-        self.spawn_time_ms.store(0, Ordering::Release);
-        if spawn != 0 && now.saturating_sub(spawn) >= SERVICE_STABLE_MS {
-            self.restart_delay_ticks.store(1, Ordering::Relaxed);
-        } else {
-            let d = self.restart_delay_ticks.load(Ordering::Relaxed).max(1);
-            self.restart_delay_ticks
-                .store(d.saturating_mul(2).min(32), Ordering::Relaxed);
-        }
-    }
-
-    fn note_alive(&self) {
-        let pid = self.current_pid();
-        if pid == 0 {
-            return;
-        }
-        let spawn = self.spawn_time_ms.load(Ordering::Acquire);
-        if spawn != 0 && monotonic_ms().saturating_sub(spawn) >= SERVICE_STABLE_MS {
-            self.restart_delay_ticks.store(1, Ordering::Relaxed);
-        }
-    }
 }
 
 type ServiceWatchdog = watchdog::InitWatchdog<{ service_table::SERVICE_COUNT }>;
@@ -750,8 +646,4 @@ pub extern "C" fn _start(boot_info_virt: usize) -> ! {
     halt_forever();
 }
 
-#[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
-    // Init ne peut pas mourir -- boucle. Le kernel le relancera via SIGCHLD du parent (inexistant).
-    halt_forever();
-}
+exo_syscall_abi::ring1_nostd_panic_handler!(b"");

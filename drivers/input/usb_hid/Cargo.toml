@@ -11,7 +11,7 @@ path = "src/lib.rs"
 crate-type = ["rlib"]
 
 [dependencies]
-exo-syscall-abi = { path = "../../../servers/syscall_abi" }
+exo_syscall_abi = { package = "exo-srv-rt", path = "../../../libs/exo-srv-rt" }
 exo-os-drivers = { path = "../.." }
 
 [features]

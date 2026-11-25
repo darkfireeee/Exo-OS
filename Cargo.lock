@@ -301,11 +301,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "exo-abi"
+version = "0.2.0"
+
+[[package]]
 name = "exo-ahci"
 version = "0.1.0"
 dependencies = [
+ "exo-srv-rt",
  "exo-storage-common-hal",
- "exo-syscall-abi",
  "log",
  "spin",
 ]
@@ -314,6 +318,7 @@ dependencies = [
 name = "exo-alloc"
 version = "0.1.0"
 dependencies = [
+ "exo-abi",
  "exo-phoenix-ssr",
 ]
 
@@ -322,7 +327,7 @@ name = "exo-audio-drivers"
 version = "0.1.0"
 dependencies = [
  "exo-os-drivers",
- "exo-syscall-abi",
+ "exo-srv-rt",
  "spin",
 ]
 
@@ -369,7 +374,7 @@ name = "exo-e1000-driver"
 version = "0.1.0"
 dependencies = [
  "exo-network-common",
- "exo-syscall-abi",
+ "exo-srv-rt",
 ]
 
 [[package]]
@@ -406,8 +411,13 @@ dependencies = [
 name = "exo-fb-server"
 version = "0.1.0"
 dependencies = [
+ "exo-font",
  "exo-syscall-abi",
 ]
+
+[[package]]
+name = "exo-font"
+version = "0.1.0"
 
 [[package]]
 name = "exo-fscrypt"
@@ -454,24 +464,27 @@ dependencies = [
 name = "exo-libc"
 version = "0.1.0"
 dependencies = [
+ "exo-abi",
  "exo-alloc",
  "exo-phoenix-ssr",
  "exo-rt",
  "exo-syscall",
- "exo-syscall-abi",
  "exo-types",
 ]
 
 [[package]]
 name = "exo-loader"
 version = "0.1.0"
+dependencies = [
+ "exo-abi",
+]
 
 [[package]]
 name = "exo-loopback-driver"
 version = "0.1.0"
 dependencies = [
  "exo-network-common",
- "exo-syscall-abi",
+ "exo-srv-rt",
 ]
 
 [[package]]
@@ -499,8 +512,8 @@ dependencies = [
 name = "exo-nvme"
 version = "0.1.0"
 dependencies = [
+ "exo-srv-rt",
  "exo-storage-common-hal",
- "exo-syscall-abi",
  "log",
  "spin",
 ]
@@ -516,7 +529,7 @@ dependencies = [
 name = "exo-os-drivers"
 version = "0.1.0"
 dependencies = [
- "exo-syscall-abi",
+ "exo-srv-rt",
  "spin",
 ]
 
@@ -529,11 +542,14 @@ dependencies = [
  "bitflags 2.11.0",
  "blake3",
  "ed25519-dalek",
+ "exo-abi",
+ "exo-font",
  "exo-fscrypt",
  "exo-partition",
  "exo-phoenix-ssr",
  "exo-types",
  "exo-virtio-blk",
+ "exo-wire",
  "hashbrown",
  "hkdf",
  "hmac",
@@ -569,7 +585,19 @@ version = "0.2.0"
 name = "exo-ps2-input"
 version = "0.1.0"
 dependencies = [
+ "exo-srv-rt",
+]
+
+[[package]]
+name = "exo-ring1-unit"
+version = "0.1.0"
+dependencies = [
+ "exo-crypto-server",
+ "exo-init-server",
+ "exo-ipc-router",
+ "exo-shield",
  "exo-syscall-abi",
+ "exo-vfs-server",
 ]
 
 [[package]]
@@ -579,7 +607,6 @@ dependencies = [
  "exo-alloc",
  "exo-phoenix-ssr",
  "exo-syscall",
- "exo-syscall-abi",
 ]
 
 [[package]]
@@ -599,10 +626,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "exo-srv-rt"
+version = "0.2.0"
+dependencies = [
+ "exo-abi",
+ "exo-wire",
+]
+
+[[package]]
 name = "exo-storage-common-hal"
 version = "0.1.0"
 dependencies = [
- "exo-syscall-abi",
+ "exo-srv-rt",
  "spin",
 ]
 
@@ -610,19 +645,24 @@ dependencies = [
 name = "exo-syscall"
 version = "0.1.0"
 dependencies = [
- "exo-syscall-abi",
+ "exo-abi",
  "exo-types",
 ]
 
 [[package]]
 name = "exo-syscall-abi"
 version = "0.1.0"
+dependencies = [
+ "exo-abi",
+ "exo-srv-rt",
+ "exo-wire",
+]
 
 [[package]]
 name = "exo-tty"
 version = "0.1.0"
 dependencies = [
- "exo-syscall-abi",
+ "exo-srv-rt",
 ]
 
 [[package]]
@@ -645,7 +685,7 @@ name = "exo-usb-hid"
 version = "0.1.0"
 dependencies = [
  "exo-os-drivers",
- "exo-syscall-abi",
+ "exo-srv-rt",
 ]
 
 [[package]]
@@ -678,15 +718,15 @@ dependencies = [
 name = "exo-vga-text"
 version = "0.1.0"
 dependencies = [
- "exo-syscall-abi",
+ "exo-srv-rt",
 ]
 
 [[package]]
 name = "exo-virtio-blk"
 version = "0.1.0"
 dependencies = [
+ "exo-srv-rt",
  "exo-storage-common-hal",
- "exo-syscall-abi",
  "log",
  "spin",
  "virtio-drivers",
@@ -704,7 +744,7 @@ dependencies = [
 name = "exo-virtio-gpu"
 version = "0.1.0"
 dependencies = [
- "exo-syscall-abi",
+ "exo-srv-rt",
 ]
 
 [[package]]
@@ -712,7 +752,14 @@ name = "exo-virtio-net-driver"
 version = "0.1.0"
 dependencies = [
  "exo-network-common",
- "exo-syscall-abi",
+ "exo-srv-rt",
+]
+
+[[package]]
+name = "exo-wire"
+version = "0.2.0"
+dependencies = [
+ "exo-abi",
 ]
 
 [[package]]
@@ -912,10 +959,6 @@ dependencies = [
  "bit_field",
  "bitflags 2.11.0",
 ]
-
-[[package]]
-name = "phase5-tests"
-version = "0.1.0"
 
 [[package]]
 name = "pico-args"

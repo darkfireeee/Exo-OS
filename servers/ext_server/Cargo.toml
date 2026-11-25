@@ -13,5 +13,5 @@ path = "src/main.rs"
 
 [dependencies]
 exo-syscall-abi  = { path = "../syscall_abi" }
-exo-os-driver-fs = { path = "../../drivers/fs" }
+exo-os-driver-fs = { path = "../../libs/exo-fs-formats" }
 spin             = { version = "0.9", default-features = false, features = ["spin_mutex"] }

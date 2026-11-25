@@ -15,7 +15,6 @@ default = []
 crt0 = []
 
 [dependencies]
-exo-syscall-abi = { path = "../../servers/syscall_abi" }
 exo-syscall = { path = "../exo-syscall" }
 exo-alloc = { path = "../exo-alloc" }
 exo-phoenix-ssr = { path = "../exo-phoenix-ssr" }

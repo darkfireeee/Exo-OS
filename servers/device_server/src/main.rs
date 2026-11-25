@@ -9,7 +9,6 @@
 //! - politiques power/reset ;
 //! - journalisation hotplug et IOMMU côté userspace.
 
-use core::panic::PanicInfo;
 
 use spin::Mutex;
 
@@ -399,12 +398,4 @@ fn dispatch(request: &DeviceRequest) -> DeviceReply {
     }
 }
 
-#[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
-    unsafe {
-        let _ = exo_syscall_abi::syscall1(exo_syscall_abi::SYS_EXIT, 1);
-    }
-    loop {
-        core::hint::spin_loop();
-    }
-}
+exo_syscall_abi::ring1_panic_exit_handler!(b"");

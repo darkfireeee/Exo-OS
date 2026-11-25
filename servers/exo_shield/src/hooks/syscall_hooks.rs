@@ -38,40 +38,40 @@ const SYSCALL_RATE_THRESHOLD: u32 = 1024;
 /// Tracking window in TSC ticks (~1 second at 3 GHz).
 const TRACKING_WINDOW_TSC: u64 = 3_000_000_000;
 
-// ── Linux x86_64 syscall numbers ──────────────────────────────────────────────
+// ── Canonical x86_64 syscall numbers (re-exported from `exo-abi` via `exo-syscall-abi`) ──
 
 /// ptrace (attach to another process).
-pub const SYS_PTRACE: u32 = 101;
+pub const SYS_PTRACE: u32 = exo_syscall_abi::SYS_PTRACE as u32;
 /// execve (execute a program).
-pub const SYS_EXECVE: u32 = 59;
+pub const SYS_EXECVE: u32 = exo_syscall_abi::SYS_EXECVE as u32;
 /// mount (mount a filesystem).
-pub const SYS_MOUNT: u32 = 165;
+pub const SYS_MOUNT: u32 = exo_syscall_abi::SYS_MOUNT as u32;
 /// clone (create a child process).
-pub const SYS_CLONE: u32 = 56;
+pub const SYS_CLONE: u32 = exo_syscall_abi::SYS_CLONE as u32;
 /// fork (create a child process, legacy).
-pub const SYS_FORK: u32 = 57;
+pub const SYS_FORK: u32 = exo_syscall_abi::SYS_FORK as u32;
 /// chroot (change root directory).
-pub const SYS_CHROOT: u32 = 161;
+pub const SYS_CHROOT: u32 = exo_syscall_abi::SYS_CHROOT as u32;
 /// setuid (set user identity).
-pub const SYS_SETUID: u32 = 105;
+pub const SYS_SETUID: u32 = exo_syscall_abi::SYS_SETUID as u32;
 /// setgid (set group identity).
-pub const SYS_SETGID: u32 = 106;
+pub const SYS_SETGID: u32 = exo_syscall_abi::SYS_SETGID as u32;
 /// prctl (process control — can disable ptrace).
-pub const SYS_PRCTL: u32 = 157;
+pub const SYS_PRCTL: u32 = exo_syscall_abi::SYS_PRCTL as u32;
 /// reboot (reboot the system).
-pub const SYS_REBOOT: u32 = 169;
+pub const SYS_REBOOT: u32 = exo_syscall_abi::SYS_REBOOT as u32;
 /// kexec_load (load a new kernel).
-pub const SYS_KEXEC_LOAD: u32 = 246;
+pub const SYS_KEXEC_LOAD: u32 = exo_syscall_abi::SYS_KEXEC_LOAD as u32;
 /// init_module (load a kernel module).
-pub const SYS_INIT_MODULE: u32 = 175;
+pub const SYS_INIT_MODULE: u32 = exo_syscall_abi::SYS_INIT_MODULE as u32;
 /// delete_module (unload a kernel module).
-pub const SYS_DELETE_MODULE: u32 = 176;
+pub const SYS_DELETE_MODULE: u32 = exo_syscall_abi::SYS_DELETE_MODULE as u32;
 /// bpf (load BPF program — potential escalation).
-pub const SYS_BPF: u32 = 360;
+pub const SYS_BPF: u32 = exo_syscall_abi::SYS_EXO_BPF as u32;
 /// keyctl (key management — potential info leak).
-pub const SYS_KEYCTL: u32 = 250;
+pub const SYS_KEYCTL: u32 = exo_syscall_abi::SYS_KEYCTL as u32;
 /// perf_event_open (performance monitoring — can leak data).
-pub const SYS_PERF_EVENT_OPEN: u32 = 298;
+pub const SYS_PERF_EVENT_OPEN: u32 = exo_syscall_abi::SYS_PERF_EVENT_OPEN as u32;
 
 // ── TSC read ──────────────────────────────────────────────────────────────────
 

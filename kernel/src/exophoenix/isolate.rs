@@ -161,21 +161,7 @@ fn iommu_hard_revoke_and_flush() {
 
 #[inline(always)]
 fn read_current_idtr() -> (u64, u16) {
-    #[repr(C, packed)]
-    struct Idtr {
-        limit: u16,
-        base: u64,
-    }
-
-    let mut idtr = Idtr { limit: 0, base: 0 };
-    unsafe {
-        core::arch::asm!(
-            "sidt [{ptr}]",
-            ptr = in(reg) &mut idtr,
-            options(nostack, preserves_flags)
-        );
-    }
-    (idtr.base, idtr.limit)
+    crate::arch::x86_64::sidt_raw()
 }
 
 unsafe fn write_idt_entry(idt_base: u64, vector: u8, handler: u64) {

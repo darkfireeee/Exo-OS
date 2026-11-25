@@ -104,8 +104,7 @@ pub unsafe fn fixup_enter(cpu_id: usize, recovery_rip: usize) {
     let state = &COPY_STATES[cpu_id];
     // Read current RSP for unwinding (unused in this simplified
     // implementation, but available for a future unwinder)
-    let rsp: u64;
-    core::arch::asm!("mov {}, rsp", out(reg) rsp, options(nomem, nostack, preserves_flags));
+    let rsp = crate::arch::x86_64::read_rsp();
     state.recovery_rsp.store(rsp, Ordering::Relaxed);
     state.recovery_rip.store(recovery_rip, Ordering::Relaxed);
     // Publish `active` last (Release) so that recovery_rip/rsp

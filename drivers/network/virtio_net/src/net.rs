@@ -1,10 +1,10 @@
+pub use crate::syscall::{
+    DriverInitMsg, RxReleaseMsg, NET_CTRL_DRIVER_INIT, NET_CTRL_MAC_QUERY, NET_CTRL_MAC_REPLY,
+    NET_CTRL_RX_RELEASE,
+};
 pub const PAGE_SIZE: usize = 4096;
 pub const POLL_THRESHOLD: usize = 32;
 pub const RX_POOL_SIZE: usize = 256;
-pub const NET_CTRL_DRIVER_INIT: u32 = 0x4F00;
-pub const NET_CTRL_RX_RELEASE: u32 = 0x4F01;
-pub const NET_CTRL_MAC_QUERY: u32 = 0x4F02;
-pub const NET_CTRL_MAC_REPLY: u32 = 0x4F03;
 pub const VIRTIO_NET_F_MRG_RXBUF: u64 = 1u64 << 15;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -12,29 +12,6 @@ pub enum TransferMode {
     Interrupt,
     Poll,
 }
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct DriverInitMsg {
-    pub opcode: u32,
-    pub pool_count: u32,
-    pub rx_base_iova: u64,
-    pub tx_base_iova: u64,
-    pub hdr_size: u32,
-    pub _pad: u32,
-}
-
-const _: () = assert!(core::mem::size_of::<DriverInitMsg>() == 32);
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct RxReleaseMsg {
-    pub opcode: u32,
-    pub count: u32,
-    pub pool_idx: [u16; 20],
-}
-
-const _: () = assert!(core::mem::size_of::<RxReleaseMsg>() == 48);
 
 #[derive(Clone, Copy)]
 pub struct NetBufRef {

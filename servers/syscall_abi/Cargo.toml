@@ -4,9 +4,13 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description       = "Exo-OS shared syscall ABI for Ring1 servers"
+publish.workspace = true
+description       = "Exo-OS Ring 1 compatibility facade re-exporting libs/exo-abi, libs/exo-wire, and libs/exo-srv-rt"
 
 [lib]
 path = "src/lib.rs"
 
 [dependencies]
+exo-abi    = { path = "../../libs/exo-abi" }
+exo-wire   = { path = "../../libs/exo-wire" }
+exo-srv-rt = { path = "../../libs/exo-srv-rt" }

@@ -1,0 +1,16 @@
+[package]
+name              = "exo-ring1-unit"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish.workspace = true
+description       = "Host unit & integration tests against real Ring 1 server [lib] crates (replaces servers/phase5-tests)"
+
+[dependencies]
+exo-ipc-router    = { path = "../../servers/ipc_router" }
+exo-init-server   = { path = "../../servers/init_server" }
+exo-crypto-server = { path = "../../servers/crypto_server" }
+exo-vfs-server    = { path = "../../servers/vfs_server" }
+exo-shield        = { path = "../../servers/exo_shield" }
+exo-syscall-abi   = { path = "../../servers/syscall_abi" }

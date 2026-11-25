@@ -196,26 +196,13 @@ impl<'a, T> Drop for IrqSpinLockGuard<'a, T> {
 
 #[inline(always)]
 pub fn save_and_disable_irq() -> u64 {
-    let rflags: u64;
-    // SAFETY: pushfq/pop read RFLAGS; cli atomically disables IRQs; state restored by restore_irq().
-    unsafe {
-        core::arch::asm!(
-            "pushfq",
-            "pop {flags}",
-            "cli",
-            flags = out(reg) rflags,
-            options(nomem, preserves_flags),
-        );
-    }
-    rflags
+    crate::arch::x86_64::save_and_cli()
 }
 
 #[inline(always)]
 pub fn restore_irq(rflags: u64) {
-    if rflags & (1 << 9) != 0 {
-        // SAFETY: sti restores saved IRQ state; IF bit was 1, setting back to 1.
-        unsafe {
-            core::arch::asm!("sti", options(nomem, nostack, preserves_flags));
-        }
+    // SAFETY: restores saved IF bit on current CPU.
+    unsafe {
+        crate::arch::x86_64::restore_if_enabled(rflags);
     }
 }

@@ -19,10 +19,7 @@ use core::sync::atomic::{compiler_fence, Ordering};
 
 use super::boot::early_init::{BootFramebufferFormat, BootInfo};
 
-#[path = "../../../../exo-boot/src/display/font.rs"]
-mod shared_font;
-
-use shared_font::{glyph_for, FONT_GLYPH_HEIGHT, FONT_GLYPH_WIDTH};
+use exo_font::{glyph_for, FONT_GLYPH_HEIGHT, FONT_GLYPH_WIDTH};
 
 const FRAMEBUFFER_WINDOW_OFFSET: u64 = 0x0200_0000;
 const FRAMEBUFFER_VIRT_BASE: u64 = FIXMAP_BASE.as_u64() + FRAMEBUFFER_WINDOW_OFFSET;

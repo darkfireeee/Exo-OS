@@ -1,0 +1,14 @@
+[package]
+name = "exo-abi"
+version = "0.2.0"
+edition = "2021"
+authors = ["Exo-OS Team"]
+license = "MIT OR Apache-2.0"
+publish = false
+description = "Exo-OS canonical zero-dependency #![no_std] syscall numbers, errno, capability ABI, and POSIX constants"
+
+[lib]
+name = "exo_abi"
+path = "src/lib.rs"
+
+[dependencies]

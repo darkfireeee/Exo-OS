@@ -266,17 +266,8 @@ pub fn record_error_ctx(ctx: &DmaErrorContext) {
 #[inline(always)]
 fn read_tsc() -> u64 {
     #[cfg(target_arch = "x86_64")]
-    // SAFETY: RDTSC available on x86_64; non-serializing sufficient for diagnostics.
-    unsafe {
-        let lo: u32;
-        let hi: u32;
-        core::arch::asm!(
-            "rdtsc",
-            out("eax") lo,
-            out("edx") hi,
-            options(nostack, nomem),
-        );
-        ((hi as u64) << 32) | (lo as u64)
+    {
+        crate::arch::x86_64::cpu::tsc::read_tsc()
     }
     #[cfg(not(target_arch = "x86_64"))]
     {

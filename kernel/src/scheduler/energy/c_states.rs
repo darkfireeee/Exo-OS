@@ -35,26 +35,8 @@ static MONITOR_LINES: [MonitorLine; MAX_CPUS] = [const {
 
 #[inline]
 fn cpu_supports_monitor_mwait() -> bool {
-    #[cfg(target_arch = "x86_64")]
-    unsafe {
-        let ecx: u32;
-        core::arch::asm!(
-            "xchg {tmp:r}, rbx",
-            "mov eax, 1",
-            "cpuid",
-            "xchg {tmp:r}, rbx",
-            tmp = inout(reg) 0u64 => _,
-            out("eax") _,
-            out("ecx") ecx,
-            out("edx") _,
-            options(nomem, nostack)
-        );
-        (ecx & (1 << 3)) != 0
-    }
-    #[cfg(not(target_arch = "x86_64"))]
-    {
-        false
-    }
+    let (_, _, ecx, _) = crate::arch::x86_64::cpuid(1);
+    (ecx & (1 << 3)) != 0
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -173,11 +155,11 @@ pub unsafe fn enter_cstate(cs: CState) {
     match cs {
         CState::C0 => {}
         CState::C1 => {
-            core::arch::asm!("hlt", options(nomem, nostack, preserves_flags));
+            crate::arch::x86_64::halt_once();
         }
         CState::C2 | CState::C3 => {
             if !cpu_supports_monitor_mwait() {
-                core::arch::asm!("hlt", options(nomem, nostack, preserves_flags));
+                crate::arch::x86_64::halt_once();
                 return;
             }
             let hint: u32 = match cs {
@@ -188,23 +170,7 @@ pub unsafe fn enter_cstate(cs: CState) {
             let cpu_idx =
                 (crate::arch::x86_64::smp::percpu::current_cpu_id() as usize).min(MAX_CPUS - 1);
             let mon_addr = (&MONITOR_LINES[cpu_idx]._word as *const AtomicU64) as u64;
-            // Intel SDM Vol. 2B: MONITOR takes mapped linear address in RAX with ECX=0, EDX=0;
-            // MWAIT takes C-state sub-state hint in EAX and ECX=0.
-            core::arch::asm!(
-                "mov rax, {addr}",
-                "xor ecx, ecx",
-                "xor edx, edx",
-                "monitor",
-                "mov eax, {hint:e}",
-                "xor ecx, ecx",
-                "mwait",
-                addr = in(reg) mon_addr,
-                hint = in(reg) hint,
-                out("rax") _,
-                out("ecx") _,
-                out("edx") _,
-                options(nomem, nostack, preserves_flags),
-            );
+            crate::arch::x86_64::monitor_mwait(mon_addr, hint);
         }
     }
 }

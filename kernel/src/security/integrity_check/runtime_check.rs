@@ -112,13 +112,7 @@ unsafe fn rodata_section() -> &'static [u8] {
 /// Reads the current TSC.
 #[cfg(target_arch = "x86_64")]
 fn read_tsc() -> u64 {
-    // SAFETY: RDTSC is a read-only instruction (no side effects on memory).
-    unsafe {
-        let lo: u32;
-        let hi: u32;
-        core::arch::asm!("rdtsc", out("eax") lo, out("edx") hi, options(nostack, nomem));
-        ((hi as u64) << 32) | (lo as u64)
-    }
+    crate::arch::x86_64::cpu::tsc::read_tsc()
 }
 
 #[cfg(not(target_arch = "x86_64"))]

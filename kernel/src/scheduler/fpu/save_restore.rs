@@ -148,14 +148,7 @@ pub unsafe fn clone_fpu_state(parent: &ThreadControlBlock, child: &mut ThreadCon
 
 /// Initializes FPU registers to their default state (FINIT + LDMXCSR).
 unsafe fn init_fpu_registers() {
-    let mxcsr_val: u32 = 0x1F80;
-    // SAFETY: standard FPU instructions available on all x86_64.
-    core::arch::asm!(
-        "fninit",
-        "ldmxcsr [{mxcsr}]",
-        mxcsr = in(reg) &mxcsr_val,  // Default rounding mode, masks active
-        options(nostack),
-    );
+    crate::arch::x86_64::fninit_ldmxcsr(0x1F80);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

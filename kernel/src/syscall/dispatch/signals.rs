@@ -77,19 +77,12 @@ pub fn handle_sigreturn_inplace(frame: &mut SyscallFrame) {
     frame.rbp = regs.rbp;
     // SAFETY: Active kernel GS, gs:[0x08] = user_rsp slot of PerCpuData.
     unsafe {
-        core::arch::asm!(
-            "mov qword ptr gs:[0x08], {rsp}",
-            rsp = in(reg) regs.rsp,
-            options(nostack, nomem)
-        );
+        crate::arch::x86_64::smp::percpu::set_user_rsp(regs.rsp);
     }
     frame.rsp = regs.rsp;
 
     // Restore signal mask, TLS, and handler flag on per-thread state.
-    let tcb_ptr: u64;
-    unsafe {
-        core::arch::asm!("mov {}, gs:[0x20]", out(reg) tcb_ptr, options(nostack, nomem));
-    }
+    let tcb_ptr = unsafe { crate::arch::x86_64::smp::percpu::read_current_tcb() };
     if tcb_ptr != 0 {
         let safe_mask = crate::process::signal::mask::SigMask::from(regs.signal_mask).0;
         let tcb = unsafe { &mut *(tcb_ptr as *mut ThreadControlBlock) };
@@ -168,14 +161,7 @@ pub fn check_and_deliver_signals(frame: &mut SyscallFrame) {
     // SAFETY: Active kernel GS in this context (SWAPGS in ASM stub).
     // gs:[0x20] contains TCB pointer, potentially null if not yet
     // initialized (kernel case before first fork → no signal possible).
-    let tcb_ptr: u64;
-    unsafe {
-        core::arch::asm!(
-            "mov {}, gs:[0x20]",
-            out(reg) tcb_ptr,
-            options(nostack, nomem)
-        );
-    }
+    let tcb_ptr = unsafe { crate::arch::x86_64::smp::percpu::read_current_tcb() };
 
     if tcb_ptr == 0 {
         // No current thread (boot / idle) → no signal.
@@ -264,11 +250,7 @@ pub fn check_and_deliver_signals(frame: &mut SyscallFrame) {
         let new_rsp = d_frame.user_rsp;
         // SAFETY: Active kernel GS, gs:[0x08] = user_rsp slot of PerCpuData.
         unsafe {
-            core::arch::asm!(
-                "mov qword ptr gs:[0x08], {rsp}",
-                rsp = in(reg) new_rsp,
-                options(nostack, nomem)
-            );
+            crate::arch::x86_64::smp::percpu::set_user_rsp(new_rsp);
         }
         frame.rsp = new_rsp;
     }

@@ -429,12 +429,7 @@ pub unsafe fn phys_to_table_mut<'a>(phys: PhysAddr) -> &'a mut PageTable {
 /// Reads the physical address of the active PML4 from CR3.
 #[inline]
 pub fn read_cr3() -> PhysAddr {
-    let val: u64;
-    // SAFETY: reading CR3, standard x86_64 operation at ring 0.
-    unsafe {
-        core::arch::asm!("mov {}, cr3", out(reg) val, options(nomem, nostack));
-    }
-    PhysAddr::new(val & !0xFFF)
+    PhysAddr::new(crate::arch::x86_64::read_cr3() & !0xFFF)
 }
 
 /// Loads a new PML4 into CR3 (invalidates the entire global TLB).
@@ -444,12 +439,8 @@ pub fn read_cr3() -> PhysAddr {
 /// will trigger an immediate #PF or #GP.
 #[inline]
 pub unsafe fn write_cr3(pml4: PhysAddr) {
-    let pcid_bits = read_cr3().as_u64() & 0xFFF; // Preserve PCID bits
-    core::arch::asm!(
-        "mov cr3, {}",
-        in(reg) pml4.as_u64() | pcid_bits,
-        options(nomem, nostack),
-    );
+    let pcid_bits = crate::arch::x86_64::read_cr3() & 0xFFF; // Preserve PCID bits
+    crate::arch::x86_64::write_cr3(pml4.as_u64() | pcid_bits);
 }
 
 /// Invalidates a single TLB entry for the given virtual address.
@@ -458,9 +449,5 @@ pub unsafe fn write_cr3(pml4: PhysAddr) {
 /// addr must be a canonical x86_64 address.
 #[inline]
 pub unsafe fn invlpg(addr: VirtAddr) {
-    core::arch::asm!(
-        "invlpg [{}]",
-        in(reg) addr.as_u64(),
-        options(nostack, preserves_flags),
-    );
+    crate::arch::x86_64::invlpg(addr.as_u64());
 }

@@ -66,13 +66,7 @@ static SMEP_ACTIVE: AtomicBool = AtomicBool::new(false);
 /// CPL 0.
 #[inline(always)]
 unsafe fn read_cr4() -> u64 {
-    let val: u64;
-    core::arch::asm!(
-        "mov {v}, cr4",
-        v = out(reg) val,
-        options(nostack, nomem, preserves_flags),
-    );
-    val
+    crate::arch::x86_64::read_cr4()
 }
 
 /// Writes CR4.
@@ -81,11 +75,7 @@ unsafe fn read_cr4() -> u64 {
 /// CPL 0. An incorrect value can make the system unstable.
 #[inline(always)]
 unsafe fn write_cr4(val: u64) {
-    core::arch::asm!(
-        "mov cr4, {v}",
-        v = in(reg) val,
-        options(nostack, nomem),
-    );
+    crate::arch::x86_64::write_cr4(val);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -95,23 +85,7 @@ unsafe fn write_cr4(val: u64) {
 /// Tests SMEP support via CPUID (leaf 7, subleaf 0, EBX bit 7).
 #[inline]
 pub fn smep_supported() -> bool {
-    let ebx_r: u64;
-    // SAFETY: CPUID available on x86_64; xchg preserves rbx reserved by LLVM.
-    unsafe {
-        core::arch::asm!(
-            "xchg {tmp:r}, rbx",
-            "mov eax, 7",
-            "xor ecx, ecx",
-            "cpuid",
-            "xchg {tmp:r}, rbx",
-            lateout("eax") _,
-            lateout("ecx") _,
-            lateout("edx") _,
-            tmp = inout(reg) 0u64 => ebx_r,
-            options(nostack, nomem),
-        );
-    }
-    let ebx = ebx_r as u32;
+    let (_, ebx, _, _) = crate::arch::x86_64::cpuid_ex(7, 0);
     ebx & (1 << 7) != 0
 }
 

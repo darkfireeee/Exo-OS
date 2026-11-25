@@ -22,13 +22,6 @@ use crate::fs::exofs::syscall::object_store;
 use crate::ipc::core::types::{EndpointId, IpcError};
 use crate::syscall::validation::{copy_from_user, copy_to_user, read_user_typed, write_user_typed};
 
-// SAFETY: access protected by the SpinMutex below.
-unsafe impl Sync for CwdMap {}
-
-pub static mut CWD_MAP: CwdMap = CwdMap {
-    slots: [const { CwdEntry::empty() }; CWD_MAP_SIZE],
-};
-
 /// Errors returned by the fs bridge.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FsBridgeError {

@@ -131,18 +131,10 @@ const _: () = assert!(
 // Pseudo-random generation via RDTSC
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Reads TSC via `rdtsc`.
+/// Reads TSC via `arch::x86_64::cpu::tsc::read_tsc`.
 /// # Safety: CPL 0 (or user RDTSC if CR4.TSD=0).
 unsafe fn rdtsc() -> u64 {
-    let lo: u32;
-    let hi: u32;
-    core::arch::asm!(
-        "rdtsc",
-        out("eax") lo,
-        out("edx") hi,
-        options(nostack, nomem),
-    );
-    ((hi as u64) << 32) | (lo as u64)
+    crate::arch::x86_64::cpu::tsc::read_tsc()
 }
 
 /// Generates a pseudo-random canary value for `cpu_id`.

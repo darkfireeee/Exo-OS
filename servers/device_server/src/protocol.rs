@@ -102,18 +102,7 @@ pub fn recv_request(request: &mut DeviceRequest) -> Result<bool, i64> {
 }
 
 pub fn send_reply(destination_pid: u32, reply: &DeviceReply) -> i64 {
-    // SAFETY: `reply` est une structure POD locale envoyée telle quelle au noyau.
-    unsafe {
-        syscall::syscall6(
-            syscall::SYS_IPC_SEND,
-            destination_pid as u64,
-            reply as *const DeviceReply as u64,
-            core::mem::size_of::<DeviceReply>() as u64,
-            0,
-            0,
-            0,
-        )
-    }
+    syscall::send_reply(destination_pid as u64, reply)
 }
 
 pub fn send_heartbeat() -> DeviceReply {

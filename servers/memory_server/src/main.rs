@@ -9,9 +9,6 @@
 //! - handles opaques plutôt que des adresses physiques ;
 //! - sous-service SHM de contrôle pour les régions partageables.
 
-use core::panic::PanicInfo;
-use exo_syscall_abi as syscall;
-
 use spin::Mutex;
 
 mod allocator;
@@ -88,12 +85,4 @@ fn dispatch(request: &MemoryRequest) -> MemoryReply {
     }
 }
 
-#[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
-    unsafe {
-        let _ = syscall::syscall1(syscall::SYS_EXIT, 1);
-    }
-    loop {
-        core::hint::spin_loop();
-    }
-}
+exo_syscall_abi::ring1_panic_exit_handler!(b"");

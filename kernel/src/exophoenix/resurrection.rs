@@ -30,7 +30,7 @@ static BOOT_TEST_STARTED: AtomicBool = AtomicBool::new(false);
 
 #[inline(always)]
 unsafe fn debug_byte(b: u8) {
-    core::arch::asm!("out 0xE9, al", in("al") b, options(nomem, nostack));
+    crate::arch::x86_64::debug_e9_byte(b);
 }
 
 fn debug_str(s: &str) {
@@ -196,15 +196,11 @@ pub fn try_recover_exception(reason: &str, frame: &mut ExceptionFrame) -> bool {
 /// Hardware `#NMI` handler invoked on dedicated TSS `IST_NMI` stack (`cpu_faults::do_nmi`, P5.1).
 pub fn handle_nmi(frame: &mut ExceptionFrame) -> bool {
     let cpu_id = crate::arch::x86_64::smp::percpu::try_current_cpu_id().unwrap_or(0) as usize;
-    let current_rsp: u64;
-    #[cfg(all(target_arch = "x86_64", target_os = "none"))]
-    unsafe {
-        core::arch::asm!("mov {}, rsp", out(reg) current_rsp, options(nostack, nomem));
-    }
-    #[cfg(not(all(target_arch = "x86_64", target_os = "none")))]
-    {
-        current_rsp = 0;
-    }
+    let current_rsp = if cfg!(all(target_arch = "x86_64", target_os = "none")) {
+        crate::arch::x86_64::read_rsp()
+    } else {
+        0
+    };
 
     let on_ist = crate::arch::x86_64::tss::rsp_in_nmi_ist(cpu_id, current_rsp);
     if on_ist {
@@ -254,12 +250,7 @@ pub fn trigger_self_destruct() -> ! {
     TEST_ARMED.store(true, Ordering::Release);
 
     unsafe {
-        core::arch::asm!(
-            "xor edx, edx",
-            "xor eax, eax",
-            "div eax",
-            options(nostack, nomem)
-        );
+        crate::arch::x86_64::phoenix_div0_trap();
     }
 
     crate::arch::x86_64::halt_cpu()
@@ -268,12 +259,7 @@ pub fn trigger_self_destruct() -> ! {
 #[cfg(all(exophoenix_resurrection_test, feature = "qemu-compliance-exit"))]
 fn finish_resurrection_landing_pad() -> ! {
     unsafe {
-        core::arch::asm!(
-            "out dx, eax",
-            in("dx") 0xF4u16,
-            in("eax") 0x10u32,
-            options(nomem, nostack)
-        );
+        crate::arch::x86_64::outl(0xF4, 0x10);
     }
     crate::arch::x86_64::halt_cpu()
 }

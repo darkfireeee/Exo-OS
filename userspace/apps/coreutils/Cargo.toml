@@ -10,7 +10,7 @@ path = "src/lib.rs"
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("exo"))'] }
 
 [dependencies]
-exo-syscall-abi = { path = "../../../servers/syscall_abi" }
+exo_syscall_abi = { package = "exo-srv-rt", path = "../../../libs/exo-srv-rt" }
 
 [target.'cfg(target_os = "none")'.dependencies]
 exo-rt = { path = "../../../libs/exo-rt" }

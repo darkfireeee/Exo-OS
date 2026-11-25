@@ -1,40 +1,4 @@
-//! mod.rs — Module `recovery` du système de fichiers ExoFS.
-//!
-//! Fournit l ensemble des composants de récupération du système de fichiers :
-//! - Journaux d événements et d audit.
-//! - Checkpoints de progression.
-//! - Récupération au démarrage (boot recovery).
-//! - Récupération par slot.
-//! - Rejeu d epoch (journal).
-//! - Fsck en quatre phases.
-//!
-//! # Architecture
-//!
-//! ```text
-//! recovery/
-//! ├── mod.rs              ← Ce fichier (orchestration + re-exports)
-//! ├── recovery_log.rs     ← Journal circulaire d événements (2048 entrées)
-//! ├── recovery_audit.rs   ← Journal d audit sécurité (512 entrées)
-//! ├── checkpoint.rs       ← Checkpoints de progression (BTreeMap)
-//! ├── boot_recovery.rs    ← Séquence de récupération au boot
-//! ├── slot_recovery.rs    ← Sélection du meilleur slot (A/B/C)
-//! ├── epoch_replay.rs     ← Rejeu du journal d epoch
-//! ├── fsck_phase1.rs      ← Phase 1 : superbloc + structures de base
-//! ├── fsck_phase2.rs      ← Phase 2 : table de références blobs
-//! ├── fsck_phase3.rs      ← Phase 3 : cohérence des snapshots
-//! ├── fsck_phase4.rs      ← Phase 4 : récupération des blobs orphelins
-//! ├── fsck_repair.rs      ← Actions de réparation + journal des réparations
-//! └── fsck.rs             ← Orchestrateur global (phases 1→4)
-//! ```
-//!
-//! # Entrée principale
-//!
-//! - [`init()`] : initialise le module recovery.
-//! - [`shutdown()`] : libère les ressources.
-//! - [`verify_health()`] : retourne un bilan de santé du module.
-//! - [`boot_recovery_sequence()`] : exécute la récupération complète au boot.
-
-// ── Déclarations de sous-modules ──────────────────────────────────────────────
+//! mod.rs — Module `recovery` du système de fichiers ExoFS (façade de câblage).
 
 pub mod block_io;
 pub mod boot_recovery;
@@ -46,39 +10,18 @@ pub mod fsck_phase2;
 pub mod fsck_phase3;
 pub mod fsck_phase4;
 pub mod fsck_repair;
+mod lifecycle;
 pub mod ondisk;
 pub mod recovery_audit;
 pub mod recovery_log;
 pub mod slot_recovery;
 
-// ── Re-exports ────────────────────────────────────────────────────────────────
-
-// Journaux.
-pub use recovery_audit::{
-    AuditEntry, AuditEventKind, AuditSeverity, RecoveryAudit, RECOVERY_AUDIT,
-};
-pub use recovery_log::{
-    RecoveryEvent, RecoveryLog, RecoveryLogCategory, RecoveryLogEntry, RECOVERY_LOG,
-};
-
-// Checkpoint.
-pub use checkpoint::{Checkpoint, CheckpointId, CheckpointStore, RecoveryPhase, CHECKPOINT_STORE};
-
-// Boot recovery.
 pub use boot_recovery::{
     boot_recovery_sequence, BlockDevice, BootRecovery, BootRecoveryOptions, BootRecoveryResult,
 };
-
-// Slot recovery.
-pub use slot_recovery::{SlotId, SlotRecovery, SlotRecoveryResult, SLOT_A, SLOT_B, SLOT_C};
-
-// Epoch replay.
+pub use checkpoint::{Checkpoint, CheckpointId, CheckpointStore, RecoveryPhase, CHECKPOINT_STORE};
 pub use epoch_replay::{EpochReplay, EpochReplayOptions, ReplayResult};
-
-// Fsck — orchestrateur.
 pub use fsck::{Fsck, FsckOptions, FsckResult};
-
-// Fsck — phases individuelles.
 pub use fsck_phase1::{
     FsckPhase1, Phase1Error, Phase1ErrorKind, Phase1Options, Phase1Report, SuperblockDisk,
     SUPERBLOCK_HDR_MAGIC, SUPERBLOCK_LBA,
@@ -95,145 +38,11 @@ pub use fsck_phase4::{
     FsckPhase4, LostFoundEntry, Phase4Error, Phase4ErrorKind, Phase4Options, Phase4Report,
 };
 pub use fsck_repair::{FsckRepair, RepairAction, RepairLog, RepairRecord, REPAIR_LOG};
-
-extern crate alloc;
-use crate::fs::exofs::core::{ExofsError, ExofsResult};
-
-// ── État du module ────────────────────────────────────────────────────────────
-
-use core::sync::atomic::{AtomicBool, Ordering};
-
-/// Indique si le module recovery a été initialisé.
-static RECOVERY_INITIALIZED: AtomicBool = AtomicBool::new(false);
-/// Indique si le module est en cours d arrêt.
-static RECOVERY_SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
-
-// ── Bilan de santé ────────────────────────────────────────────────────────────
-
-/// Bilan de santé du module recovery.
-#[derive(Clone, Copy, Debug)]
-pub struct RecoveryHealth {
-    /// Nombre total d événements enregistrés dans RECOVERY_LOG.
-    pub log_events_total: usize,
-    /// Nombre total d entrées dans RECOVERY_AUDIT.
-    pub audit_entries_total: usize,
-    /// Nombre total de checkpoints sauvegardés.
-    pub checkpoint_count: usize,
-    /// Nombre total de réparations appliquées.
-    pub repairs_total: usize,
-    /// `true` si toutes les réparations récentes ont réussi.
-    pub repairs_ok: bool,
-    /// `true` si des erreurs critiques ont été auditées.
-    pub has_critical_audit: bool,
-    /// Module initialisé.
-    pub initialized: bool,
-}
-
-// ── API publique ──────────────────────────────────────────────────────────────
-
-/// Initialise le module recovery.
-///
-/// Doit être appelé une seule fois au démarrage du kernel, après l initialisation
-/// de l allocateur mémoire.
-///
-/// # Errors
-/// - [`ExofsError::CommitInProgress`] si le module est déjà initialisé.
-pub fn init() -> ExofsResult<()> {
-    if RECOVERY_INITIALIZED
-        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-        .is_err()
-    {
-        return Err(ExofsError::CommitInProgress);
-    }
-    RECOVERY_LOG.log_event(RecoveryEvent::RecoveryModuleLoaded);
-    RECOVERY_AUDIT.record_init();
-    Ok(())
-}
-
-/// Arrête le module recovery de façon propre.
-///
-/// Peut être appelé sans danger même si le module n a pas été initialisé.
-pub fn shutdown() {
-    if !RECOVERY_INITIALIZED.load(Ordering::Acquire) {
-        return;
-    }
-    RECOVERY_SHUTTING_DOWN.store(true, Ordering::SeqCst);
-    RECOVERY_LOG.log_event(RecoveryEvent::RecoveryModuleUnloaded);
-    RECOVERY_INITIALIZED.store(false, Ordering::SeqCst);
-    RECOVERY_SHUTTING_DOWN.store(false, Ordering::SeqCst);
-}
-
-/// Retourne un bilan de santé complet du module recovery.
-pub fn verify_health() -> RecoveryHealth {
-    let repairs_ok = REPAIR_LOG.all_recent_ok(16);
-    let has_critical_audit = RECOVERY_AUDIT.violation_count() > 0;
-    RecoveryHealth {
-        log_events_total: RECOVERY_LOG.total_written() as usize,
-        audit_entries_total: RECOVERY_AUDIT.total() as usize as usize,
-        checkpoint_count: CHECKPOINT_STORE.count(),
-        repairs_total: REPAIR_LOG.total(),
-        repairs_ok,
-        has_critical_audit,
-        initialized: RECOVERY_INITIALIZED.load(Ordering::Relaxed),
-    }
-}
-
-/// Retourne `true` si le module est initialisé.
-#[inline]
-pub fn is_initialized() -> bool {
-    RECOVERY_INITIALIZED.load(Ordering::Relaxed)
-}
-
-// ── Tests d intégration du module ─────────────────────────────────────────────
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_init_idempotent() {
-        // Premier init : succès.
-        let r1 = init();
-        // Deuxième init : CommitInProgress (déjà initialisé).
-        let r2 = init();
-        // Cleanup.
-        shutdown();
-        assert!(r1.is_ok() || matches!(r1, Err(ExofsError::CommitInProgress)));
-        assert!(matches!(r2, Err(ExofsError::CommitInProgress)) || r2.is_ok());
-    }
-
-    #[test]
-    fn test_shutdown_safe() {
-        // Appeler shutdown sans init ne doit pas paniquer.
-        shutdown();
-        shutdown();
-    }
-
-    #[test]
-    fn test_verify_health_initialized() {
-        let _ = init();
-        let health = verify_health();
-        // Le bilan doit indiquer le module initialisé.
-        assert!(health.initialized || !health.initialized); // laxiste : juste tester le retour.
-        shutdown();
-    }
-
-    #[test]
-    fn test_repair_log_reexport() {
-        // Vérifier que REPAIR_LOG est accessible via le re-export.
-        let total = REPAIR_LOG.total();
-        assert!(total < usize::MAX);
-    }
-
-    #[test]
-    fn test_recovery_log_reexport() {
-        let total = RECOVERY_LOG.total_written() as usize;
-        assert!(total < usize::MAX);
-    }
-
-    #[test]
-    fn test_checkpoint_store_reexport() {
-        let count = CHECKPOINT_STORE.count();
-        assert!(count < usize::MAX);
-    }
-}
+pub use lifecycle::{init, is_initialized, shutdown, verify_health, RecoveryHealth};
+pub use recovery_audit::{
+    AuditEntry, AuditEventKind, AuditSeverity, RecoveryAudit, RECOVERY_AUDIT,
+};
+pub use recovery_log::{
+    RecoveryEvent, RecoveryLog, RecoveryLogCategory, RecoveryLogEntry, RECOVERY_LOG,
+};
+pub use slot_recovery::{SlotId, SlotRecovery, SlotRecoveryResult, SLOT_A, SLOT_B, SLOT_C};

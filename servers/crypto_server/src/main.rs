@@ -19,40 +19,22 @@
 
 extern crate blake3;
 
-#[cfg(target_os = "none")]
-use core::panic::PanicInfo;
 use core::sync::atomic::Ordering;
 
+pub(crate) use exo_crypto_server::{keystore, wire, xchacha20};
 use exo_syscall_abi as syscall;
 
 mod dispatch;
-mod keystore;
 mod pki;
 mod tls;
 mod tls_handler;
 mod verify;
-mod wire;
-mod xchacha20;
 
 use dispatch::{handle_request, send_reply, IPC_RECV_TIMEOUTS};
 use wire::{
     CryptoRequest, CRYPTO_PROTOCOL_VERSION, CRYPTO_REQUEST_PAYLOAD_SIZE, CRYPTO_SERVER_ENDPOINT,
     ETIMEDOUT, IPC_FLAG_TIMEOUT, IPC_RECV_TIMEOUT_MS,
 };
-
-fn boot_log(bytes: &[u8]) {
-    if bytes.is_empty() {
-        return;
-    }
-    unsafe {
-        let _ = syscall::syscall3(
-            syscall::SYS_EXO_LOG,
-            bytes.as_ptr() as u64,
-            bytes.len() as u64,
-            1,
-        );
-    }
-}
 
 fn halt_forever() -> ! {
     unsafe {
@@ -83,7 +65,7 @@ pub(crate) fn secure_random(buf: &mut [u8]) -> bool {
 // L'endpoint ID (4) est la constante d'interface publique ; le PID est interne.
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
-    boot_log(b"crypto_server: boot\n");
+    syscall::boot_log(b"crypto_server: boot\n");
     let pid = unsafe { syscall::syscall0(syscall::SYS_GETPID) };
     if pid > 0 {
         dispatch::RUNTIME_PID.store(pid as u32, Ordering::Release);
@@ -92,20 +74,11 @@ pub extern "C" fn _start() -> ! {
     keystore::keystore_init();
     tls::tls_init();
 
-    let name = b"crypto_server";
-    let register_rc = unsafe {
-        syscall::syscall3(
-            syscall::SYS_IPC_REGISTER,
-            name.as_ptr() as u64,
-            name.len() as u64,
-            CRYPTO_SERVER_ENDPOINT,
-        )
-    };
-    if register_rc < 0 {
-        boot_log(b"crypto_server: register failed\n");
+    if !syscall::register_endpoint(b"crypto_server", CRYPTO_SERVER_ENDPOINT) {
+        syscall::boot_log(b"crypto_server: register failed\n");
         halt_forever();
     }
-    boot_log(b"crypto_server: registered\n");
+    syscall::boot_log(b"crypto_server: registered\n");
 
     let mut req = CryptoRequest {
         sender_pid: 0,
@@ -146,9 +119,4 @@ pub extern "C" fn _start() -> ! {
 #[cfg(not(target_os = "none"))]
 fn main() {}
 
-#[cfg(target_os = "none")]
-#[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
-    boot_log(b"crypto_server: panic\n");
-    halt_forever();
-}
+exo_syscall_abi::ring1_cfg_panic_exit_handler!(b"crypto_server: panic\n");

@@ -6,5 +6,6 @@ pub mod exocordon;
 // ce qui a masqué le syscall hardcodé 302 et le passage de src_pid en position
 // flags. Les modules sont désormais compilés avec le crate.
 pub mod load_balancer;
+pub mod registry;
 pub mod router;
 pub mod security_gate;

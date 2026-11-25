@@ -1,5 +1,4 @@
 pub mod support;
-pub mod test_standard;
 pub mod tier_1_simple;
 pub mod tier_2_moyen;
 pub mod tier_3_stress;

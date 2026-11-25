@@ -1,8 +1,7 @@
 // kernel/src/ipc/core/mod.rs
 //
 // IPC core module — re-exports fundamental types, constants, and transfer engine.
-
-core::arch::global_asm!(include_str!("fastcall_asm.s"), options(att_syntax));
+// Note: `fastcall_asm.s` is assembled under `arch::x86_64::ipc_asm`.
 
 pub mod constants;
 pub mod sequence;

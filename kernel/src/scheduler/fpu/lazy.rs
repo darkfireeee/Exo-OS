@@ -48,14 +48,8 @@ pub fn init() {
 /// Directly modifies CR0 control register (Ring 0).
 #[inline(always)]
 pub unsafe fn cr0_set_ts() {
-    #[cfg(target_arch = "x86_64")]
-    core::arch::asm!(
-        "mov rax, cr0",
-        "or  rax, 8",    // bit 3 = TS
-        "mov cr0, rax",
-        out("rax") _,
-        options(nostack, nomem),
-    );
+    let cr0 = crate::arch::x86_64::read_cr0();
+    crate::arch::x86_64::write_cr0(cr0 | 8);
 }
 
 /// Clears CR0.TS → FP access allowed without #NM.
@@ -65,8 +59,7 @@ pub unsafe fn cr0_set_ts() {
 /// Executes privileged CLTS instruction in Ring 0.
 #[inline(always)]
 pub unsafe fn cr0_clear_ts() {
-    #[cfg(target_arch = "x86_64")]
-    core::arch::asm!("clts", options(nostack, nomem),);
+    crate::arch::x86_64::clts();
 }
 
 /// Returns true if CR0.TS is set.
@@ -75,20 +68,7 @@ pub unsafe fn cr0_clear_ts() {
 /// Directly reads CR0 control register.
 #[inline(always)]
 pub unsafe fn cr0_ts_is_set() -> bool {
-    #[cfg(target_arch = "x86_64")]
-    {
-        let cr0: u64;
-        core::arch::asm!(
-            "mov {}, cr0",
-            out(reg) cr0,
-            options(nostack, nomem),
-        );
-        (cr0 >> 3) & 1 != 0
-    }
-    #[cfg(not(target_arch = "x86_64"))]
-    {
-        false
-    }
+    (crate::arch::x86_64::read_cr0() >> 3) & 1 != 0
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

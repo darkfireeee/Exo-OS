@@ -60,27 +60,12 @@ fn rdrand64() -> Result<u64, RngError> {
             return Err(RngError::RdrandExhausted);
         }
 
-        let mut val: u64 = 0;
-        let mut success: u8;
         for _ in 0..10 {
-            // SAFETY: rdrand can legitimately fail (CF=0); val = 0 on failure, retry up to 10.
-            unsafe {
-                core::arch::asm!(
-                    "rdrand {val}",
-                    "setc {ok}",
-                    val = out(reg) val,
-                    ok  = out(reg_byte) success,
-                    options(nostack, nomem),
-                );
-            }
-            if success != 0 {
+            // SAFETY: CPUID confirmed RDRAND support above.
+            if let Some(val) = unsafe { crate::arch::x86_64::rdrand64_once() } {
                 return Ok(val);
             }
-            // Pause between attempts (x86 hint)
-            // SAFETY: PAUSE is a wait hint for the CPU — no side effects.
-            unsafe {
-                core::arch::asm!("pause", options(nostack, nomem));
-            }
+            crate::arch::x86_64::cpu_pause();
         }
         Err(RngError::RdrandExhausted)
     }
@@ -100,26 +85,12 @@ fn rdseed64() -> Result<u64, RngError> {
         if !cpu_features_or_none().map_or(false, |features| features.has_rdseed()) {
             return Err(RngError::RdrandExhausted);
         }
-        let mut val: u64 = 0;
-        let mut success: u8;
         for _ in 0..10 {
-            // SAFETY: rdseed can legitimately fail (CF=0); val=0 on failure, retry.
-            unsafe {
-                core::arch::asm!(
-                    "rdseed {val}",
-                    "setc {ok}",
-                    val = out(reg) val,
-                    ok  = out(reg_byte) success,
-                    options(nostack, nomem),
-                );
-            }
-            if success != 0 {
+            // SAFETY: CPUID confirmed RDSEED support above.
+            if let Some(val) = unsafe { crate::arch::x86_64::rdseed64_once() } {
                 return Ok(val);
             }
-            // SAFETY: PAUSE = CPU hint, no side effects.
-            unsafe {
-                core::arch::asm!("pause", options(nostack, nomem));
-            }
+            crate::arch::x86_64::cpu_pause();
         }
         Err(RngError::RdrandExhausted)
     }
@@ -153,14 +124,7 @@ pub fn rdrand_fill(buf: &mut [u8]) -> Result<(), RngError> {
 fn read_tsc() -> u64 {
     #[cfg(target_arch = "x86_64")]
     {
-        let tsc: u64;
-        // SAFETY: RDTSC is non-privileged — no side effects.
-        unsafe {
-            core::arch::asm!("rdtsc; shl rdx, 32; or rax, rdx",
-                out("rax") tsc, out("rdx") _,
-                options(nostack, nomem));
-        }
-        tsc
+        crate::arch::x86_64::cpu::tsc::read_tsc()
     }
     #[cfg(not(target_arch = "x86_64"))]
     0
@@ -169,17 +133,7 @@ fn read_tsc() -> u64 {
 /// Reads current stack pointer (additional entropy source).
 #[inline]
 fn read_sp() -> u64 {
-    #[cfg(target_arch = "x86_64")]
-    {
-        let sp: u64;
-        // SAFETY: read-only access to RSP — no side effects.
-        unsafe {
-            core::arch::asm!("mov {}, rsp", out(reg) sp, options(nostack, nomem));
-        }
-        sp
-    }
-    #[cfg(not(target_arch = "x86_64"))]
-    0
+    crate::arch::x86_64::read_rsp()
 }
 
 /// Gathers entropy from **all** available sources into a pool,
@@ -224,11 +178,7 @@ fn gather_seed(out: &mut [u8; 32]) -> bool {
     // 3. TSC Jitter (temporal randomness) + 4. stack pointer.
     for _ in 0..8 {
         push(&mut pool, &mut off, read_tsc());
-        // SAFETY: PAUSE = CPU hint, no side effects; spaces TSC reads.
-        #[cfg(target_arch = "x86_64")]
-        unsafe {
-            core::arch::asm!("pause", options(nostack, nomem));
-        }
+        crate::arch::x86_64::cpu_pause();
     }
     push(&mut pool, &mut off, read_sp());
 

@@ -1,8 +1,4 @@
-#[allow(dead_code)]
-#[path = "../src/socket_table.rs"]
-mod socket_table;
-
-use socket_table::{SocketKind, SocketState, SocketTable};
+use exo_network_server::socket_table::{SocketKind, SocketState, SocketTable};
 
 #[test]
 fn tagged_socket_handles_keep_generation_separate_from_connect_lookup() {

@@ -677,12 +677,7 @@ fn post_switch_smp_coherency(self_slot: Option<usize>) {
     }
     // SAFETY: local CR3 reload flushes non-global TLB entries on the coordinator core.
     unsafe {
-        core::arch::asm!(
-            "mov {tmp}, cr3",
-            "mov cr3, {tmp}",
-            tmp = out(reg) _,
-            options(nostack)
-        );
+        crate::arch::x86_64::reload_cr3();
     }
 
     // P6.2: 2. Global SMP TLB shootdown broadcast (`VEC_EXOPHOENIX_TLB`) if peer cores exist.
@@ -827,26 +822,15 @@ fn emit_phoenix_sla_telemetry(record: &PhoenixTimingRecord, strate1_online: u32)
 
 #[cfg(all(target_arch = "x86_64", not(test)))]
 struct Strate0IrqGuard {
-    was_enabled: bool,
+    rflags: u64,
 }
 
 #[cfg(all(target_arch = "x86_64", not(test)))]
 impl Strate0IrqGuard {
     #[inline]
     fn enter() -> Self {
-        let rflags: u64;
-        // SAFETY: CPL0 interrupt mask for non-preemptible Strate 0 handoff window (`t0..t3`).
-        unsafe {
-            core::arch::asm!(
-                "pushfq",
-                "pop {}",
-                "cli",
-                out(reg) rflags,
-                options(nomem)
-            );
-        }
         Self {
-            was_enabled: (rflags & (1 << 9)) != 0,
+            rflags: crate::arch::x86_64::save_and_cli(),
         }
     }
 }
@@ -855,11 +839,9 @@ impl Strate0IrqGuard {
 impl Drop for Strate0IrqGuard {
     #[inline]
     fn drop(&mut self) {
-        if self.was_enabled {
-            // SAFETY: restores previous CPL0 IF state upon leaving Strate 0 window (`t3`).
-            unsafe {
-                core::arch::asm!("sti", options(nomem, nostack));
-            }
+        // SAFETY: restores previous CPL0 IF state upon leaving Strate 0 window (`t3`).
+        unsafe {
+            crate::arch::x86_64::restore_if_enabled(self.rflags);
         }
     }
 }

@@ -18,6 +18,8 @@ pub mod memory_map;
 // DEPRECATED - will be removed when Phase 8 (exo-boot UEFI GPT) is complete.
 #[cfg_attr(not(feature = "multiboot2_compat"), allow(dead_code, unused_imports))]
 pub mod multiboot2;
+#[cfg(all(target_os = "none", not(test)))]
+pub mod multiboot2_trampoline;
 pub mod trampoline_asm;
 pub mod uefi;
 

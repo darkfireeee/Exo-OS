@@ -4,7 +4,8 @@
 //! déléguées au `crypto_server` via IPC synchrone (opcode `CRYPTO_VERIFY = 6`).
 
 use crate::PkgError;
-use exo_syscall_abi as syscall;
+use exo_abi as syscall;
+use exo_wire::IPC_ENVELOPE_SIZE;
 
 const CRYPTO_SERVER_ENDPOINT: u64 = 4;
 const CRYPTO_VERIFY: u32 = 6;
@@ -23,7 +24,7 @@ pub fn verify_package_signature(
     payload[32..96].copy_from_slice(signature);
     payload[96..128].copy_from_slice(data_hash);
 
-    let mut msg_buf = [0u8; syscall::IPC_ENVELOPE_SIZE];
+    let mut msg_buf = [0u8; IPC_ENVELOPE_SIZE];
     msg_buf[0..4].copy_from_slice(&0u32.to_ne_bytes()); // sender_pid (noyau renseigne)
     msg_buf[4..8].copy_from_slice(&CRYPTO_VERIFY.to_ne_bytes());
     msg_buf[8..8 + 128].copy_from_slice(&payload);
@@ -45,7 +46,7 @@ pub fn verify_package_signature(
     }
 
     // Réception de la réponse
-    let mut reply_buf = [0u8; syscall::IPC_ENVELOPE_SIZE];
+    let mut reply_buf = [0u8; IPC_ENVELOPE_SIZE];
     let rcv = unsafe {
         syscall::syscall4(
             syscall::SYS_IPC_RECV,

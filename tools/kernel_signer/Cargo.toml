@@ -16,5 +16,5 @@ name = "kernel-signer"
 path = "src/main.rs"
 
 [dependencies]
-exo-verity = { path = "../../drivers/security/verity", features = ["std"] }
+exo-verity = { path = "../../libs/exo-verity", features = ["std"] }
 getrandom = "0.2"

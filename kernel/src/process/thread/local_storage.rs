@@ -215,29 +215,12 @@ const MSR_KERNEL_GS_BASE: u32 = 0xC0000102;
 #[cfg(target_arch = "x86_64")]
 #[inline(always)]
 pub unsafe fn set_fs_base(addr: u64) {
-    // SAFETY: wrmsrl instruction valid in Ring 0.
-    core::arch::asm!(
-        "wrmsr",
-        in("ecx") MSR_FS_BASE,
-        in("eax") addr as u32,
-        in("edx") (addr >> 32) as u32,
-        options(nostack, nomem),
-    );
+    crate::arch::x86_64::cpu::msr::write_msr(MSR_FS_BASE, addr);
 }
 
 /// Reads MSR_FS_BASE.
 #[cfg(target_arch = "x86_64")]
 #[inline(always)]
 pub unsafe fn get_fs_base() -> u64 {
-    let lo: u32;
-    let hi: u32;
-    // SAFETY: rdmsr instruction valid in Ring 0.
-    core::arch::asm!(
-        "rdmsr",
-        in("ecx") MSR_FS_BASE,
-        out("eax") lo,
-        out("edx") hi,
-        options(nostack, nomem),
-    );
-    (hi as u64) << 32 | lo as u64
+    crate::arch::x86_64::cpu::msr::read_msr(MSR_FS_BASE)
 }

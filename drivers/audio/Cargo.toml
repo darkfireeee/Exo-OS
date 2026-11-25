@@ -12,7 +12,7 @@ crate-type = ["rlib"]
 
 [dependencies]
 spin = { workspace = true }
-exo-syscall-abi = { path = "../../servers/syscall_abi" }
+exo_syscall_abi = { package = "exo-srv-rt", path = "../../libs/exo-srv-rt" }
 exo-os-drivers = { path = ".." }
 
 [features]

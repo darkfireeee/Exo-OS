@@ -150,21 +150,7 @@ pub enum ExoCageError {
 /// - CPUID.07H.0H:EDX bit 20 = IBT (Indirect Branch Tracking)
 #[inline]
 pub fn cpuid_cet_available() -> (bool, bool) {
-    let ecx: u32;
-    let edx: u32;
-    // SAFETY: validated low-level operation — see block documentation.
-    unsafe {
-        core::arch::asm!(
-            "push rbx",
-            "mov eax, 7",
-            "xor ecx, ecx",
-            "cpuid",
-            "pop rbx",
-            out("ecx") ecx,
-            out("edx") edx,
-            lateout("eax") _,
-        );
-    }
+    let (_, _, ecx, edx) = crate::arch::x86_64::cpuid_ex(7, 0);
     let ss = ecx & (1 << 7) != 0;
     let ibt = edx & (1 << 20) != 0;
     (ss, ibt)
@@ -351,12 +337,7 @@ pub unsafe fn enable_cet_for_thread(tcb: &mut ThreadControlBlock) -> Result<(), 
     // Token write via WRSSQ (only authorized instruction on shadow stack)
     // SAFETY: token_addr points to an allocated PTE shadow stack page above.
     //         CR4.CET and IA32_S_CET.WR_SHSTK_EN are active (ExoSeal step 0).
-    core::arch::asm!(
-        ".byte 0xF3, 0x48, 0x0F, 0x01, 0x3E",  // WRSSQ [rdi], rsi
-        in("rdi") token_addr as *mut u64,
-        in("rsi") token_val,
-        options(nostack, preserves_flags),
-    );
+    crate::arch::x86_64::wrssq_raw(token_addr as *mut u64, token_val);
 
     // 5. Verify written token (volatile read to confirm)
     let readback = core::ptr::read_volatile(token_addr as *const u64);
@@ -509,10 +490,8 @@ pub unsafe fn exocage_global_enable() -> Result<(), ExoCageError> {
     }
 
     // 1. Enable CR4.CET (bit 23)
-    let cr4: u64;
-    core::arch::asm!("mov {}, cr4", out(reg) cr4);
-    let cr4_new = cr4 | CR4_CET_BIT;
-    core::arch::asm!("mov cr4, {}", in(reg) cr4_new);
+    let cr4 = crate::arch::x86_64::read_cr4();
+    crate::arch::x86_64::write_cr4(cr4 | CR4_CET_BIT);
 
     // 2. Configure IA32_S_CET: Shadow Stack + WRSS + IBT
     let mut s_cet_val = CET_SHSTK_EN | CET_WR_SHSTK_EN;

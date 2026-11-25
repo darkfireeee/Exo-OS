@@ -145,8 +145,8 @@ In ExoOS v0.2.0, service orchestration is managed by `init_server` (PID 1) accor
 | **7** | `scheduler_server` | Ring 1 cooperative scheduling service |
 | **8** | `crypto_server` | Cryptographic primitives (XChaCha20, Ed25519, TLS, BLAKE3) |
 | **9** | `input_server` | Keyboard and mouse event multiplexer |
-| **10** | `fb_server` | Graphical Framebuffer server and screen acceleration |
-| **11** | `virtio_drivers` | Paravirtualized VirtIO-Blk storage drivers |
+| **10** | `fb_server` | Strate 1 framebuffer MMIO guardian, `SurfaceGrant` scanout & emergency console |
+| **11** | `virtio_drivers` | VirtIO Control Plane & VirtIO-GPU scanout/flush (endpoint 13) |
 | **12** | `e1000_driver` | Intel Gigabit Ethernet network card driver |
 | **13** | `virtio_net_driver` | High-performance VirtIO PCI network driver |
 | **14** | `network_server` | ExoNet V5 network stack (IP, TCP, UDP, DNS, Unix sockets) |
@@ -155,7 +155,8 @@ In ExoOS v0.2.0, service orchestration is managed by `init_server` (PID 1) accor
 | **17** | `tty_server` | Virtual terminal manager and ANSI emulation |
 | **18** | `ps2_driver` | PS/2 keyboard & mouse driver (i8042 Scan Code Set 2) |
 | **19** | `exo_shield` | NGAV module, AI containment, anomaly detection & forensics |
-| **20** | `exosh` | Interactive user console and root shell (compiled with Rust `std`) |
+| **20** | `exo_compositor` | Strate 2 isolated Wayland compositor (`/run/wayland-0`, zero MMIO, Rust `std`) |
+| **21** | `exosh` | Interactive user console and root shell (compiled with Rust `std`) |
 
 ---
 

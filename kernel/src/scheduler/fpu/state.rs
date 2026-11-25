@@ -42,30 +42,12 @@ pub fn detect_xsave_size() {
     #[cfg(target_arch = "x86_64")]
     {
         // CPUID.(EAX=0Dh, ECX=0):EBX returns XSAVE area size.
-        let size: usize;
-        // SAFETY: CPUID available on x86_64; rbx saved/restored (LLVM does not support it as direct operand).
-        unsafe {
-            let cpuid_eax: u32;
-            let cpuid_ebx: u32;
-            core::arch::asm!(
-                "push rbx",
-                "cpuid",
-                "mov {out_ebx:e}, ebx",
-                "pop rbx",
-                inout("eax") 0x0Du32 => cpuid_eax,
-                inout("ecx") 0u32 => _,
-                out("edx") _,
-                out_ebx = lateout(reg) cpuid_ebx,
-            );
-            let _ = cpuid_eax; // EAX ignored, only EBX is needed.
-                               // ebx = minimum size of XSAVE area to save all enabled components.
-            if cpuid_ebx >= 512 {
-                size = (cpuid_ebx as usize).min(FPU_STATE_MAX_SIZE);
-            } else {
-                // CPUID not supported or invalid result → FXSAVE by default.
-                size = FXSAVE_SIZE;
-            }
-        }
+        let (_, cpuid_ebx, _, _) = crate::arch::x86_64::cpuid_ex(0x0D, 0);
+        let size = if cpuid_ebx >= 512 {
+            (cpuid_ebx as usize).min(FPU_STATE_MAX_SIZE)
+        } else {
+            FXSAVE_SIZE
+        };
         XSAVE_AREA_SIZE.store(size, Ordering::Release);
     }
     // On non-x86_64 architecture: fixed size 512.

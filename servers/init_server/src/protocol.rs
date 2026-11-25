@@ -93,17 +93,7 @@ pub fn recv_request(request: &mut InitRequest) -> Result<bool, i64> {
 }
 
 pub fn send_reply(destination_pid: u32, reply: &InitReply) -> i64 {
-    unsafe {
-        syscall::syscall6(
-            syscall::SYS_IPC_SEND,
-            destination_pid as u64,
-            reply as *const InitReply as u64,
-            core::mem::size_of::<InitReply>() as u64,
-            0,
-            0,
-            0,
-        )
-    }
+    syscall::send_reply(destination_pid as u64, reply)
 }
 
 #[inline]

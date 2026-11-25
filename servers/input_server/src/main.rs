@@ -2,7 +2,6 @@
 #![no_main]
 
 use core::cell::UnsafeCell;
-use core::panic::PanicInfo;
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use exo_syscall_abi as syscall;
 
@@ -166,17 +165,7 @@ static SUBSCRIBERS: SubscriberTable = SubscriberTable::new();
 
 #[inline]
 fn boot_log(bytes: &[u8]) {
-    if bytes.is_empty() {
-        return;
-    }
-    unsafe {
-        let _ = syscall::syscall3(
-            syscall::SYS_EXO_LOG,
-            bytes.as_ptr() as u64,
-            bytes.len() as u64,
-            1,
-        );
-    }
+    syscall::boot_log(bytes);
 }
 
 fn exit_failed() -> ! {
@@ -326,9 +315,4 @@ pub extern "C" fn _start() -> ! {
     }
 }
 
-#[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
-    loop {
-        core::hint::spin_loop();
-    }
-}
+exo_syscall_abi::ring1_nostd_panic_handler!(b"");

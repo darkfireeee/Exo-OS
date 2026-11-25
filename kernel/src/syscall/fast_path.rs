@@ -102,20 +102,7 @@ pub fn fast_path_stats() -> FastPathStats {
 /// - The caller must NOT store the pointer past a preemption point.
 #[inline(always)]
 unsafe fn current_tcb_ptr() -> *const ThreadControlBlock {
-    #[cfg(test)]
-    {
-        core::ptr::null()
-    }
-    #[cfg(not(test))]
-    {
-        let tcb: u64;
-        core::arch::asm!(
-            "mov {}, gs:[0x20]",
-            out(reg) tcb,
-            options(nostack, nomem)
-        );
-        tcb as *const ThreadControlBlock
-    }
+    crate::arch::x86_64::smp::percpu::read_current_tcb() as *const ThreadControlBlock
 }
 
 /// Returns the `ThreadId` of the current thread.
@@ -442,16 +429,7 @@ pub fn sys_sched_yield() -> i64 {
     // run_queue() returns a valid static reference (percpu arena).
     // schedule_yield() is reentrance-safe: disables preemption internally.
     unsafe {
-        #[cfg(test)]
-        let tcb_ptr: u64 = 0;
-        #[cfg(not(test))]
-        let tcb_ptr: u64;
-        #[cfg(not(test))]
-        core::arch::asm!(
-            "mov {0}, gs:[0x20]",
-            out(reg) tcb_ptr,
-            options(nomem, nostack, preserves_flags)
-        );
+        let tcb_ptr = crate::arch::x86_64::smp::percpu::read_current_tcb();
         if tcb_ptr != 0 {
             let tcb = &mut *(tcb_ptr as *mut crate::scheduler::ThreadControlBlock);
             let cpu_id = tcb.current_cpu();

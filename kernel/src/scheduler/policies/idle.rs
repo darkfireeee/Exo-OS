@@ -65,7 +65,7 @@ pub unsafe fn idle_iteration(nr_running: usize) -> bool {
 
     // No ready thread — execute HLT (waits for next IRQ).
     IDLE_HLT_COUNT.fetch_add(1, Ordering::Relaxed);
-    core::arch::asm!("hlt", options(nomem, nostack, preserves_flags));
+    crate::arch::x86_64::halt_once();
 
     // After return from HLT (an IRQ was received), let scheduler decide.
     false

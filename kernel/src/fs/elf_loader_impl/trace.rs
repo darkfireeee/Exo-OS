@@ -12,9 +12,7 @@ static ELF_TRACE_COUNT: AtomicUsize = AtomicUsize::new(0);
 #[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]
 #[inline(always)]
 pub fn debug_byte(byte: u8) {
-    unsafe {
-        core::arch::asm!("out 0xE9, al", in("al") byte, options(nomem, nostack));
-    }
+    crate::arch::x86_64::debug_e9_byte(byte);
 }
 
 #[cfg(all(target_arch = "x86_64", debug_assertions, exo_kernel_trace))]

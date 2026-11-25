@@ -67,20 +67,7 @@ pub unsafe fn init(_tsc_hz: u64) {
 /// For kernel time, call `monotonic_ns()`.
 #[inline(always)]
 pub fn rdtsc() -> u64 {
-    let lo: u32;
-    let hi: u32;
-    // SAFETY: RDTSC is available on all x86_64.
-    //         Non-serialized — can be reordered by CPU or compiler.
-    //         Acceptable only for profiling, not for kernel time.
-    unsafe {
-        core::arch::asm!(
-            "rdtsc",
-            out("eax") lo,
-            out("edx") hi,
-            options(nomem, nostack)
-        );
-    }
-    ((hi as u64) << 32) | lo as u64
+    crate::arch::x86_64::cpu::tsc::read_tsc()
 }
 
 /// Reads TSC with best available ordered read — profiling usage only.

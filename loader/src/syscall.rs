@@ -1,89 +1,25 @@
-//! Direct `#![no_std]` Linux/Exo-OS syscall primitives for `/lib/ld-exo.so`.
+//! Direct `#![no_std]` Linux/Exo-OS syscall primitives for `/lib/ld-exo.so`,
+//! backed by canonical constants and `syscall6` from `libs/exo-abi`.
 
-pub const SYS_READ: u64 = 0;
-pub const SYS_WRITE: u64 = 1;
-pub const SYS_OPEN: u64 = 2;
-pub const SYS_CLOSE: u64 = 3;
-pub const SYS_LSEEK: u64 = 8;
-pub const SYS_MMAP: u64 = 9;
-pub const SYS_MPROTECT: u64 = 10;
-pub const SYS_MUNMAP: u64 = 11;
-pub const SYS_PREAD64: u64 = 17;
-pub const SYS_EXIT: u64 = 60;
-pub const SYS_ARCH_PRCTL: u64 = 158;
-pub const SYS_GETTID: u64 = 186;
-pub const SYS_EXIT_GROUP: u64 = 231;
-pub const SYS_EXO_PLEDGE: u64 = 324;
-pub const SYS_EXO_LOG: u64 = 350;
+pub use exo_abi::{
+    syscall6, ARCH_GET_FS, ARCH_SET_FS, EXO_PLEDGE_QUERY_FLAG, EXO_RESTRICTION_NO_DLOPEN,
+    SEEK_END, SEEK_SET, SYS_ARCH_PRCTL, SYS_CLOSE, SYS_EXIT, SYS_EXIT_GROUP, SYS_EXO_LOG,
+    SYS_EXO_PLEDGE, SYS_GETTID, SYS_LSEEK, SYS_MMAP, SYS_MPROTECT, SYS_MUNMAP, SYS_OPEN,
+    SYS_PREAD64, SYS_READ, SYS_WRITE,
+};
 
-/// Read-only query flag for `SYS_EXO_PLEDGE(0, 1)` returning current process restrictions (S2/S3).
-pub const EXO_PLEDGE_QUERY_FLAG: u64 = 1;
-/// Restriction bit indicating `dlopen()` is prohibited for the current process (`NO_DLOPEN`).
-pub const EXO_RESTRICTION_NO_DLOPEN: u64 = 1 << 9;
+pub const PROT_NONE: u32 = exo_abi::PROT_NONE as u32;
+pub const PROT_READ: u32 = exo_abi::PROT_READ as u32;
+pub const PROT_WRITE: u32 = exo_abi::PROT_WRITE as u32;
+pub const PROT_EXEC: u32 = exo_abi::PROT_EXEC as u32;
 
-pub const PROT_NONE: u32 = 0x0;
-pub const PROT_READ: u32 = 0x1;
-pub const PROT_WRITE: u32 = 0x2;
-pub const PROT_EXEC: u32 = 0x4;
+pub const MAP_SHARED: u32 = exo_abi::MAP_SHARED as u32;
+pub const MAP_PRIVATE: u32 = exo_abi::MAP_PRIVATE as u32;
+pub const MAP_FIXED: u32 = exo_abi::MAP_FIXED as u32;
+pub const MAP_ANONYMOUS: u32 = exo_abi::MAP_ANONYMOUS as u32;
 
-pub const MAP_SHARED: u32 = 0x01;
-pub const MAP_PRIVATE: u32 = 0x02;
-pub const MAP_FIXED: u32 = 0x10;
-pub const MAP_ANONYMOUS: u32 = 0x20;
-
-pub const O_RDONLY: u32 = 0;
-pub const SEEK_SET: i32 = 0;
-pub const SEEK_END: i32 = 2;
-
-pub const ARCH_SET_FS: u64 = 0x1002;
-pub const ARCH_GET_FS: u64 = 0x1003;
-
-pub const EINTR: i64 = 4;
-
-#[cfg(all(target_arch = "x86_64", not(test)))]
-#[inline(always)]
-pub unsafe fn syscall6(
-    nr: u64,
-    a1: u64,
-    a2: u64,
-    a3: u64,
-    a4: u64,
-    a5: u64,
-    a6: u64,
-) -> i64 {
-    let ret: i64;
-    unsafe {
-        core::arch::asm!(
-            "syscall",
-            in("rax") nr,
-            in("rdi") a1,
-            in("rsi") a2,
-            in("rdx") a3,
-            in("r10") a4,
-            in("r8") a5,
-            in("r9") a6,
-            lateout("rax") ret,
-            out("rcx") _,
-            out("r11") _,
-            options(nostack),
-        );
-    }
-    ret
-}
-
-#[cfg(not(all(target_arch = "x86_64", not(test))))]
-#[inline(always)]
-pub unsafe fn syscall6(
-    _nr: u64,
-    _a1: u64,
-    _a2: u64,
-    _a3: u64,
-    _a4: u64,
-    _a5: u64,
-    _a6: u64,
-) -> i64 {
-    -38 // -ENOSYS on host test builds
-}
+pub const O_RDONLY: u32 = exo_abi::O_RDONLY as u32;
+pub const EINTR: i64 = exo_abi::errno::positive::EINTR as i64;
 
 #[inline(always)]
 unsafe fn decode(ret: i64) -> Result<usize, i32> {

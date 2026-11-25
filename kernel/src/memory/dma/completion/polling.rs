@@ -189,17 +189,8 @@ pub fn poll_long(txn_id: DmaTransactionId) -> PollResult {
 #[inline(always)]
 fn read_tsc() -> u64 {
     #[cfg(target_arch = "x86_64")]
-    // SAFETY: rdtsc available on all x86_64; options(nostack, nomem) correct.
-    unsafe {
-        let lo: u32;
-        let hi: u32;
-        core::arch::asm!(
-            "rdtsc",
-            out("eax") lo,
-            out("edx") hi,
-            options(nostack, nomem),
-        );
-        ((hi as u64) << 32) | (lo as u64)
+    {
+        crate::arch::x86_64::cpu::tsc::read_tsc()
     }
     #[cfg(not(target_arch = "x86_64"))]
     {
@@ -210,9 +201,5 @@ fn read_tsc() -> u64 {
 /// Instruction `pause` (REPNE NOP) — reduces cache coherence contention.
 #[inline(always)]
 fn cpu_pause() {
-    #[cfg(target_arch = "x86_64")]
-    // SAFETY: pause available on x86_64; reduces cache coherence contention.
-    unsafe {
-        core::arch::asm!("pause", options(nostack, nomem, preserves_flags));
-    }
+    crate::arch::x86_64::cpu_pause();
 }
