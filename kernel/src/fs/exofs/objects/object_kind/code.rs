@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0
 // ExoFS — object_kind/code.rs
 // CodeDescriptor — objets exécutables (ELF vérifiés par BlobId + signature).
 //

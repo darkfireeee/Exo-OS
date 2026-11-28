@@ -3,7 +3,7 @@ name = "exo-wire"
 version = "0.2.0"
 edition = "2021"
 authors = ["Exo-OS Team"]
-license = "MIT OR Apache-2.0"
+license = "GPL-3.0"
 publish = false
 description = "Exo-OS canonical #[repr(C)] IPC wire protocol structures and opcodes across Ring 0, Drivers, and Ring 1 Servers"
 

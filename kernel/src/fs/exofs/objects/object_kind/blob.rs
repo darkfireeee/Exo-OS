@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0
 // ExoFS — object_kind/blob.rs
 // BlobDescriptor et pipeline de vérification des objets de type Blob.
 //

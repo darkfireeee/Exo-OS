@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0
 // ExoFS — object_kind/secret.rs
 // SecretDescriptor — objets chiffrés à accès contrôlé.
 //

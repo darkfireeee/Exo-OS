@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0
 // ExoFS — object_cache.rs
 // ObjectCache — cache LRU des LogicalObjects in-memory.
 //

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0
 // ExoFS NUMA — Statistics per NUMA node
 // ≥400L, ExofsError only, RECUR-01/OOM-02/ARITH-02
 

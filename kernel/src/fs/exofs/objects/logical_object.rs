@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0
 // ExoFS — logical_object.rs
 // LogicalObject : représentation RAM d'un objet ExoFS.
 // Règles :

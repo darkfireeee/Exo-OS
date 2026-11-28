@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0
 // ExoFS — physical_blob.rs
 // P-Blob (Physical Blob) : contenu immuable dédupliqué d'un objet.
 // Règles :

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0
 // ExoFS — extent.rs
 // Plage de données disque contiguë (Extent).
 // Règles :

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0
 // ExoFS — inline_data.rs
 // Données embarquées directement dans le LogicalObject (< INLINE_DATA_MAX octets).
 // Règles :

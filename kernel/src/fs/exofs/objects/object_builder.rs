@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0
 // ExoFS — object_builder.rs
 // ObjectBuilder — construction fluent et validée d'un LogicalObject.
 //

@@ -60,7 +60,7 @@ exclude = ["libs", "libs/wayland-rs", "library", "library/std", "tests/exo-compl
 version   = "0.1.0"
 edition   = "2021"
 authors   = ["Exo-OS Team"]
-license   = "MIT OR Apache-2.0"
+license   = "GPL-3.0"
 publish   = false
 
 # Dépendances communes (no_std) partagées entre kernel et drivers.

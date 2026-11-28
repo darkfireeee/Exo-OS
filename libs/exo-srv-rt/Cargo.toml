@@ -3,7 +3,7 @@ name = "exo-srv-rt"
 version = "0.2.0"
 edition = "2021"
 authors = ["Exo-OS Team"]
-license = "MIT OR Apache-2.0"
+license = "GPL-3.0"
 publish = false
 description = "Exo-OS #![no_std] micro-runtime for Ring 1 servers and hardware drivers (CRT entry, panic, logging, IPC helpers)"
 

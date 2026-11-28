@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0
 // ExoFS — extent_tree.rs
 // Arbre des extents d'un objet : mapping logique → physique.
 // Règles :

@@ -4,7 +4,7 @@ version     = "0.1.0"
 edition     = "2021"
 authors     = ["Exo-OS Team"]
 description = "Bootloader Exo-OS — UEFI/BIOS — no_std"
-license     = "MIT"
+license     = "GPL-3.0"
 build       = "build.rs"
 
 # ─── PROFIL RELEASE ───────────────────────────────────────────────────────────

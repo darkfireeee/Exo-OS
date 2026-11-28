@@ -3,7 +3,7 @@ name        = "exo-types"
 version     = "0.1.0"
 edition     = "2021"
 authors     = ["Exo-OS Team"]
-license     = "MIT OR Apache-2.0"
+license     = "GPL-3.0"
 description = "Types partagés ExoOS — no_std · Ring 0/1/3 (GI-01)"
 
 [lib]

@@ -3,7 +3,7 @@ name = "exo-font"
 version = "0.1.0"
 edition = "2021"
 authors = ["Exo-OS Team"]
-license = "MIT OR Apache-2.0"
+license = "GPL-3.0"
 publish = false
 description = "Shared #![no_std] 8x16 PSF bitmap console font for exo-boot, Ring 0 kernel, and Ring 1 fb_server"
 

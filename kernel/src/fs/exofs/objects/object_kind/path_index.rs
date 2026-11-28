@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0
 // ExoFS — object_kind/path_index.rs
 // PathIndex — page d'index de chemins (nœuds de l'arbre de noms ExoFS).
 //

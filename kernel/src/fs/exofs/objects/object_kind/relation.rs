@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0
 // ExoFS — object_kind/relation.rs
 // RelationDescriptor — arêtes typées du graphe d'objets ExoFS.
 //

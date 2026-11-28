@@ -16,7 +16,7 @@
 [![Arch](https://img.shields.io/badge/target-x86__64--unknown--exo-blue?style=flat-square)](.)
 [![Proofs](https://img.shields.io/badge/proofs-Coq%20%C2%B7%20TLA%2B-8b5cf6?style=flat-square)](.)
 [![Crypto](https://img.shields.io/badge/crypto-XChaCha20--Poly1305-22c55e?style=flat-square)](.)
-[![License](https://img.shields.io/badge/License-GPL%20v2-blue.svg)](.)
+[![License](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
 <br>
 

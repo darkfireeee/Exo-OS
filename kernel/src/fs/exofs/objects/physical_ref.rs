@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0
 // ExoFS — physical_ref.rs
 // Référence typée à la ressource physique d'un LogicalObject.
 // Règles :

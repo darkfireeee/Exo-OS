@@ -3,7 +3,7 @@ name = "exo_allocator"
 version = "0.1.0"
 edition = "2021"
 authors = ["Exo-OS Team"]
-license = "MIT OR Apache-2.0"
+license = "GPL-3.0"
 description = "Custom memory allocators for Exo-OS (slab, bump, mimalloc)"
 repository = "https://github.com/darkfireeee/Exo-OS"
 

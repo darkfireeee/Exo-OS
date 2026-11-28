@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: GPL-3.0
 // ExoFS — object_kind/mod.rs
 // Sous-types spécifiques selon le kind d'objet ExoFS.
 
