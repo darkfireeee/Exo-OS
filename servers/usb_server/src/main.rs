@@ -223,8 +223,16 @@ pub extern "C" fn _start() -> ! {
         };
 
         if rc >= 8 {
-            // Requete recue - decodage et traitement
-            let msg_type = u32::from_ne_bytes([buf[0], buf[1], buf[2], buf[3]]);
+            // FIX-15: Canonical IPC envelope header is [0..4] sender_pid, [4..8] msg_type.
+            // Reject synthetic HID injection from any untrusted Ring 3 process.
+            let sender_pid = u32::from_ne_bytes([buf[0], buf[1], buf[2], buf[3]]);
+            let msg_type = u32::from_ne_bytes([buf[4], buf[5], buf[6], buf[7]]);
+            if !syscall::peer_is_any_service(
+                sender_pid,
+                &[syscall::SVC_INIT_SERVER, syscall::SVC_USB_SERVER],
+            ) {
+                continue;
+            }
             match msg_type {
                 0x01 => {
                     // Simulation paquet HID clavier (8 octets a partir de l'offset 8)

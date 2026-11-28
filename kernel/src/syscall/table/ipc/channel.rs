@@ -28,16 +28,22 @@ pub(super) fn zeroed_user_vec(len: usize) -> Result<Vec<u8>, i64> {
 
 #[inline]
 pub(super) fn is_reserved_kernel_ipc(endpoint: u64, payload: &[u8]) -> bool {
-    if endpoint != CRYPTO_SERVER_ENDPOINT_ID
-        || payload.len() < crate::ipc::core::constants::ABI_IPC_HEADER_SIZE
-    {
+    if payload.len() < crate::ipc::core::constants::ABI_IPC_HEADER_SIZE {
+        return false;
+    }
+    // FIX-02: cover both static endpoint 4 and any PID-encoded CryptoServer endpoint.
+    let dst_pid = exo_ipc_endpoint_pid(endpoint);
+    let is_crypto_ep = endpoint == CRYPTO_SERVER_ENDPOINT_ID
+        || crate::security::service_class_of(crate::process::core::pid::Pid(dst_pid))
+            == crate::security::ServiceClass::CryptoServer;
+    if !is_crypto_ep {
         return false;
     }
     let msg_type = u32::from_le_bytes([payload[4], payload[5], payload[6], payload[7]]);
     msg_type == CRYPTO_PHOENIX_WAKE_ENTROPY
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum IpcEnvelopeAuth {
     NotRequired,
     TrustedCaller,
@@ -54,14 +60,36 @@ pub(super) fn validate_ipc_envelope_auth(
         ABI_IPC_ENVELOPE_SIZE, IPC_CAP_TOKEN_OFFSET, IPC_CAP_TOKEN_SIZE,
     };
 
-    // FIX-IPC-AUTH (Security_Audit_Passe2 §A-02): non-format messages
-    // receive NotRequired ONLY for kernel ephemeral reply endpoints.
+    // FIX-02: kernel ephemeral reply endpoints require an active registered reply capability
+    // bound to the responding server PID (never a blanket bypass).
     if is_kernel_ephemeral_reply_endpoint(endpoint) {
-        return Ok(IpcEnvelopeAuth::NotRequired);
+        if crate::ipc::rpc::raw::is_ephemeral_reply_authorized(endpoint, caller_pid) {
+            return Ok(IpcEnvelopeAuth::NotRequired);
+        }
+        return Err(EACCES);
     }
     let caller_class = crate::security::service_class_of(crate::process::core::pid::Pid(caller_pid));
-    if caller_can_inject || caller_class == crate::security::ServiceClass::Exosh {
+    if caller_can_inject {
         return Ok(IpcEnvelopeAuth::TrustedCaller);
+    }
+    // FIX-03: Remove blanket `ServiceClass::Exosh => TrustedCaller` bypass.
+    // Exosh only gets untokenized typed IPC to its non-critical interactive/console/broker
+    // endpoints; critical services (CryptoServer, ExoShield, MemoryServer, DeviceServer,
+    // InitServer, SchedulerServer) MUST present a valid ExoCapTokenWire and obey POLICY.
+    if caller_class == crate::security::ServiceClass::Exosh {
+        let dst_pid = exo_ipc_endpoint_pid(endpoint);
+        let dst_class = crate::security::service_class_of(crate::process::core::pid::Pid(dst_pid));
+        if matches!(
+            dst_class,
+            crate::security::ServiceClass::IpcBroker
+                | crate::security::ServiceClass::InputServer
+                | crate::security::ServiceClass::TtyServer
+                | crate::security::ServiceClass::FbServer
+                | crate::security::ServiceClass::AudioServer
+                | crate::security::ServiceClass::ExoCompositor
+        ) {
+            return Ok(IpcEnvelopeAuth::TrustedCaller);
+        }
     }
     // S5B: Allow isolated Strate 2 `exo_compositor` to send typed SurfaceGrant/DamageRect/Power IPC
     // strictly to `fb_server`, `input_server`, `memory_server`, or `init_server` (enforced by ExoCordon POLICY).
@@ -78,8 +106,17 @@ pub(super) fn validate_ipc_envelope_auth(
             return Ok(IpcEnvelopeAuth::TrustedCaller);
         }
     }
-    // Non-ephemeral ABI non-format messages -> explicit rejection.
+    // Non-ephemeral ABI non-format messages -> explicit rejection + audit.
     if payload.len() != ABI_IPC_ENVELOPE_SIZE {
+        let dst_pid = exo_ipc_endpoint_pid(endpoint);
+        crate::security::shield_feed::push_event(
+            caller_pid,
+            crate::security::shield_feed::event_type::IPC,
+            crate::security::shield_feed::severity::HIGH,
+            0xC049,
+            dst_pid as u64,
+            payload.len() as u64,
+        );
         return Err(EACCES);
     }
 
@@ -93,6 +130,15 @@ pub(super) fn validate_ipc_envelope_auth(
     let mut token_bytes = [0u8; crate::security::CAP_TOKEN_WIRE_SIZE];
     token_bytes.copy_from_slice(token_slice);
     let Some(token) = crate::security::CapToken::from_bytes(&token_bytes) else {
+        let dst_pid = exo_ipc_endpoint_pid(endpoint);
+        crate::security::shield_feed::push_event(
+            caller_pid,
+            crate::security::shield_feed::event_type::IPC,
+            crate::security::shield_feed::severity::HIGH,
+            0xC04A,
+            dst_pid as u64,
+            0,
+        );
         return Err(EACCES);
     };
 
@@ -108,7 +154,21 @@ pub(super) fn validate_ipc_envelope_auth(
         target_pid,
         crate::security::CapObjectType::IpcEndpoint as u32,
     )
-    .map_err(|_| EACCES)?;
+    .map_err(|err| {
+        crate::security::shield_feed::push_event(
+            caller_pid,
+            crate::security::shield_feed::event_type::CAPABILITY,
+            crate::security::shield_feed::severity::HIGH,
+            0xC04B,
+            target_pid as u64,
+            err.to_kernel_errno() as u64,
+        );
+        if err == crate::security::capability::KernelCapError::Expired {
+            crate::syscall::errno::ETIMEDOUT
+        } else {
+            EACCES
+        }
+    })?;
 
     Ok(IpcEnvelopeAuth::ValidToken)
 }
@@ -151,11 +211,32 @@ pub(super) fn ipc_error_to_errno(err: IpcError) -> i64 {
 }
 
 pub(super) fn enforce_direct_ipc_policy(endpoint: u64) -> Result<(), i64> {
+    let caller_pid = crate::syscall::fast_path::syscall_current_pid();
     if is_kernel_ephemeral_reply_endpoint(endpoint) {
-        return Ok(());
+        // FIX-02: only allow bit-63 ephemeral reply sends backed by an active
+        // reply capability bound to the responding server PID.
+        if caller_pid != 0
+            && crate::ipc::rpc::raw::is_ephemeral_reply_authorized(endpoint, caller_pid)
+        {
+            return Ok(());
+        }
+        crate::security::exoledger::exo_ledger_append(
+            crate::security::exoledger::ActionTag::IpcUnauthorized {
+                src_pid: caller_pid,
+                dst_pid: 0,
+            },
+        );
+        crate::security::shield_feed::push_event(
+            caller_pid,
+            crate::security::shield_feed::event_type::IPC,
+            crate::security::shield_feed::severity::HIGH,
+            0xC063,
+            endpoint,
+            0,
+        );
+        return Err(EACCES);
     }
 
-    let caller_pid = crate::syscall::fast_path::syscall_current_pid();
     if caller_pid == 0 {
         return Err(EACCES);
     }
@@ -372,6 +453,32 @@ fn authorize_and_stamp_ipc_send(endpoint: u64, payload: &mut [u8], flags: u64) -
         && payload.len() >= core::mem::size_of::<u32>()
     {
         payload[..4].copy_from_slice(&caller_pid.to_le_bytes());
+    } else if caller_can_inject
+        && !is_kernel_ephemeral_reply_endpoint(endpoint)
+        && (endpoint >> 32) == 0
+        && payload.len() >= core::mem::size_of::<u32>()
+    {
+        if crate::security::service_class_of(crate::process::core::pid::Pid(caller_pid))
+            == crate::security::ServiceClass::IpcBroker
+        {
+            // FIX-01 (defense-in-depth): IpcBroker forwarding to a server endpoint
+            // must never deliver a forged `sender_pid == 0` (kernel PID) or dead PID.
+            let claimed_pid = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]);
+            if claimed_pid == 0 {
+                return Err(EACCES);
+            }
+            #[cfg(not(test))]
+            if !crate::process::is_alive(claimed_pid) {
+                return Err(EACCES);
+            }
+        } else if is_registered_service_request_mailbox(endpoint, caller_pid) {
+            // FIX-01 / FIX-13: Non-broker Ring 1 services sending requests to a
+            // registered Ring 1 server mailbox ALWAYS have `sender_pid` kernel-stamped
+            // (both preventing Ring 1->Ring 1 spoofing and populating `sender_pid: 0`
+            // requests from ps2_driver, tty_server, usb_hid, exo_shield, etc., without
+            // corrupting `Reply.status` on replies to PID-encoded/ephemeral/client targets).
+            payload[..4].copy_from_slice(&caller_pid.to_le_bytes());
+        }
     }
     if is_reserved_kernel_ipc(endpoint, payload) {
         return Err(EACCES);
@@ -391,7 +498,15 @@ fn dispatch_ipc_call(
     if let Err(errno) = authorize_and_stamp_ipc_send(endpoint, request, 0) {
         return errno;
     }
-    match crate::ipc::rpc::call_raw(server_ep, request, response) {
+    let caller_pid = crate::syscall::fast_path::syscall_current_pid();
+    let server_pid = exo_ipc_endpoint_pid(endpoint);
+    match crate::ipc::rpc::raw::call_raw_for_pids(
+        server_ep,
+        caller_pid,
+        server_pid,
+        request,
+        response,
+    ) {
         Ok(reply_len) => {
             if reply_len != 0
                 && copy_to_user(resp_ptr as *mut u8, response.as_ptr(), reply_len).is_err()
@@ -441,10 +556,37 @@ pub fn sys_exo_ipc_send(
     if let Err(errno) = authorize_and_stamp_ipc_send(endpoint, payload, flags) {
         return errno;
     }
+
+    // FIX-02: Enforce single-use ephemeral reply capability consumption and forbid
+    // unbounded auto-open of RAW_TABLE slots from userspace SYS_EXO_IPC_SEND.
+    let is_ephemeral = is_kernel_ephemeral_reply_endpoint(endpoint);
+    let allow_auto_open = if is_ephemeral {
+        let caller_pid = crate::syscall::fast_path::syscall_current_pid();
+        if !crate::ipc::rpc::raw::consume_ephemeral_reply_cap(endpoint, caller_pid) {
+            return EACCES;
+        }
+        false
+    } else if crate::ipc::channel::raw::has_mailbox(endpoint_id) {
+        false
+    } else {
+        let packed_pid = (endpoint >> 32) as u32;
+        packed_pid != 0
+            && crate::process::is_alive(packed_pid)
+            && crate::ipc::channel::raw::count_mailboxes_for_pid(packed_pid) < 8
+    };
+
+    let do_send = |send_flags: u32| {
+        if allow_auto_open {
+            crate::ipc::channel::raw::send_raw(endpoint_id, payload, send_flags)
+        } else {
+            crate::ipc::channel::raw::send_raw_no_auto_open(endpoint_id, payload, send_flags)
+        }
+    };
+
     let nowait = (flags & !(IPC_RECV_TIMEOUT_FLAG | IPC_FLAG_INJECT_SRC_PID)) == 0
         && (flags & IPC_RECV_TIMEOUT_FLAG != 0);
     if nowait {
-        return match crate::ipc::channel::raw::send_raw(endpoint_id, payload, 0x0001) {
+        return match do_send(0x0001) {
             Ok(_) => 0,
             Err(err) => ipc_error_to_errno(err),
         };
@@ -458,7 +600,7 @@ pub fn sys_exo_ipc_send(
         let deadline = crate::scheduler::timer::clock::monotonic_ns()
             .saturating_add(timeout_ms.saturating_mul(1_000_000));
         loop {
-            match crate::ipc::channel::raw::send_raw(endpoint_id, payload, 0x0001) {
+            match do_send(0x0001) {
                 Ok(_) => return 0,
                 Err(
                     IpcError::Full
@@ -479,7 +621,7 @@ pub fn sys_exo_ipc_send(
             }
         }
     }
-    match crate::ipc::channel::raw::send_raw(endpoint_id, payload, 0) {
+    match do_send(0) {
         Ok(_) => 0,
         Err(err) => ipc_error_to_errno(err),
     }
@@ -591,4 +733,82 @@ pub fn sys_exo_ipc_call(
     };
 
     dispatch_ipc_call(endpoint, server_ep, &mut request, &mut response, resp_ptr)
+}
+
+#[cfg(test)]
+mod p0_security_tests {
+    use super::*;
+    use crate::process::core::pid::Pid;
+    use crate::security::{register_service_class, unregister_service, ServiceClass};
+
+    #[test]
+    fn fix02_reserved_phoenix_wake_blocked_on_pid_encoded_crypto_endpoint() {
+        let crypto_pid = 84u32;
+        assert!(register_service_class(Pid(crypto_pid), ServiceClass::CryptoServer));
+        let encoded_ep = ((crypto_pid as u64) << 32) | 0x1;
+        let mut payload = [0u8; 16];
+        payload[4..8].copy_from_slice(&CRYPTO_PHOENIX_WAKE_ENTROPY.to_le_bytes());
+        assert!(is_reserved_kernel_ipc(CRYPTO_SERVER_ENDPOINT_ID, &payload));
+        assert!(is_reserved_kernel_ipc(encoded_ep, &payload));
+        let _ = unregister_service(Pid(crypto_pid));
+    }
+
+    #[test]
+    fn fix02_unregistered_bit63_ephemeral_endpoint_denied_in_envelope_auth() {
+        let bogus_bit63 = (1u64 << 63) | 0xDEAD_BEEF;
+        let payload = [0u8; 16];
+        assert_eq!(
+            validate_ipc_envelope_auth(bogus_bit63, 25, false, &payload),
+            Err(EACCES)
+        );
+    }
+
+    #[test]
+    fn fix03_exosh_cannot_bypass_token_for_crypto_or_critical_servers() {
+        let exosh_pid = 85u32;
+        let crypto_pid = 86u32;
+        let fb_pid = 87u32;
+        assert!(register_service_class(Pid(exosh_pid), ServiceClass::Exosh));
+        assert!(register_service_class(Pid(crypto_pid), ServiceClass::CryptoServer));
+        assert!(register_service_class(Pid(fb_pid), ServiceClass::FbServer));
+
+        let payload = [0u8; 32];
+        // Exosh -> CryptoServer without valid ABI envelope token MUST be denied.
+        assert_eq!(
+            validate_ipc_envelope_auth(((crypto_pid as u64) << 32) | 1, exosh_pid, false, &payload),
+            Err(EACCES)
+        );
+        // Exosh -> FbServer remains allowed as interactive console client.
+        assert!(matches!(
+            validate_ipc_envelope_auth(((fb_pid as u64) << 32) | 1, exosh_pid, false, &payload),
+            Ok(IpcEnvelopeAuth::TrustedCaller)
+        ));
+
+        let _ = unregister_service(Pid(exosh_pid));
+        let _ = unregister_service(Pid(crypto_pid));
+        let _ = unregister_service(Pid(fb_pid));
+    }
+
+    #[test]
+    fn fix01_ring1_service_mailbox_detection_matches_servers_not_replies() {
+        let ps2_pid = 91u32;
+        let input_pid = 92u32;
+        let ring3_pid = 95u32;
+        let input_ep = 111u64;
+        assert!(register_service_class(Pid(ps2_pid), ServiceClass::Ps2Driver));
+        assert!(register_service_class(Pid(input_pid), ServiceClass::InputServer));
+        assert!(reserve_ipc_endpoint_owner(input_ep, input_pid, true).is_ok());
+
+        // Sending from ps2_driver -> registered InputServer mailbox MUST stamp sender_pid.
+        assert!(is_registered_service_request_mailbox(input_ep, ps2_pid));
+        // Replying to PID-encoded endpoint or unregistered Ring 3 client PID MUST NOT stamp.
+        assert!(!is_registered_service_request_mailbox(((ps2_pid as u64) << 32) | 1, input_pid));
+        assert!(!is_registered_service_request_mailbox(ring3_pid as u64, input_pid));
+        // Sending to own mailbox is not a cross-service request.
+        assert!(!is_registered_service_request_mailbox(input_ep, input_pid));
+
+        let _ = release_ipc_endpoint_owner(input_ep, input_pid);
+        let _ = unregister_service(Pid(ps2_pid));
+        let _ = unregister_service(Pid(input_pid));
+    }
 }

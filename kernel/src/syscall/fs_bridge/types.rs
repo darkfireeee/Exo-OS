@@ -391,7 +391,11 @@ pub struct BlobExecPolicyRecord {
 pub static BLOB_EXEC_POLICY: Mutex<Vec<BlobExecPolicyRecord>> = Mutex::new(Vec::new());
 
 pub fn is_noexec_mount_path(path: &[u8]) -> bool {
-    path == b"/mnt/usb"
+    path == b"/tmp"
+        || path.starts_with(b"/tmp/")
+        || path == b"/var/tmp"
+        || path.starts_with(b"/var/tmp/")
+        || path == b"/mnt/usb"
         || path.starts_with(b"/mnt/usb/")
         || path == b"/mnt"
         || path.starts_with(b"/mnt/")

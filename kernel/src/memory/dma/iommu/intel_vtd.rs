@@ -635,6 +635,50 @@ impl IntelVtd {
         None
     }
 
+    /// Invalidates Context Cache and IOTLB globally across every active DRHD unit (FIX-19).
+    ///
+    /// # Safety
+    /// CPL 0, VT-d initialized.
+    pub unsafe fn invalidate_context_and_iotlb_global(&self) {
+        if !self.initialized.load(Ordering::Acquire) {
+            return;
+        }
+        let count = self.count.load(Ordering::Relaxed).min(MAX_DRHD as u32) as usize;
+        for i in 0..count {
+            let unit = &self.units[i];
+            if !unit.initialized.load(Ordering::Acquire) {
+                continue;
+            }
+            unit.invalidate_context_global();
+            unit.invalidate_iotlb_global();
+        }
+    }
+
+    /// Revokes a specific PCI device `(bus, devfn)` by clearing its VT-d ContextEntry
+    /// to `ContextEntry::EMPTY` (Not-Present) and performing global Context + IOTLB
+    /// invalidation on all DRHD units (FIX-19).
+    ///
+    /// # Safety
+    /// CPL 0, VT-d initialized.
+    pub unsafe fn revoke_device_bdf(&self, bus: u8, devfn: u8) -> bool {
+        #[cfg(all(target_arch = "x86_64", target_os = "none"))]
+        {
+            if (bus as usize) >= STATIC_CONTEXT_BUSES {
+                return false;
+            }
+            let ctxs = &mut *core::ptr::addr_of_mut!(VTD_CONTEXT_TABLES);
+            ctxs[bus as usize].entries[devfn as usize] = ContextEntry::EMPTY;
+            compiler_fence(Ordering::SeqCst);
+            self.invalidate_context_and_iotlb_global();
+            true
+        }
+        #[cfg(not(all(target_arch = "x86_64", target_os = "none")))]
+        {
+            let _ = (bus, devfn);
+            false
+        }
+    }
+
     /// Invalidates the Context Cache and IOTLB for `domain_id` across all initialized DRHD units
     /// using the spec-compliant Register-Based Invalidation Interface (`CCMD` + `ECAP.IRO` `IOTLB_REG`).
     ///
@@ -668,6 +712,32 @@ impl IntelVtd {
             unit.invalidate_iotlb_domain(domain_id);
         }
     }
+}
+
+/// FIX-19: Strict PCI device whitelist for VT-d boot passthrough.
+///
+/// Under deny-by-default hardware IOMMU policy, EVERY unenumerated or unrecognized
+/// PCI BDF — and explicitly QEMU's `edu` DMA test device (`0x1234:0x11e8`) — remains
+/// `ContextEntry::EMPTY` (hardware DMAR fault on any DMA attempt).
+/// Only enumerated boot-essential PCI classes and VirtIO (`0x1AF4`) devices receive
+/// a ContextEntry during early Stage0 boot.
+#[inline]
+pub const fn is_boot_trusted_pci_device(vendor_id: u16, device_id: u16, class_code: u8) -> bool {
+    if vendor_id == 0x0000 || vendor_id == 0xFFFF {
+        return false;
+    }
+    // Explicitly deny QEMU `edu` DMA attack-surface test device.
+    if vendor_id == 0x1234 && device_id == 0x11e8 {
+        return false;
+    }
+    // Allow enumerated VirtIO PCI devices (blk, net, gpu, input, snd).
+    if vendor_id == 0x1AF4 {
+        return true;
+    }
+    // Allow standard boot-essential PCI classes:
+    // 0x01=Mass Storage, 0x02=Network, 0x03=Display, 0x04=Audio,
+    // 0x06=Bridge, 0x09=Input, 0x0C=USB/Serial Bus.
+    matches!(class_code, 0x01 | 0x02 | 0x03 | 0x04 | 0x06 | 0x09 | 0x0C)
 }
 
 pub static INTEL_VTD: IntelVtd = IntelVtd::new();
@@ -793,16 +863,29 @@ pub fn init_from_acpi_dmar(dmar_phys: u64) -> usize {
             let ctxs = &mut *core::ptr::addr_of_mut!(VTD_CONTEXT_TABLES);
             rt.zero();
 
+            // FIX-19: True hardware DENY-BY-DEFAULT across all 1024 `(bus, devfn)` slots.
+            // Every unpopulated or untrusted BDF (including `edu` 0x1234:0x11e8) starts as
+            // `ContextEntry::EMPTY` (Present=0 -> immediate hardware DMAR fault).
             for bus in 0..STATIC_CONTEXT_BUSES {
                 ctxs[bus].zero();
-                for devfn in 0..256usize {
-                    if edu_bdf == Some((bus as u8, devfn as u8)) {
-                        // Explicitly leave `edu` ContextEntry Not-Present (hardware deny-by-default)!
-                        ctxs[bus].entries[devfn] = ContextEntry::EMPTY;
-                    } else {
-                        ctxs[bus].entries[devfn].set_passthrough_with_aw(1, aw);
-                    }
+            }
+
+            // Selectively grant boot-essential enumerated PCI devices ONLY.
+            for idx in 0..b_device_count() {
+                let Some(dev) = b_device(idx) else {
+                    continue;
+                };
+                let bus = dev.bus as usize;
+                let devfn = ((dev.device << 3) | (dev.function & 0x7)) as usize;
+                if bus < STATIC_CONTEXT_BUSES
+                    && edu_bdf != Some((dev.bus, devfn as u8))
+                    && is_boot_trusted_pci_device(dev.vendor_id, dev.device_id, dev.class_code)
+                {
+                    ctxs[bus].entries[devfn].set_passthrough_with_aw(1, aw);
                 }
+            }
+
+            for bus in 0..STATIC_CONTEXT_BUSES {
                 let ctx_va = VirtAddr::new(&ctxs[bus] as *const ContextTable as u64);
                 let ctx_pa = KERNEL_AS
                     .translate(ctx_va)
@@ -872,4 +955,24 @@ pub fn init_from_acpi_dmar(dmar_phys: u64) -> usize {
 #[cfg(not(all(target_arch = "x86_64", target_os = "none")))]
 pub fn init_from_acpi_dmar(_dmar_phys: u64) -> usize {
     0
+}
+
+#[cfg(test)]
+mod fix19_vtd_policy_tests {
+    use super::is_boot_trusted_pci_device;
+
+    #[test]
+    fn var19_vtd_denies_edu_and_unknown_pci_devices_by_default() {
+        // QEMU edu DMA test device MUST ALWAYS be denied.
+        assert!(!is_boot_trusted_pci_device(0x1234, 0x11e8, 0x00));
+        assert!(!is_boot_trusted_pci_device(0x1234, 0x11e8, 0xFF));
+        // Unpopulated / arbitrary unknown PCI vendor/class MUST be denied.
+        assert!(!is_boot_trusted_pci_device(0xFFFF, 0xFFFF, 0xFF));
+        assert!(!is_boot_trusted_pci_device(0xDEAD, 0xBEEF, 0xFF));
+        // Boot-essential VirtIO & standard storage/network/display classes are allowed.
+        assert!(is_boot_trusted_pci_device(0x1AF4, 0x1001, 0x01)); // virtio-blk
+        assert!(is_boot_trusted_pci_device(0x1AF4, 0x1041, 0x02)); // virtio-net
+        assert!(is_boot_trusted_pci_device(0x1AF4, 0x1050, 0x03)); // virtio-gpu
+        assert!(is_boot_trusted_pci_device(0x8086, 0x100E, 0x02)); // e1000
+    }
 }

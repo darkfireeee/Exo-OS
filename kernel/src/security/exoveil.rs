@@ -140,9 +140,57 @@ impl PksPermission {
 // Global ExoVeil state
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Current PKRS value (software shadow of hardware MSR).
-/// Enables fast reads without RDMSR (~1 cycle vs ~20 cycles for RDMSR).
-static CURRENT_PKRS: AtomicU64 = AtomicU64::new(PKRS_ALL_REVOKED);
+/// Maximum CPUs tracked in the per-CPU PKRS shadow table (FIX-20).
+const MAX_EXOVEIL_CPUS: usize = 64;
+
+/// PTE bit shift for Intel PKS 4-bit protection key (bits [62:59]).
+pub const PTE_PKEY_SHIFT: u32 = 59;
+/// PTE mask for Intel PKS 4-bit protection key (bits [62:59]).
+pub const PTE_PKEY_MASK: u64 = 0xFu64 << PTE_PKEY_SHIFT;
+
+/// FIX-20: Tags a supervisor PTE with the 4-bit PKS protection key of `domain`
+/// (PTE bits `[62:59]`, Intel SDM Vol. 3A §4.6.2.2).
+#[inline(always)]
+pub const fn pte_with_pks_domain(pte: u64, domain: PksDomain) -> u64 {
+    (pte & !PTE_PKEY_MASK) | (((domain as u32 as u64) & 0xF) << PTE_PKEY_SHIFT)
+}
+
+/// Extracts the 4-bit PKS protection key stored in PTE bits `[62:59]`.
+#[inline(always)]
+pub const fn pte_pks_domain(pte: u64) -> u32 {
+    ((pte & PTE_PKEY_MASK) >> PTE_PKEY_SHIFT) as u32
+}
+
+#[inline(always)]
+fn current_cpu_slot() -> usize {
+    #[cfg(target_os = "none")]
+    {
+        (crate::arch::x86_64::smp::percpu::try_current_cpu_id().unwrap_or(0) as usize)
+            % MAX_EXOVEIL_CPUS
+    }
+    #[cfg(not(target_os = "none"))]
+    {
+        0
+    }
+}
+
+/// Per-CPU software shadow of MSR IA32_PKRS (FIX-20: eliminates SMP shadow race).
+/// Enables fast reads without RDMSR (~1 cycle vs ~20 cycles) while keeping each
+/// logical core's PKRS state strictly isolated.
+static CURRENT_PKRS_PER_CPU: [AtomicU64; MAX_EXOVEIL_CPUS] = {
+    const INIT: AtomicU64 = AtomicU64::new(PKRS_ALL_REVOKED);
+    [INIT; MAX_EXOVEIL_CPUS]
+};
+
+#[inline(always)]
+fn load_cpu_pkrs(cpu: usize) -> u64 {
+    CURRENT_PKRS_PER_CPU[cpu % MAX_EXOVEIL_CPUS].load(Ordering::Acquire)
+}
+
+#[inline(always)]
+fn store_cpu_pkrs(cpu: usize, val: u64) {
+    CURRENT_PKRS_PER_CPU[cpu % MAX_EXOVEIL_CPUS].store(val, Ordering::Release);
+}
 
 /// PKS supported by CPU (detected at boot by ExoSeal).
 static PKS_AVAILABLE: AtomicBool = AtomicBool::new(false);
@@ -192,11 +240,12 @@ fn apply_domain_permission(pkrs: u64, domain: PksDomain, perm: PksPermission) ->
 // SAFETY: validated low-level operation — see block documentation.
 unsafe fn write_pkrs_shadowed(new_val: u64) {
     let _irq = crate::scheduler::core::preempt::IrqGuard::new();
+    let cpu = current_cpu_slot();
     // SAFETY: caller guarantees Ring 0 and a valid PKRS value.
     unsafe {
         wrpkrs(new_val);
     }
-    CURRENT_PKRS.store(new_val, Ordering::Release);
+    store_cpu_pkrs(cpu, new_val);
 }
 
 /// RAII guard restoring previous PKRS value on scope exit.
@@ -227,12 +276,13 @@ impl Drop for ScopedPkrsAccess {
         }
 
         let _irq = crate::scheduler::core::preempt::IrqGuard::new();
+        let cpu = current_cpu_slot();
         // SAFETY: guard can only be active if PKS is available and
         // a valid previous PKRS value was saved.
         unsafe {
             wrpkrs(self.previous_pkrs);
         }
-        CURRENT_PKRS.store(self.previous_pkrs, Ordering::Release);
+        store_cpu_pkrs(cpu, self.previous_pkrs);
     }
 }
 
@@ -265,8 +315,8 @@ pub unsafe fn revoke_domain(domain: PksDomain) {
         return; // PKS not available — silent noop
     }
 
-    // Read-Modify-Write of MSR PKRS
-    let cur = CURRENT_PKRS.load(Ordering::Relaxed);
+    // Read-Modify-Write of MSR PKRS on current CPU (FIX-20)
+    let cur = load_cpu_pkrs(current_cpu_slot());
     let new_val = apply_domain_permission(cur, domain, PksPermission::Disabled);
 
     // SAFETY: Ring 0, PKS supported, valid PKRS value.
@@ -296,7 +346,7 @@ pub unsafe fn restore_domain(domain: PksDomain) {
         return;
     }
 
-    let cur = CURRENT_PKRS.load(Ordering::Relaxed);
+    let cur = load_cpu_pkrs(current_cpu_slot());
     let new_val = apply_domain_permission(cur, domain, PksPermission::ReadWrite);
 
     // SAFETY: Ring 0, PKS supported, valid PKRS value.
@@ -315,7 +365,7 @@ pub unsafe fn restore_domain_with_permission(domain: PksDomain, perm: PksPermiss
         return;
     }
 
-    let cur = CURRENT_PKRS.load(Ordering::Relaxed);
+    let cur = load_cpu_pkrs(current_cpu_slot());
     let new_val = apply_domain_permission(cur, domain, perm);
 
     // SAFETY: Ring 0, PKS supported, valid PKRS value.
@@ -340,7 +390,7 @@ pub(crate) unsafe fn scoped_domain_access(
         return ScopedPkrsAccess::inactive();
     }
 
-    let previous_pkrs = CURRENT_PKRS.load(Ordering::Acquire);
+    let previous_pkrs = load_cpu_pkrs(current_cpu_slot());
     let new_val = apply_domain_permission(previous_pkrs, domain, perm);
 
     // SAFETY: Ring 0, PKS supported, valid PKRS value.
@@ -380,16 +430,21 @@ pub unsafe fn exoveil_init() {
     PKS_AVAILABLE.store(pks_supported, Ordering::Release);
 
     if !pks_supported {
-        // PKS unavailable — ExoVeil in noop mode
-        // TcbHot pages will NOT be protected by PKS
-        // (compensation via KASLR + IOMMU + CET)
+        // FIX-20: Explicitly audit degraded non-PKS hardware into ExoLedger (never silent).
+        crate::security::exoledger::exo_ledger_append(
+            crate::security::exoledger::ActionTag::Custom {
+                tag: 0x504B_5330, // "PKS0"
+                data: 0,
+            },
+        );
         return;
     }
 
-    // 1. Revoke all domains at boot (default-deny)
-    //    IA32_PKRS = 0xFFFFFFFF: each bit pair = 0b11 = Disabled
+    // 1. Revoke all domains at boot (default-deny) across all per-CPU shadow slots.
     wrpkrs(PKRS_ALL_REVOKED);
-    CURRENT_PKRS.store(PKRS_ALL_REVOKED, Ordering::Release);
+    for slot in &CURRENT_PKRS_PER_CPU {
+        slot.store(PKRS_ALL_REVOKED, Ordering::Release);
+    }
 
     // 2. Restore Default (pkey=0) to ReadWrite — standard kernel code
     restore_domain(PksDomain::Default);
@@ -471,16 +526,16 @@ pub fn exoveil_initialized() -> bool {
     EXOVEIL_INITIALIZED.load(Ordering::Acquire)
 }
 
-/// Reads current PKRS value (software shadow, not RDMSR).
+/// Reads current CPU's PKRS value (per-CPU software shadow, not RDMSR).
 #[inline(always)]
 pub fn current_pkrs() -> u64 {
-    CURRENT_PKRS.load(Ordering::Acquire)
+    load_cpu_pkrs(current_cpu_slot())
 }
 
-/// Checks if a specific domain is revoked.
+/// Checks if a specific domain is revoked on the current CPU.
 #[inline(always)]
 pub fn is_domain_revoked(domain: PksDomain) -> bool {
-    let pkrs = CURRENT_PKRS.load(Ordering::Acquire);
+    let pkrs = load_cpu_pkrs(current_cpu_slot());
     let perm_bits = (pkrs >> domain.shift()) & 0b11;
     perm_bits == PksPermission::Disabled as u64
 }
@@ -495,7 +550,7 @@ pub fn revoke_count(domain: PksDomain) -> u64 {
 // TCB Integration — PKRS write into TCB
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Saves current PKRS value in thread TCB.
+/// Saves current CPU's PKRS value in thread TCB.
 ///
 /// Called on context switch OUT (thread preemption).
 ///
@@ -504,7 +559,7 @@ pub fn revoke_count(domain: PksDomain) -> u64 {
 #[inline(always)]
 // SAFETY: validated low-level operation — see block documentation.
 pub unsafe fn save_pkrs_to_tcb(tcb: &mut crate::scheduler::core::task::ThreadControlBlock) {
-    tcb.pkrs = CURRENT_PKRS.load(Ordering::Relaxed) as u32;
+    tcb.pkrs = load_cpu_pkrs(current_cpu_slot()) as u32;
 }
 
 /// Restores PKRS value from thread TCB.
@@ -552,7 +607,7 @@ pub fn exoveil_stats() -> ExoVeilStats {
     ExoVeilStats {
         pks_available: PKS_AVAILABLE.load(Ordering::Relaxed),
         initialized: EXOVEIL_INITIALIZED.load(Ordering::Relaxed),
-        current_pkrs: CURRENT_PKRS.load(Ordering::Relaxed),
+        current_pkrs: load_cpu_pkrs(current_cpu_slot()),
         caps_revokes: REVOKE_COUNT[PksDomain::Caps.pkey() as usize].load(Ordering::Relaxed),
         creds_revokes: REVOKE_COUNT[PksDomain::Credentials.pkey() as usize].load(Ordering::Relaxed),
         tcbhot_revokes: REVOKE_COUNT[PksDomain::TcbHot.pkey() as usize].load(Ordering::Relaxed),
@@ -561,7 +616,10 @@ pub fn exoveil_stats() -> ExoVeilStats {
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_domain_permission, PksDomain, PksPermission};
+    use super::{
+        apply_domain_permission, load_cpu_pkrs, pte_pks_domain, pte_with_pks_domain,
+        store_cpu_pkrs, PksDomain, PksPermission,
+    };
 
     #[test]
     fn apply_domain_permission_updates_only_target_domain() {
@@ -592,5 +650,20 @@ mod tests {
             restored & !PksDomain::Caps.mask(),
             revoked & !PksDomain::Caps.mask()
         );
+    }
+
+    #[test]
+    fn var20_exoveil_per_cpu_pkrs_shadow_and_pte_pkey_tagging() {
+        store_cpu_pkrs(1, 0x0000_0000_0000_000C);
+        store_cpu_pkrs(2, 0x0000_0000_0000_0030);
+        assert_eq!(load_cpu_pkrs(1), 0x0000_0000_0000_000C);
+        assert_eq!(load_cpu_pkrs(2), 0x0000_0000_0000_0030);
+
+        let base_pte = 0x8000_0000_0010_0003u64; // NX + Present + RW
+        let tagged = pte_with_pks_domain(base_pte, PksDomain::TcbHot);
+        assert_eq!(pte_pks_domain(tagged), PksDomain::TcbHot.pkey());
+        assert_eq!(tagged & !super::PTE_PKEY_MASK, base_pte & !super::PTE_PKEY_MASK);
+        let creds_pte = pte_with_pks_domain(tagged, PksDomain::Credentials);
+        assert_eq!(pte_pks_domain(creds_pte), PksDomain::Credentials.pkey());
     }
 }

@@ -1016,6 +1016,8 @@ pub extern "C" fn phoenix_inject_crypto_aead_nonce_verify() -> i64 {
         if !crate::ipc::channel::raw::mailbox_open(reply_ep) {
             return Err(EIO);
         }
+        let crypto_pid = handoff::find_crypto_server_runtime_pid().unwrap_or(0);
+        let _ = crate::ipc::rpc::raw::register_ephemeral_reply_cap(reply_ep.get(), 0, crypto_pid);
         let mut req = CryptoReqWire {
             sender_pid: 0,
             msg_type,
@@ -1034,6 +1036,7 @@ pub extern "C" fn phoenix_inject_crypto_aead_nonce_verify() -> i64 {
             )
         };
         if crate::ipc::channel::raw::send_raw(ep, req_bytes, RAW_NOWAIT).is_err() {
+            crate::ipc::rpc::raw::unregister_ephemeral_reply_cap(reply_ep.get());
             crate::ipc::channel::raw::mailbox_close(reply_ep);
             return Err(EIO);
         }
@@ -1064,6 +1067,7 @@ pub extern "C" fn phoenix_inject_crypto_aead_nonce_verify() -> i64 {
                 Err(_) => break Err(EIO),
             }
         };
+        crate::ipc::rpc::raw::unregister_ephemeral_reply_cap(reply_ep.get());
         crate::ipc::channel::raw::mailbox_close(reply_ep);
         res
     }

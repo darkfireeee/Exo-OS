@@ -80,6 +80,8 @@ pub mod process_flags {
     pub const GROUP_EXITING: u32 = 1 << 12;
     /// execve() in progress — prevents new threads spawning during image teardown.
     pub const EXECING: u32 = 1 << 13;
+    /// FIX-25: Irreversible PR_SET_NO_NEW_PRIVS bit (cannot be cleared once set; inherited on fork/exec).
+    pub const NO_NEW_PRIVS: u32 = 1 << 14;
 }
 
 pub use process_flags as ProcessFlags;

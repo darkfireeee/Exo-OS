@@ -85,6 +85,94 @@ pub fn recv_ipc_timeout<T>(endpoint_id: u64, out: &mut T, timeout_ms_even: u64) 
     }
 }
 
+/// Kernel-attested `ServiceClass` wire IDs (mirrors `kernel::security::ipc_policy::ServiceClass`).
+pub const SVC_INIT_SERVER: u8 = 0;
+pub const SVC_IPC_BROKER: u8 = 1;
+pub const SVC_MEMORY_SERVER: u8 = 2;
+pub const SVC_VFS_SERVER: u8 = 3;
+pub const SVC_CRYPTO_SERVER: u8 = 4;
+pub const SVC_DEVICE_SERVER: u8 = 5;
+pub const SVC_NETWORK_SERVER: u8 = 6;
+pub const SVC_SCHEDULER_SERVER: u8 = 7;
+pub const SVC_INPUT_SERVER: u8 = 8;
+pub const SVC_TTY_SERVER: u8 = 9;
+pub const SVC_FB_SERVER: u8 = 10;
+pub const SVC_PS2_DRIVER: u8 = 11;
+pub const SVC_VIRTIO_DRIVER: u8 = 12;
+pub const SVC_EXO_SHIELD: u8 = 13;
+pub const SVC_EXOSH: u8 = 14;
+pub const SVC_EXO_COMPOSITOR: u8 = 15;
+pub const SVC_AUDIO_SERVER: u8 = 16;
+pub const SVC_USB_SERVER: u8 = 17;
+pub const SVC_UNKNOWN: u8 = 255;
+
+/// Kernel Zero-Trust restriction flag mirrors (`kernel::security::zero_trust::restriction_flags`).
+pub const EXO_RESTRICT_NO_NETWORK: u32 = 1 << 1;
+pub const EXO_RESTRICT_SANDBOX_FULL: u32 = 1 << 7;
+pub const EXO_RESTRICT_NO_INET: u32 = 1 << 11;
+
+/// Queries the kernel-attested `ServiceClass` of `pid` (Ring 1 services / PID 1 only).
+#[inline]
+pub fn peer_service_class(pid: u32) -> u8 {
+    if pid == 0 {
+        return SVC_UNKNOWN;
+    }
+    if pid == 1 {
+        return SVC_INIT_SERVER;
+    }
+    #[cfg(target_os = "none")]
+    {
+        let rc = unsafe { syscall3(SYS_EXO_PLEDGE, 0, 2, pid as u64) };
+        if rc >= 0 && rc <= 255 {
+            rc as u8
+        } else {
+            SVC_UNKNOWN
+        }
+    }
+    #[cfg(not(target_os = "none"))]
+    {
+        SVC_UNKNOWN
+    }
+}
+
+/// Queries the kernel Zero-Trust restriction mask of `pid` (Ring 1 services / PID 1 only).
+#[inline]
+pub fn peer_restrictions(pid: u32) -> u32 {
+    if pid == 0 {
+        return 0;
+    }
+    #[cfg(target_os = "none")]
+    {
+        let rc = unsafe { syscall3(SYS_EXO_PLEDGE, 0, 3, pid as u64) };
+        if rc >= 0 {
+            rc as u32
+        } else {
+            0
+        }
+    }
+    #[cfg(not(target_os = "none"))]
+    {
+        0
+    }
+}
+
+/// Returns `true` iff `pid` holds one of the kernel-attested `ServiceClass` IDs in `allowed`.
+#[inline]
+pub fn peer_is_any_service(pid: u32, allowed: &[u8]) -> bool {
+    if pid == 0 {
+        return false;
+    }
+    let class = peer_service_class(pid);
+    let mut i = 0usize;
+    while i < allowed.len() {
+        if allowed[i] == class {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
 /// Sends a fixed-size `#[repr(C)]` reply to `destination` (PID or reply endpoint).
 #[inline]
 pub fn send_reply<T>(destination: u64, reply: &T) -> i64 {

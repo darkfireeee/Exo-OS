@@ -11,6 +11,7 @@ use super::*;
 #[derive(Clone, Copy)]
 pub struct HookPipelineResult {
     pub blocked: bool,
+    pub kill_recommended: bool,
     pub level: engine::ThreatLevel,
     pub category: engine::ThreatCategory,
     pub timeline_type: forensics::TimelineEventType,
@@ -23,6 +24,7 @@ impl HookPipelineResult {
     pub const fn pass() -> Self {
         Self {
             blocked: false,
+            kill_recommended: false,
             level: engine::ThreatLevel::Low,
             category: engine::ThreatCategory::None,
             timeline_type: forensics::TimelineEventType::ThreatDetected,
@@ -203,7 +205,38 @@ pub fn apply_containment(pid: u32, tick: u64) -> bool {
     engine_ok || sandbox_ok || firewall_ok || kernel_ok
 }
 
+/// FIX-08: Executes `ContainmentAction::Kill` — applies containment AND terminates
+/// the offending unprivileged process with `SYS_KILL(pid, SIGKILL)`.
+/// Protects kernel (`0`), init (`1`), ipc_router (`2`), and exo_shield itself.
+pub fn apply_kill_containment(pid: u32, tick: u64) -> bool {
+    let contained = apply_containment(pid, tick);
+    if pid <= 2 || pid == runtime_pid() {
+        return contained;
+    }
+    #[cfg(target_os = "none")]
+    let killed = {
+        const SIGKILL: u64 = 9;
+        let rc = unsafe { syscall::syscall2(syscall::SYS_KILL, pid as u64, SIGKILL) };
+        rc >= 0
+    };
+    #[cfg(not(target_os = "none"))]
+    let killed = true;
+
+    if killed {
+        CONTAINMENT_KILLS.fetch_add(1, Ordering::Relaxed);
+        forensics::record_timeline_event(
+            forensics::TimelineEventType::ThreatDetected,
+            pid,
+            0,
+            engine::ContainmentAction::Kill as u32,
+            9,
+        );
+    }
+    contained || killed
+}
+
 pub fn release_containment(pid: u32) -> bool {
+    engine::reset_violation_escalation(pid);
     let engine_ok = engine::release_process(pid);
     let sandbox_ok = sandbox::release_quarantine(pid);
     let firewall_ok = network::unblock_pid(pid);
@@ -222,6 +255,25 @@ pub fn release_containment(pid: u32) -> bool {
 
 pub fn process_security_hooks(event: &engine::MonitoredEvent, payload: &[u8]) -> HookPipelineResult {
     let mut result = HookPipelineResult::pass();
+
+    // FIX-24: Feed live behavioral process profiler on every security event.
+    if event.pid > 0 {
+        match event.event_type {
+            engine::EventType::Syscall => {
+                behavioral::profiler::record_syscall(event.pid, event.opcode as u64);
+            }
+            engine::EventType::Memory => {
+                behavioral::profiler::record_memory_access(
+                    event.pid,
+                    event.arg0,
+                    event.arg1,
+                    (event.opcode & 0x3) as u8,
+                    ((event.opcode >> 8) & 0x7) as u8,
+                );
+            }
+            _ => {}
+        }
+    }
 
     match event.event_type {
         engine::EventType::Process => {
@@ -361,6 +413,46 @@ pub fn process_security_hooks(event: &engine::MonitoredEvent, payload: &[u8]) ->
                     b"use_after_free",
                 );
             }
+            // FIX-05/FIX-08: Repeated High/Critical kernel memory violations (e.g. W^X / mmap PROT_EXEC)
+            // escalate to Quarantine / Kill.
+            if event.severity >= engine::ThreatLevel::High {
+                let (burst, action) = engine::record_violation_escalation(event.pid, event.severity);
+                match action {
+                    engine::ContainmentAction::Kill => {
+                        result.blocked = true;
+                        result.kill_recommended = true;
+                        result.raise(
+                            engine::ThreatLevel::Critical,
+                            engine::ThreatCategory::PolicyViol,
+                            forensics::TimelineEventType::MemAnomaly,
+                            event.opcode,
+                            burst,
+                            b"memory_violation_kill",
+                        );
+                    }
+                    engine::ContainmentAction::Quarantine => {
+                        result.blocked = true;
+                        result.raise(
+                            engine::ThreatLevel::Critical,
+                            engine::ThreatCategory::PolicyViol,
+                            forensics::TimelineEventType::MemAnomaly,
+                            event.opcode,
+                            burst,
+                            b"memory_violation_quarantine",
+                        );
+                    }
+                    _ => {
+                        result.raise(
+                            engine::ThreatLevel::High,
+                            engine::ThreatCategory::PolicyViol,
+                            forensics::TimelineEventType::MemAnomaly,
+                            event.opcode,
+                            burst,
+                            b"memory_violation",
+                        );
+                    }
+                }
+            }
         }
         engine::EventType::Syscall => {
             let args = [event.arg0, event.arg1, 0];
@@ -413,6 +505,143 @@ pub fn process_security_hooks(event: &engine::MonitoredEvent, payload: &[u8]) ->
                 event.opcode,
                 event.severity.as_u8() as u32,
             );
+            // FIX-08: Escalate repeated IPC violations (e.g. ExoCordon denials)
+            // from High -> Quarantine -> Kill instead of passively logging.
+            if event.severity >= engine::ThreatLevel::Medium {
+                let (burst, action) = engine::record_violation_escalation(event.pid, event.severity);
+                match action {
+                    engine::ContainmentAction::Kill => {
+                        result.blocked = true;
+                        result.kill_recommended = true;
+                        result.raise(
+                            engine::ThreatLevel::Critical,
+                            engine::ThreatCategory::SandboxEscape,
+                            forensics::TimelineEventType::IpcViolation,
+                            event.opcode,
+                            burst,
+                            b"ipc_violation_kill",
+                        );
+                    }
+                    engine::ContainmentAction::Quarantine => {
+                        result.blocked = true;
+                        result.raise(
+                            engine::ThreatLevel::Critical,
+                            engine::ThreatCategory::PolicyViol,
+                            forensics::TimelineEventType::IpcViolation,
+                            event.opcode,
+                            burst,
+                            b"ipc_violation_quarantine",
+                        );
+                    }
+                    _ => {
+                        result.raise(
+                            event.severity,
+                            engine::ThreatCategory::PolicyViol,
+                            forensics::TimelineEventType::IpcViolation,
+                            event.opcode,
+                            burst,
+                            b"ipc_violation",
+                        );
+                    }
+                }
+            }
+        }
+        engine::EventType::Filesystem => {
+            forensics::record_timeline_event(
+                forensics::TimelineEventType::SandboxViolation,
+                event.pid,
+                event.arg0 as u32,
+                event.opcode,
+                event.severity.as_u8() as u32,
+            );
+            if sandbox::is_pid_quarantined(event.pid) || event.severity >= engine::ThreatLevel::High
+            {
+                let (burst, action) = engine::record_violation_escalation(event.pid, event.severity);
+                result.blocked = true;
+                if action == engine::ContainmentAction::Kill {
+                    result.kill_recommended = true;
+                }
+                let lvl = if matches!(
+                    action,
+                    engine::ContainmentAction::Quarantine | engine::ContainmentAction::Kill
+                ) {
+                    engine::ThreatLevel::Critical
+                } else {
+                    engine::ThreatLevel::High
+                };
+                result.raise(
+                    lvl,
+                    engine::ThreatCategory::PolicyViol,
+                    forensics::TimelineEventType::SandboxViolation,
+                    event.opcode,
+                    burst,
+                    b"fs_violation",
+                );
+            }
+        }
+        engine::EventType::Signal => {
+            let sig = event.opcode;
+            let target = event.arg0 as u32;
+            forensics::record_timeline_event(
+                forensics::TimelineEventType::SyscallAnomaly,
+                event.pid,
+                target,
+                sig,
+                event.severity.as_u8() as u32,
+            );
+            if event.severity >= engine::ThreatLevel::High || (sig == 9 && target != event.pid) {
+                let (burst, action) = engine::record_violation_escalation(
+                    event.pid,
+                    event.severity.max(engine::ThreatLevel::High),
+                );
+                if action == engine::ContainmentAction::Kill {
+                    result.kill_recommended = true;
+                }
+                result.blocked = true;
+                result.raise(
+                    if burst >= 3 {
+                        engine::ThreatLevel::Critical
+                    } else {
+                        engine::ThreatLevel::High
+                    },
+                    engine::ThreatCategory::PolicyViol,
+                    forensics::TimelineEventType::SyscallAnomaly,
+                    sig,
+                    target,
+                    b"signal_violation",
+                );
+            }
+        }
+        engine::EventType::Capability => {
+            forensics::record_timeline_event(
+                forensics::TimelineEventType::ThreatDetected,
+                event.pid,
+                event.arg1 as u32,
+                event.opcode,
+                event.severity.as_u8() as u32,
+            );
+            if event.severity >= engine::ThreatLevel::High {
+                let (burst, action) = engine::record_violation_escalation(event.pid, event.severity);
+                result.blocked = true;
+                if action == engine::ContainmentAction::Kill {
+                    result.kill_recommended = true;
+                }
+                result.raise(
+                    if matches!(
+                        action,
+                        engine::ContainmentAction::Quarantine | engine::ContainmentAction::Kill
+                    ) {
+                        engine::ThreatLevel::Critical
+                    } else {
+                        engine::ThreatLevel::High
+                    },
+                    engine::ThreatCategory::PrivilegeEsc,
+                    forensics::TimelineEventType::ThreatDetected,
+                    event.opcode,
+                    burst,
+                    b"capability_violation",
+                );
+            }
         }
         _ => {}
     }

@@ -200,7 +200,16 @@ impl ZeroTrustPolicy {
 
         match req.resource_kind {
             ResourceKind::IpcEndpoint => {
-                // No active restriction forbidding IPC
+                // FIX-07: Enforce quarantine / full sandbox on IPC endpoints.
+                if req.subject.has_restriction(SANDBOX_FULL) {
+                    return PolicyAction::DenyAndAudit;
+                }
+                PolicyAction::Allow
+            }
+            ResourceKind::MemoryRegion => {
+                if req.subject.has_restriction(SANDBOX_FULL) {
+                    return PolicyAction::DenyAndAudit;
+                }
                 PolicyAction::Allow
             }
             ResourceKind::FileInode => {
@@ -213,19 +222,25 @@ impl ZeroTrustPolicy {
                 PolicyAction::Allow
             }
             ResourceKind::Syscall => {
-                // TIER 1.1: enforce ACTUAL sandbox/pledge restrictions of the
+                // TIER 1.1 / FIX-07: enforce ACTUAL sandbox/pledge restrictions of the
                 // calling process. `context_data` carries the syscall number;
-                // if caller holds a restriction forbidding this syscall
-                // (NO_FORK/NO_EXEC/NO_NETWORK/NO_PROCESS_CREATE), deny + audit.
-                // Default (unrestricted process) → mask 0 → Allow (boot-safe).
+                // if caller holds a restriction forbidding this syscall, deny + audit.
                 let forbidding = super::process_state::syscall_restriction_mask(req.context_data);
                 if forbidding != 0 && req.subject.has_restriction(forbidding) {
                     return PolicyAction::DenyAndAudit;
                 }
                 PolicyAction::Allow
             }
-            ResourceKind::Device => {
-                // Devices: restricted to Trusted+ threads
+            ResourceKind::Device | ResourceKind::DmaChannel | ResourceKind::CryptoKey => {
+                if req.subject.has_restriction(SANDBOX_FULL) {
+                    return PolicyAction::DenyAndAlert;
+                }
+                PolicyAction::Allow
+            }
+            ResourceKind::Thread => {
+                if req.subject.has_restriction(SANDBOX_FULL) {
+                    return PolicyAction::DenyAndAudit;
+                }
                 PolicyAction::Allow
             }
             _ => PolicyAction::Allow,

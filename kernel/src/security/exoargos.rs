@@ -464,6 +464,14 @@ fn compute_snapshot_discordance(oracle: &PmcSnapshot, pmc: &PmcSnapshot) -> u32 
     avg as u32
 }
 
+/// FIX-22: Pure testable composite discordance evaluation against `DECEPTION_THRESHOLD`.
+/// Returns `(discordance_fp10000, is_anomalous)`.
+#[inline]
+pub fn evaluate_snapshot_anomaly(oracle: &PmcSnapshot, current: &PmcSnapshot) -> (u32, bool) {
+    let discordance = compute_snapshot_discordance(oracle, current);
+    (discordance, discordance > DECEPTION_THRESHOLD)
+}
+
 /// Checks whether the current behaviour is anomalous relative to the baseline.
 ///
 /// Captures a PMC snapshot, compares it to the stored baseline, and returns
@@ -592,5 +600,38 @@ mod tests {
     fn test_validate_snapshot_subject_ptrs_accepts_current_thread() {
         let current = make_tcb(3, 9);
         assert_eq!(validate_snapshot_subject_ptrs(&current, &current), Ok(()));
+    }
+
+    #[test]
+    fn var20_exoargos_evaluates_pmc_discordance_above_threshold() {
+        let baseline = super::PmcSnapshot {
+            inst_retired: 100_000,
+            clk_unhalted: 120_000,
+            l3_miss: 1_000,
+            br_mispredict: 500,
+            tsc: 200_000,
+            _reserved: [0; 3],
+        };
+        let normal = super::PmcSnapshot {
+            inst_retired: 105_000,
+            clk_unhalted: 125_000,
+            l3_miss: 1_050,
+            br_mispredict: 520,
+            tsc: 210_000,
+            _reserved: [0; 3],
+        };
+        let (norm_score, norm_anom) = super::evaluate_snapshot_anomaly(&baseline, &normal);
+        assert!(!norm_anom, "normal workload score={norm_score}");
+
+        let side_channel = super::PmcSnapshot {
+            inst_retired: 100_000,
+            clk_unhalted: 300_000,
+            l3_miss: 50_000,
+            br_mispredict: 10_000,
+            tsc: 400_000,
+            _reserved: [0; 3],
+        };
+        let (anom_score, is_anom) = super::evaluate_snapshot_anomaly(&baseline, &side_channel);
+        assert!(is_anom && anom_score > super::DECEPTION_THRESHOLD);
     }
 }

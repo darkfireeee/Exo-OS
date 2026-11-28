@@ -24,6 +24,39 @@ static NIC_POLICY_REQUIRED: AtomicBool = AtomicBool::new(false);
 static NIC_DOMAIN_ID: AtomicU32 = AtomicU32::new(0);
 static NIC_DMA_BASE: AtomicU64 = AtomicU64::new(0);
 static NIC_DMA_END: AtomicU64 = AtomicU64::new(0);
+/// FIX-18: Degraded hardware bitmask audited explicitly into ExoLedger (never silent):
+/// bit 0 = PKS unavailable, bit 1 = CET unavailable, bit 2 = NIC IOMMU lock missing.
+static EXOSEAL_DEGRADED_FLAGS: AtomicU32 = AtomicU32::new(0);
+
+pub const DEGRADED_NO_PKS: u32 = 1 << 0;
+pub const DEGRADED_NO_CET: u32 = 1 << 1;
+pub const DEGRADED_NO_NIC_IOMMU: u32 = 1 << 2;
+
+#[inline]
+pub fn degraded_flags() -> u32 {
+    EXOSEAL_DEGRADED_FLAGS.load(Ordering::Acquire)
+}
+
+fn record_degraded_hardware_status() {
+    let mut mask = 0u32;
+    if !exoveil::pks_available() {
+        mask |= DEGRADED_NO_PKS;
+    }
+    let (cet_ss, _) = exocage::cpuid_cet_available();
+    if !cet_ss || !exocage::is_cet_global_enabled() {
+        mask |= DEGRADED_NO_CET;
+    }
+    if NIC_POLICY_REQUIRED.load(Ordering::Acquire) && !nic_iommu_locked() {
+        mask |= DEGRADED_NO_NIC_IOMMU;
+    }
+    EXOSEAL_DEGRADED_FLAGS.store(mask, Ordering::Release);
+    if mask != 0 {
+        exoledger::exo_ledger_append(exoledger::ActionTag::Custom {
+            tag: 0x4445_4752, // "DEGR"
+            data: mask as u64,
+        });
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum P0VerifyError {
@@ -166,8 +199,16 @@ pub unsafe fn exoseal_boot_phase0() {
     // SAFETY: global CET enablement is a Ring 0 prerequisite for ExoShield boot.
     let _ = unsafe { exocage::exocage_global_enable() };
     let _ = stage0::arm_apic_watchdog(BOOT_PHASE0_WATCHDOG_MS);
-    if verify_p0_fixes().is_err() {
-        return;
+    record_degraded_hardware_status();
+    if let Err(err) = verify_p0_fixes() {
+        SECURITY_READY.store(false, Ordering::Release);
+        #[cfg(all(target_os = "none", feature = "strict_exec_signatures"))]
+        panic!("EXOSEAL PHASE0 VIOLATION (fail-closed): {:?}", err);
+        #[cfg(not(all(target_os = "none", feature = "strict_exec_signatures")))]
+        {
+            let _ = err;
+            return;
+        }
     }
     exoledger::exo_ledger_append(exoledger::ActionTag::BootEvent { step: 0 });
 }
@@ -178,8 +219,15 @@ pub unsafe fn exoseal_boot_complete() {
         return;
     }
 
-    if verify_p0_fixes().is_err() {
-        return;
+    if let Err(err) = verify_p0_fixes() {
+        SECURITY_READY.store(false, Ordering::Release);
+        #[cfg(all(target_os = "none", feature = "strict_exec_signatures"))]
+        panic!("EXOSEAL COMPLETE VIOLATION (fail-closed): {:?}", err);
+        #[cfg(not(all(target_os = "none", feature = "strict_exec_signatures")))]
+        {
+            let _ = err;
+            return;
+        }
     }
 
     // SAFETY: PKS restoration occurs at the end of security boot, in Ring 0.

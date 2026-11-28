@@ -15,9 +15,9 @@ pub mod policy;
 // ── Re-exports ────────────────────────────────────────────────────────────────
 
 pub use policy::{
-    add_policy, enumerate_policies, evaluate_policy, get_default_policy, get_policy_stats,
-    lookup_policy, policy_init, remove_policy, set_default_policy, PolicyAction, PolicyEvalResult,
-    PolicyRule, PolicyStats, PolicyTable,
+    add_policy, enumerate_policies, evaluate_policy, explicit_pid_deny_rule, get_default_policy,
+    get_policy_stats, lookup_policy, policy_init, remove_policy, set_default_policy, PolicyAction,
+    PolicyEvalResult, PolicyRule, PolicyStats, PolicyTable,
 };
 
 pub use audit::{
@@ -27,6 +27,6 @@ pub use audit::{
 };
 
 pub use access::{
-    classify_service_cap_requirement, ServiceCapRequirement, EXO_SHIELD_CAP_TOKEN_LEN,
-    EXO_SHIELD_CAP_TOKEN_OFFSET,
+    authorize_ipc_request, classify_service_cap_requirement, GateDecision, ServiceCapRequirement,
+    AUDIT_QUERY, EXO_SHIELD_CAP_TOKEN_LEN, EXO_SHIELD_CAP_TOKEN_OFFSET,
 };

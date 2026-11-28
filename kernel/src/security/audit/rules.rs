@@ -124,6 +124,21 @@ impl AuditRule {
         }
     }
 
+    /// FIX-09: Default deny rule for sensitive syscalls (e.g. `SYS_PTRACE`).
+    pub const fn new_deny_syscall(nr: u32) -> Self {
+        Self {
+            pid: None,
+            uid: None,
+            syscall_nr: Some(nr),
+            category: None,
+            outcome_mask: 0xFF,
+            action: RuleAction::Deny,
+            enabled: true,
+            priority: 5,
+            match_count: 0,
+        }
+    }
+
     /// Tests if this rule applies to described event.
     pub fn matches(
         &self,

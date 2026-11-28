@@ -131,7 +131,7 @@ impl ActionTag {
             } => {
                 buf[0..8].copy_from_slice(&2u64.to_le_bytes());
                 buf[8..12].copy_from_slice(&domain_id.to_le_bytes());
-                buf[12..24].copy_from_slice(&fault_addr.to_le_bytes());
+                buf[12..20].copy_from_slice(&fault_addr.to_le_bytes());
             }
             ActionTag::HandoffTriggered { reason } => {
                 buf[0..8].copy_from_slice(&3u64.to_le_bytes());
@@ -853,5 +853,20 @@ mod tests {
         assert_eq!(p0_used(), P0_ZONE_ENTRIES);
         assert!(total_written() >= written_before);
         assert!(read_ring_entry(0).is_some());
+    }
+
+    #[test]
+    fn test_action_tag_iommu_fault_to_bytes_no_panic() {
+        let bytes = ActionTag::IommuFault {
+            domain_id: 0x0010,
+            fault_addr: 0x0010_0000,
+        }
+        .to_bytes();
+        assert_eq!(u64::from_le_bytes(bytes[0..8].try_into().unwrap()), 2);
+        assert_eq!(u32::from_le_bytes(bytes[8..12].try_into().unwrap()), 0x0010);
+        assert_eq!(
+            u64::from_le_bytes(bytes[12..20].try_into().unwrap()),
+            0x0010_0000
+        );
     }
 }

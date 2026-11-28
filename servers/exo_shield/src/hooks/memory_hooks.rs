@@ -595,30 +595,104 @@ pub fn record_free(pid: u32, addr: u64) {
 /// the scan request and returning match information based on
 /// the allocation table.
 ///
-/// Returns the number of pattern matches found (up to `MAX_SCAN_HITS`).
-/// The `hits` buffer is filled with addresses where the pattern was found.
+/// FIX-23: Exact byte-subsequence scanner over a raw memory slice.
+/// Fills `hits` with `base_addr + offset` for every real pattern occurrence (bounded by `hits.len()`).
+pub fn scan_buffer_for_pattern(
+    base_addr: u64,
+    buf: &[u8],
+    pattern: &[u8],
+    hits: &mut [u64],
+) -> usize {
+    if pattern.is_empty() || pattern.len() > buf.len() || hits.is_empty() {
+        return 0;
+    }
+    let mut found = 0usize;
+    let limit = buf.len() - pattern.len() + 1;
+    let max_hits = hits.len().min(MAX_SCAN_HITS);
+    let mut pos = 0usize;
+    while pos < limit && found < max_hits {
+        if &buf[pos..pos + pattern.len()] == pattern {
+            hits[found] = base_addr.wrapping_add(pos as u64);
+            found += 1;
+            pos += pattern.len();
+        } else {
+            pos += 1;
+        }
+    }
+    found
+}
+
+/// Scans a target process's memory region `[region_start .. region_start + region_size)`
+/// for `pattern` (FIX-23).
+///
+/// - On bare-metal Exo-OS (`target_os = "none"`), uses bounded read-only
+///   `SYS_EXO_MEM_COPY_FROM_PID` chunks (512 bytes, up to 16 KiB per scan) to read
+///   genuine target memory and perform exact byte matching.
+/// - On host unit tests (where remote syscall memory doesn't exist), falls back to
+///   scanning allocation metadata canaries when `pattern == CANARY_VALUE`.
 pub fn scan_memory_region(
     pid: u32,
-    _region_start: u64,
-    _region_size: u64,
+    region_start: u64,
+    region_size: u64,
     pattern: &[u8],
     hits: &mut [u64],
 ) -> usize {
     let pat_len = pattern.len().min(MAX_PATTERN_LEN);
-    if pat_len == 0 {
+    if pat_len == 0 || hits.is_empty() {
         return 0;
     }
+    let pat = &pattern[..pat_len];
 
-    // In a real implementation, the kernel would provide the memory
-    // contents for scanning. Here we scan the canary values in the
-    // allocation table as a demonstration of the scan mechanism.
-    // A production system would use kernel-provided buffer contents.
+    #[cfg(target_os = "none")]
+    {
+        if pid > 1 && region_start != 0 && region_size > 0 {
+            const CHUNK: usize = 512;
+            const MAX_REMOTE_SCAN: usize = 16 * 1024;
+            let total = (region_size as usize).min(MAX_REMOTE_SCAN);
+            let mut buf = [0u8; CHUNK];
+            let mut offset = 0usize;
+            let mut found = 0usize;
+            while offset < total && found < hits.len().min(MAX_SCAN_HITS) {
+                let n = (total - offset).min(CHUNK);
+                let rc = unsafe {
+                    exo_syscall_abi::syscall5(
+                        exo_syscall_abi::SYS_EXO_MEM_COPY_FROM_PID,
+                        pid as u64,
+                        region_start.wrapping_add(offset as u64),
+                        buf.as_mut_ptr() as u64,
+                        n as u64,
+                        0,
+                    )
+                };
+                if rc <= 0 {
+                    break;
+                }
+                let read_len = (rc as usize).min(n);
+                found += scan_buffer_for_pattern(
+                    region_start.wrapping_add(offset as u64),
+                    &buf[..read_len],
+                    pat,
+                    &mut hits[found..],
+                );
+                if read_len < n {
+                    break;
+                }
+                offset += read_len.saturating_sub(pat_len.saturating_sub(1)).max(1);
+            }
+            return found;
+        }
+    }
+
+    #[cfg(not(target_os = "none"))]
+    {
+        let _ = (region_start, region_size);
+    }
 
     let canary_bytes = CANARY_VALUE.to_le_bytes();
     let mut found = 0usize;
 
     // Check if pattern matches canary pattern (common overflow indicator)
-    let is_canary_pattern = pat_len == 4 && pattern[..4] == canary_bytes;
+    let is_canary_pattern = pat_len == 4 && pat[..4] == canary_bytes;
 
     if is_canary_pattern {
         let table = ALLOC_TABLE.lock();
@@ -626,30 +700,10 @@ pub fn scan_memory_region(
             if found >= hits.len().min(MAX_SCAN_HITS) {
                 break;
             }
-            if table[i].flags & 1 != 0 {
-                // Canary is stored at addr + size
+            if table[i].flags & 1 != 0 && (pid == 0 || table[i].pid == pid) {
                 let canary_addr = table[i].addr.wrapping_add(table[i].size);
                 hits[found] = canary_addr;
                 found += 1;
-            }
-        }
-    } else {
-        // Generic pattern: check against known allocation addresses
-        // This simulates scanning for patterns like shellcode signatures
-        let table = ALLOC_TABLE.lock();
-        for i in 0..MAX_ALLOC_RECORDS {
-            if found >= hits.len().min(MAX_SCAN_HITS) {
-                break;
-            }
-            if table[i].flags & 1 != 0 && table[i].pid == pid {
-                // Check if the pattern could fit in this allocation
-                if table[i].size as usize >= pat_len {
-                    // In production, we'd read actual memory here.
-                    // For the model, we report allocations that could contain
-                    // the pattern based on size matching.
-                    hits[found] = table[i].addr;
-                    found += 1;
-                }
             }
         }
     }
@@ -762,4 +816,22 @@ pub fn mem_hooks_init() {
     RATE_ANOMALIES.store(0, Ordering::Release);
     OVERSIZED_ALLOCS.store(0, Ordering::Release);
     CANARY_CORRUPTIONS.store(0, Ordering::Release);
+}
+
+#[cfg(test)]
+mod fix23_memory_scan_tests {
+    use super::*;
+
+    #[test]
+    fn fix23_scan_buffer_finds_exact_shellcode_offsets() {
+        let mut mem = [0x90u8; 64];
+        mem[12..16].copy_from_slice(&[0x0F, 0x05, 0xCC, 0xCC]);
+        mem[40..44].copy_from_slice(&[0x0F, 0x05, 0xCC, 0xCC]);
+        let mut hits = [0u64; 8];
+        let n = scan_buffer_for_pattern(0x7000_0000, &mem, &[0x0F, 0x05, 0xCC, 0xCC], &mut hits);
+        assert_eq!(n, 2);
+        assert_eq!(hits[0], 0x7000_000C);
+        assert_eq!(hits[1], 0x7000_0028);
+        assert_eq!(scan_buffer_for_pattern(0x7000_0000, &mem, &[0xDE, 0xAD], &mut hits), 0);
+    }
 }

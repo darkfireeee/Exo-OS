@@ -486,7 +486,22 @@ fn play_bell() {
 
 fn handle(req: &syscall::TtyRequest) -> syscall::TtyReply {
     match req.msg_type {
-        syscall::TTY_MSG_INPUT_BYTE => handle_input(req.a as u8),
+        syscall::TTY_MSG_INPUT_BYTE => {
+            // FIX-13: Only kernel-attested input pipeline services may inject raw TTY bytes.
+            if !syscall::peer_is_any_service(
+                req.sender_pid,
+                &[
+                    syscall::SVC_INIT_SERVER,
+                    syscall::SVC_INPUT_SERVER,
+                    syscall::SVC_PS2_DRIVER,
+                    syscall::SVC_FB_SERVER,
+                    syscall::SVC_TTY_SERVER,
+                ],
+            ) {
+                return reply(syscall::EPERM, 0, &[]);
+            }
+            handle_input(req.a as u8)
+        }
         syscall::TTY_MSG_READ_LINE => handle_read_line(),
         syscall::TTY_MSG_WRITE => {
             let n = core::cmp::min(req.a as usize, LINE_OUT_MAX);
@@ -524,12 +539,31 @@ fn handle(req: &syscall::TtyRequest) -> syscall::TtyReply {
                 reply(0, 0, &[])
             } else if req.a == 0x5410 {
                 let target = req.b as u32;
-                // Protection contre kill de serveurs système : seul un PID applicatif (> 19)
-                // ou 0 (reset) peut être désigné comme foreground.
-                if target == 0 || target > 19 {
-                    state.foreground_pid = target;
+                // FIX-13: Prevent arbitrary cross-PID SIGINT targeting via TIOCSPGRP.
+                // A caller may only reset (0), set itself, or (if attested shell/init)
+                // assign an unprivileged child process — NEVER a Ring 1 server or arbitrary peer.
+                let caller_is_session_mgr = syscall::peer_is_any_service(
+                    req.sender_pid,
+                    &[
+                        syscall::SVC_INIT_SERVER,
+                        syscall::SVC_EXOSH,
+                        syscall::SVC_TTY_SERVER,
+                    ],
+                );
+                let target_is_protected_service = target != 0
+                    && matches!(
+                        syscall::peer_service_class(target),
+                        c if c != syscall::SVC_UNKNOWN && c != syscall::SVC_EXOSH
+                    );
+                if target_is_protected_service {
+                    return reply(syscall::EPERM, 0, &[]);
                 }
-                reply(0, 0, &[])
+                if target == 0 || target == req.sender_pid || caller_is_session_mgr {
+                    state.foreground_pid = target;
+                    reply(0, 0, &[])
+                } else {
+                    reply(syscall::EPERM, 0, &[])
+                }
             } else {
                 reply(-25 /* ENOTTY */, 0, &[])
             }

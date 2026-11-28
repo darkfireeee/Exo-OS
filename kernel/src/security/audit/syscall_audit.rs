@@ -86,34 +86,60 @@ impl ContextTable {
         }
     }
 
-    fn slot(tid: u32) -> usize {
-        (tid as usize) % MAX_CONCURRENT_SYSCALLS
+    #[inline]
+    fn start_slot(tid: u32) -> usize {
+        (tid as usize).wrapping_mul(2654435761) % MAX_CONCURRENT_SYSCALLS
     }
 
+    /// FIX-09: Linear-probing open addressing prevents `tid` and `tid + 1024`
+    /// from silently overwriting each other's in-flight syscall context.
     fn set(&mut self, ctx: SyscallContext) -> bool {
-        let slot = &mut self.entries[Self::slot(ctx.thread_id)];
-        let newly_active = !slot.active;
-        *slot = ctx;
-        newly_active
+        let start = Self::start_slot(ctx.thread_id);
+        let mut first_free: Option<usize> = None;
+        for step in 0..MAX_CONCURRENT_SYSCALLS {
+            let idx = (start + step) % MAX_CONCURRENT_SYSCALLS;
+            let entry = &self.entries[idx];
+            if entry.active && entry.thread_id == ctx.thread_id {
+                self.entries[idx] = ctx;
+                return false;
+            }
+            if !entry.active && first_free.is_none() {
+                first_free = Some(idx);
+            }
+        }
+        if let Some(idx) = first_free {
+            self.entries[idx] = ctx;
+            true
+        } else {
+            // Table completely full — overwrite start slot as last resort.
+            self.entries[start] = ctx;
+            false
+        }
     }
 
     fn get(&self, tid: u32) -> Option<&SyscallContext> {
-        let e = &self.entries[Self::slot(tid)];
-        if e.active && e.thread_id == tid {
-            Some(e)
-        } else {
-            None
+        let start = Self::start_slot(tid);
+        for step in 0..MAX_CONCURRENT_SYSCALLS {
+            let idx = (start + step) % MAX_CONCURRENT_SYSCALLS;
+            let e = &self.entries[idx];
+            if e.active && e.thread_id == tid {
+                return Some(e);
+            }
         }
+        None
     }
 
     fn clear(&mut self, tid: u32) -> bool {
-        let slot = Self::slot(tid);
-        if self.entries[slot].active && self.entries[slot].thread_id == tid {
-            self.entries[slot].active = false;
-            true
-        } else {
-            false
+        let start = Self::start_slot(tid);
+        for step in 0..MAX_CONCURRENT_SYSCALLS {
+            let idx = (start + step) % MAX_CONCURRENT_SYSCALLS;
+            if self.entries[idx].active && self.entries[idx].thread_id == tid {
+                self.entries[idx].active = false;
+                self.entries[idx].thread_id = 0;
+                return true;
+            }
         }
+        false
     }
 }
 
@@ -342,5 +368,59 @@ pub fn syscall_audit_stats() -> SyscallAuditStats {
         denials_total: DENIALS_TOTAL.load(Ordering::Relaxed),
         kills_total: KILLS_TOTAL.load(Ordering::Relaxed),
         orphan_exits: ORPHAN_EXITS.load(Ordering::Relaxed),
+    }
+}
+
+#[cfg(test)]
+mod fix09_audit_tests {
+    use super::*;
+
+    #[test]
+    fn ctx_table_handles_tid_modulo_collision_without_overwrite() {
+        let mut table = ContextTable::new();
+        let tid_a = 42u32;
+        let tid_b = tid_a + (MAX_CONCURRENT_SYSCALLS as u32);
+
+        let ctx_a = SyscallContext {
+            thread_id: tid_a,
+            pid: 100,
+            uid: 1000,
+            syscall_nr: 1,
+            entry_tsc: 111,
+            verdict: AuditVerdict::Allow,
+            active: true,
+        };
+        let ctx_b = SyscallContext {
+            thread_id: tid_b,
+            pid: 200,
+            uid: 1001,
+            syscall_nr: 2,
+            entry_tsc: 222,
+            verdict: AuditVerdict::Allow,
+            active: true,
+        };
+
+        assert!(table.set(ctx_a));
+        assert!(table.set(ctx_b));
+        assert_eq!(table.get(tid_a).map(|c| c.pid), Some(100));
+        assert_eq!(table.get(tid_b).map(|c| c.pid), Some(200));
+
+        assert!(table.clear(tid_a));
+        assert!(table.get(tid_a).is_none());
+        assert_eq!(table.get(tid_b).map(|c| c.pid), Some(200));
+        assert!(table.clear(tid_b));
+        assert!(table.get(tid_b).is_none());
+    }
+
+    #[test]
+    fn default_audit_rules_deny_ptrace() {
+        crate::security::audit::audit_init();
+        let verdict = audit_syscall_entry(
+            crate::syscall::numbers::SYS_PTRACE as u32,
+            42,
+            42,
+            1000,
+        );
+        assert_eq!(verdict, AuditVerdict::DenyEperm);
     }
 }

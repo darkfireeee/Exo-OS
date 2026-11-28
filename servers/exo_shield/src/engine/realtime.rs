@@ -391,6 +391,15 @@ impl EventMonitor {
                 event_type: EventType::Ipc,
                 pid: 0,
                 opcode_mask: 0,
+                min_severity: ThreatLevel::High,
+                action: FilterAction::Alert,
+                enabled: true,
+            },
+            EventFilter {
+                id: 0,
+                event_type: EventType::Ipc,
+                pid: 0,
+                opcode_mask: 0,
                 min_severity: ThreatLevel::Critical,
                 action: FilterAction::Quarantine,
                 enabled: true,
@@ -872,6 +881,93 @@ static STATS_RATE_EXCEEDED: AtomicU64 = AtomicU64::new(0);
 static STATS_ALERTS_GENERATED: AtomicU64 = AtomicU64::new(0);
 static STATS_PROCESSES_CONTAINED: AtomicU64 = AtomicU64::new(0);
 static STATS_REALTIME_INIT: AtomicBool = AtomicBool::new(false);
+
+// FIX-08: Per-PID violation escalation tracker for IPC / Memory / Capability / FS bursts.
+const MAX_ESCALATION_TRACKED: usize = 64;
+const QUARANTINE_BURST_THRESHOLD: u32 = 3;
+const KILL_BURST_THRESHOLD: u32 = 5;
+
+#[derive(Clone, Copy)]
+struct ViolationCounter {
+    pid: u32,
+    count: u32,
+}
+
+impl ViolationCounter {
+    const fn empty() -> Self {
+        Self { pid: 0, count: 0 }
+    }
+}
+
+static VIOLATION_COUNTERS: Mutex<[ViolationCounter; MAX_ESCALATION_TRACKED]> =
+    Mutex::new([ViolationCounter::empty(); MAX_ESCALATION_TRACKED]);
+
+/// Records a High/Critical security violation for `pid` and returns
+/// `(accumulated_count, recommended_containment)`:
+/// - `1..2` -> `Monitor` / `Throttle`
+/// - `3..4` -> `Quarantine`
+/// - `>= 5` -> `Kill`
+pub fn record_violation_escalation(pid: u32, severity: ThreatLevel) -> (u32, super::core::ContainmentAction) {
+    use super::core::ContainmentAction;
+    if pid == 0 {
+        return (0, ContainmentAction::None);
+    }
+    let weight: u32 = match severity {
+        ThreatLevel::Critical => 3,
+        ThreatLevel::High => 1,
+        ThreatLevel::Medium => 1,
+        ThreatLevel::Low => 0,
+    };
+    if weight == 0 {
+        return (0, ContainmentAction::Monitor);
+    }
+
+    let mut table = VIOLATION_COUNTERS.lock();
+    let mut free_idx = None;
+    let mut oldest_idx = 0usize;
+    let mut lowest_count = u32::MAX;
+    for (i, slot) in table.iter_mut().enumerate() {
+        if slot.pid == pid {
+            slot.count = slot.count.saturating_add(weight);
+            let total = slot.count;
+            let action = if total >= KILL_BURST_THRESHOLD {
+                ContainmentAction::Kill
+            } else if total >= QUARANTINE_BURST_THRESHOLD {
+                ContainmentAction::Quarantine
+            } else {
+                ContainmentAction::Throttle
+            };
+            return (total, action);
+        }
+        if slot.pid == 0 && free_idx.is_none() {
+            free_idx = Some(i);
+        } else if slot.count < lowest_count {
+            lowest_count = slot.count;
+            oldest_idx = i;
+        }
+    }
+    let idx = free_idx.unwrap_or(oldest_idx);
+    table[idx] = ViolationCounter { pid, count: weight };
+    let action = if weight >= KILL_BURST_THRESHOLD {
+        ContainmentAction::Kill
+    } else if weight >= QUARANTINE_BURST_THRESHOLD {
+        ContainmentAction::Quarantine
+    } else {
+        ContainmentAction::Throttle
+    };
+    (weight, action)
+}
+
+/// Resets violation escalation counter for `pid` (e.g. on quarantine release or test reset).
+pub fn reset_violation_escalation(pid: u32) {
+    let mut table = VIOLATION_COUNTERS.lock();
+    for slot in table.iter_mut() {
+        if slot.pid == pid {
+            *slot = ViolationCounter::empty();
+            return;
+        }
+    }
+}
 
 // ── Public API ──────────────────────────────────────────────────────────────
 

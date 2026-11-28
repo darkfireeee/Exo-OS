@@ -11,13 +11,28 @@ const SOCK_DGRAM: u32 = 2;
 const SOCK_RAW: u32 = 3;
 const SOCK_TYPE_MASK: u32 = 0x0f;
 
-/// PID du résolveur DNS interne — seul service Ring1 autorisé à créer des sockets raw.
-const RAW_SOCKET_ALLOWED_PIDS: &[u32] = &[
-    1, // init_server — supervision réseau
-    7, // network_server lui-même (auto-référence pour ICMP interne)
-];
+/// FIX-11: Strict kernel-attested authorization for `SOCK_RAW`.
+/// Removes both the hardcoded static PID list and the insecure `|| sender_pid >= 18` bypass.
+/// - `InitServer` / `NetworkServer` may open `SOCK_RAW` (protocol 0 or ICMP=1).
+/// - `ExoCompositor` / `Exosh` may open ICMP-only (`protocol == 1`) for built-in ping diagnostics.
+/// - Any unprivileged Ring 3 process (`SVC_UNKNOWN`) is strictly denied with `EPERM`.
+#[inline]
+pub const fn service_allows_raw_socket(sender_pid: u32, service_class: u8, protocol: u32) -> bool {
+    if sender_pid == 1
+        || service_class == syscall::SVC_INIT_SERVER
+        || service_class == syscall::SVC_NETWORK_SERVER
+    {
+        return protocol == 0 || protocol == 1;
+    }
+    if protocol == 1
+        && (service_class == syscall::SVC_EXO_COMPOSITOR || service_class == syscall::SVC_EXOSH)
+    {
+        return true;
+    }
+    false
+}
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SocketKind {
     Tcp,
     Udp,
@@ -25,11 +40,12 @@ pub enum SocketKind {
 }
 
 impl SocketKind {
-    pub fn from_domain_type_privileged(
+    pub fn from_domain_type_for_service(
         domain: u32,
         ty: u32,
         protocol: u32,
         sender_pid: u32,
+        service_class: u8,
     ) -> Result<Self, i64> {
         if domain != AF_INET {
             return Err(syscall::EAFNOSUPPORT);
@@ -38,7 +54,7 @@ impl SocketKind {
             SOCK_STREAM => Ok(Self::Tcp),
             SOCK_DGRAM => Ok(Self::Udp),
             SOCK_RAW if protocol == 0 || protocol == 1 => {
-                if RAW_SOCKET_ALLOWED_PIDS.contains(&sender_pid) || sender_pid >= 18 {
+                if service_allows_raw_socket(sender_pid, service_class, protocol) {
                     Ok(Self::Raw)
                 } else {
                     Err(syscall::EPERM)
@@ -47,6 +63,20 @@ impl SocketKind {
             SOCK_RAW => Err(syscall::EOPNOTSUPP),
             _ => Err(syscall::EINVAL),
         }
+    }
+
+    pub fn from_domain_type_privileged(
+        domain: u32,
+        ty: u32,
+        protocol: u32,
+        sender_pid: u32,
+    ) -> Result<Self, i64> {
+        let class = if sender_pid == 1 {
+            syscall::SVC_INIT_SERVER
+        } else {
+            syscall::SVC_UNKNOWN
+        };
+        Self::from_domain_type_for_service(domain, ty, protocol, sender_pid, class)
     }
 
     pub fn from_domain_type(domain: u32, ty: u32, protocol: u32) -> Result<Self, i64> {

@@ -21,19 +21,120 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use crate::ipc::channel::raw as channel_raw;
 use crate::ipc::core::constants::MAX_MSG_SIZE;
 use crate::ipc::core::types::{EndpointId, IpcError};
+use crate::scheduler::sync::spinlock::SpinLock;
 
 const RAW_NOWAIT: u32 = 0x0001;
 const CALL_TIMEOUT_NS: u64 = 300_000_000_000;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Cookie counter — unique per call, never reused in session.
+// Cookie generator & single-use ephemeral reply capabilities (FIX-02)
 // ─────────────────────────────────────────────────────────────────────────────
 
 static CALL_COOKIE: AtomicU64 = AtomicU64::new(1);
 
 #[inline]
+fn splitmix64(mut x: u64) -> u64 {
+    x = x.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    x ^ (x >> 31)
+}
+
+#[inline]
 fn next_cookie() -> u64 {
-    CALL_COOKIE.fetch_add(1, Ordering::Relaxed)
+    let seq = CALL_COOKIE.fetch_add(1, Ordering::Relaxed);
+    let now = monotonic_ns();
+    let mixed = splitmix64(seq.wrapping_mul(0xD1B5_4A32_D192_ED03) ^ now);
+    // Keep 63-bit non-zero unpredictable cookie (bit 63 is set by ephemeral_ep).
+    (mixed & 0x7FFF_FFFF_FFFF_FFFF) | 1
+}
+
+const MAX_EPHEMERAL_REPLY_CAPS: usize = 64;
+
+#[derive(Clone, Copy)]
+struct EphemeralReplyCap {
+    reply_ep: u64,
+    caller_pid: u32,
+    server_pid: u32,
+}
+
+impl EphemeralReplyCap {
+    const EMPTY: Self = Self {
+        reply_ep: 0,
+        caller_pid: 0,
+        server_pid: 0,
+    };
+}
+
+static EPHEMERAL_REPLY_CAPS: SpinLock<[EphemeralReplyCap; MAX_EPHEMERAL_REPLY_CAPS]> =
+    SpinLock::new([EphemeralReplyCap::EMPTY; MAX_EPHEMERAL_REPLY_CAPS]);
+
+/// Registers an active single-use reply capability for `reply_ep` bound to
+/// `(caller_pid, server_pid)`. Returns `false` if the table is full.
+pub fn register_ephemeral_reply_cap(reply_ep: u64, caller_pid: u32, server_pid: u32) -> bool {
+    if (reply_ep & (1u64 << 63)) == 0 {
+        return false;
+    }
+    let mut table = EPHEMERAL_REPLY_CAPS.lock();
+    for slot in table.iter_mut() {
+        if slot.reply_ep == 0 {
+            *slot = EphemeralReplyCap {
+                reply_ep,
+                caller_pid,
+                server_pid,
+            };
+            return true;
+        }
+    }
+    false
+}
+
+/// Removes an active ephemeral reply capability (idempotent).
+pub fn unregister_ephemeral_reply_cap(reply_ep: u64) {
+    if reply_ep == 0 {
+        return;
+    }
+    let mut table = EPHEMERAL_REPLY_CAPS.lock();
+    for slot in table.iter_mut() {
+        if slot.reply_ep == reply_ep {
+            *slot = EphemeralReplyCap::EMPTY;
+            return;
+        }
+    }
+}
+
+/// Checks whether `sender_pid` holds an active reply capability for `reply_ep`.
+pub fn is_ephemeral_reply_authorized(reply_ep: u64, sender_pid: u32) -> bool {
+    if (reply_ep & (1u64 << 63)) == 0 || sender_pid == 0 {
+        return false;
+    }
+    let table = EPHEMERAL_REPLY_CAPS.lock();
+    for slot in table.iter() {
+        if slot.reply_ep == reply_ep {
+            // `server_pid == 0` is only used by kernel-internal / test callers without PID binding.
+            return slot.server_pid == 0 || slot.server_pid == sender_pid;
+        }
+    }
+    false
+}
+
+/// Atomically consumes the single-use reply capability for `reply_ep` if owned by `sender_pid`.
+pub fn consume_ephemeral_reply_cap(reply_ep: u64, sender_pid: u32) -> bool {
+    if (reply_ep & (1u64 << 63)) == 0 || sender_pid == 0 {
+        return false;
+    }
+    let mut table = EPHEMERAL_REPLY_CAPS.lock();
+    for slot in table.iter_mut() {
+        if slot.reply_ep == reply_ep {
+            if slot.server_pid == 0 || slot.server_pid == sender_pid {
+                let _ = slot.caller_pid;
+                *slot = EphemeralReplyCap::EMPTY;
+                return true;
+            }
+            return false;
+        }
+    }
+    false
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -180,15 +281,31 @@ pub fn call_raw(
     msg: &[u8],
     reply_buf: &mut [u8],
 ) -> Result<usize, IpcError> {
+    call_raw_for_pids(server_ep, 0, 0, msg, reply_buf)
+}
+
+/// Synchronous RPC call bound to `(caller_pid, server_pid)` for single-use
+/// ephemeral reply capability enforcement (FIX-02).
+pub fn call_raw_for_pids(
+    server_ep: EndpointId,
+    caller_pid: u32,
+    server_pid: u32,
+    msg: &[u8],
+    reply_buf: &mut [u8],
+) -> Result<usize, IpcError> {
     if msg.len() > MAX_CALL_PAYLOAD {
         return Err(IpcError::MessageTooLarge);
     }
 
-    // 1. Allocate cookie and ephemeral reply endpoint.
+    // 1. Allocate unpredictable cookie and ephemeral reply endpoint.
     let cookie = next_cookie();
     let reply_ep = ephemeral_ep(cookie).ok_or(IpcError::InternalError)?;
 
     if !channel_raw::mailbox_open(reply_ep) {
+        return Err(IpcError::OutOfResources);
+    }
+    if !register_ephemeral_reply_cap(reply_ep.get(), caller_pid, server_pid) {
+        channel_raw::mailbox_close(reply_ep);
         return Err(IpcError::OutOfResources);
     }
 
@@ -216,6 +333,7 @@ pub fn call_raw(
         deadline_ns,
     );
     if let Err(e) = send_result {
+        unregister_ephemeral_reply_cap(reply_ep.get());
         channel_raw::mailbox_close(reply_ep);
         return Err(e);
     }
@@ -224,7 +342,8 @@ pub fn call_raw(
     let mut raw_reply = [0u8; MAX_MSG_SIZE];
     let recv_result = recv_reply(reply_ep, &mut raw_reply, deadline_ns);
 
-    // 5. Release ephemeral mailbox.
+    // 5. Release ephemeral reply capability and mailbox.
+    unregister_ephemeral_reply_cap(reply_ep.get());
     channel_raw::mailbox_close(reply_ep);
 
     let n = recv_result?;
@@ -393,5 +512,32 @@ mod tests {
         }
 
         worker.join().expect("worker exits");
+    }
+
+    #[test]
+    fn test_fix02_ephemeral_reply_cap_is_bound_and_single_use() {
+        let ep = (1u64 << 63) | 0x55AA_1234;
+        unregister_ephemeral_reply_cap(ep);
+        // Unregistered bit-63 endpoint is rejected for any caller.
+        assert!(!is_ephemeral_reply_authorized(ep, 25));
+        assert!(!consume_ephemeral_reply_cap(ep, 25));
+
+        // Bound to server PID 5: unauthorized PID 25 is rejected, PID 5 succeeds once.
+        assert!(register_ephemeral_reply_cap(ep, 18, 5));
+        assert!(!is_ephemeral_reply_authorized(ep, 25));
+        assert!(!consume_ephemeral_reply_cap(ep, 25));
+        assert!(is_ephemeral_reply_authorized(ep, 5));
+        assert!(consume_ephemeral_reply_cap(ep, 5));
+        // Second use (replay) must fail.
+        assert!(!is_ephemeral_reply_authorized(ep, 5));
+        assert!(!consume_ephemeral_reply_cap(ep, 5));
+
+        // Unpredictable cookies are non-zero and distinct.
+        let c1 = next_cookie();
+        let c2 = next_cookie();
+        assert_ne!(c1, 0);
+        assert_ne!(c2, 0);
+        assert_ne!(c1, c2);
+        assert_ne!(c2, c1.wrapping_add(1));
     }
 }

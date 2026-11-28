@@ -52,6 +52,7 @@ const THREAT_QUERY: u32 = 3;
 const POLICY_UPDATE: u32 = 4;
 const HEARTBEAT: u32 = 5;
 const PMC_ANOMALY_REPORT: u32 = 6;
+pub const AUDIT_QUERY: u32 = 7;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -671,8 +672,7 @@ pub fn policy_init() {
         false,
         1,
     );
-    // 5. PMC anomaly telemetry is restricted to privileged system senders
-    //    (KERNEL_PID short-circuits to Allow; IPC_ROUTER_PID / INIT_SERVER_PID match rules 1-2).
+    // 5. PMC anomaly telemetry & audit log queries are restricted to privileged senders.
     add_policy(
         WILDCARD_PID,
         EXO_SHIELD_PID,
@@ -682,6 +682,48 @@ pub fn policy_init() {
         false,
         0,
     );
+    add_policy(
+        WILDCARD_PID,
+        EXO_SHIELD_PID,
+        AUDIT_QUERY,
+        PolicyAction::Deny,
+        220,
+        false,
+        0,
+    );
+}
+
+/// FIX-06: Returns `Some(rule_id)` only if an explicit PID-specific Deny rule
+/// (i.e. `src_pid == sender_pid`, NOT `WILDCARD_PID`) bans this sender.
+pub fn explicit_pid_deny_rule(src_pid: u32, dst_pid: u32, msg_type: u32) -> Option<u32> {
+    if src_pid == KERNEL_PID {
+        return None;
+    }
+    let table = POLICY_TABLE.lock();
+    let count = POLICY_COUNT.load(Ordering::Acquire) as usize;
+    let mut best_prio: u8 = 0;
+    let mut found: Option<u32> = None;
+
+    for i in 0..count.min(MAX_POLICY_ENTRIES) {
+        let r = &table[i];
+        if (r.flags & 1) == 0 {
+            continue;
+        }
+        if r.src_pid != src_pid {
+            continue;
+        }
+        if r.dst_pid != WILDCARD_PID && r.dst_pid != dst_pid {
+            continue;
+        }
+        if r.msg_type != WILDCARD_MSG_TYPE && r.msg_type != msg_type {
+            continue;
+        }
+        if r.action == PolicyAction::Deny as u8 && (found.is_none() || r.priority > best_prio) {
+            best_prio = r.priority;
+            found = Some(r.rule_id);
+        }
+    }
+    found
 }
 
 #[cfg(test)]

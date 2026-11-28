@@ -253,6 +253,54 @@ fn terminate_other_threads_for_exec(pcb: &ProcessControlBlock, survivor: &Proces
     pcb.set_main_thread_ptr(survivor_ptr);
 }
 
+/// FIX-17: Evaluates binary execution trust/signature policy before committing `execve`.
+///
+/// - Never allows executing binaries from `noexec` mounts (`/tmp`, `/mnt/usb`).
+/// - Under `strict_exec_signatures`, denies unsigned binaries outside read-only system
+///   paths (`/bin`, `/sbin`, `/lib`) and enforces `check_chain_of_trust()` when attested.
+pub fn verify_exec_path_policy(
+    path: &str,
+    strict_signatures: bool,
+    chain_verified: bool,
+) -> Result<(), ExecError> {
+    let bytes = path.as_bytes();
+    if crate::syscall::fs_bridge::is_noexec_mount_path(bytes) {
+        return Err(ExecError::SignatureVerificationFailed);
+    }
+    if strict_signatures {
+        if !crate::syscall::fs_bridge::is_trusted_system_exec_path(bytes) {
+            return Err(ExecError::SignatureVerificationFailed);
+        }
+        if chain_verified && crate::security::check_chain_of_trust().is_err() {
+            return Err(ExecError::SignatureVerificationFailed);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod fix17_exec_policy_tests {
+    use super::{verify_exec_path_policy, ExecError};
+
+    #[test]
+    fn var13_exec_rejects_noexec_and_untrusted_strict_paths() {
+        assert_eq!(
+            verify_exec_path_policy("/tmp/dropper", false, false),
+            Err(ExecError::SignatureVerificationFailed)
+        );
+        assert_eq!(
+            verify_exec_path_policy("/mnt/usb/payload", false, false),
+            Err(ExecError::SignatureVerificationFailed)
+        );
+        assert_eq!(
+            verify_exec_path_policy("/home/user/untrusted", true, false),
+            Err(ExecError::SignatureVerificationFailed)
+        );
+        assert_eq!(verify_exec_path_policy("/sbin/exo-init-server", true, false), Ok(()));
+        assert_eq!(verify_exec_path_policy("/bin/exosh", true, false), Ok(()));
+    }
+}
+
 pub fn do_execve(
     thread: &mut ProcessThread,
     pcb: &ProcessControlBlock,
@@ -317,35 +365,26 @@ pub fn do_execve(
         }
     };
 
-    // FIX-EXEC-SIG (Security_Audit_Passe2 §C-01): module signature verification
-    // before replacing address space.
-    // ElfLoadResult does not directly provide ModuleHeader — verification
-    // is done via is_chain_verified() which confirms that the ExoSeal trust chain
-    // successfully validated this binary during initial load from ExoFS.
-    //
-    // In v0.2.0 dev (kernel_a_hash_is_zero()), verification is logged but
-    // non-blocking. In production (EXOPHOENIX_REQUIRE_HASHES=1), it is strict.
-    if crate::security::is_chain_verified() {
-        // Trust chain is active — verify binary is signed.
-        // check_chain_of_trust() verifies Ed25519 binary signature via ExoSeal.
-        if let Err(_e) = crate::security::check_chain_of_trust() {
-            // Log but do not block in dev
-            #[cfg(not(feature = "strict_exec_signatures"))]
-            {
-                // Dev mode: warning only
-                crate::arch::x86_64::terminal::debug_write(
-                    b"exec: WARNING unsigned binary executed\n",
-                );
-            }
-            #[cfg(feature = "strict_exec_signatures")]
-            {
-                thread
-                    .sched_tcb
-                    .signal_mask
-                    .store(saved_signal_mask, Ordering::Release);
-                return Err(ExecError::SignatureVerificationFailed);
-            }
+    // FIX-17: Enforce binary execution trust & signature policy before replacing address space.
+    // Replaces the dead `if is_chain_verified()` branch that was skipped on multiboot2 boot.
+    let strict_exec = cfg!(feature = "strict_exec_signatures");
+    let chain_verified = crate::security::is_chain_verified();
+    if let Err(err) = verify_exec_path_policy(path, strict_exec, chain_verified) {
+        crate::security::exoledger::exo_ledger_append(
+            crate::security::exoledger::ActionTag::Custom {
+                tag: 0x4558_4543, // "EXEC"
+                data: path.len() as u64,
+            },
+        );
+        thread
+            .sched_tcb
+            .signal_mask
+            .store(saved_signal_mask, Ordering::Release);
+        if elf_result.addr_space_ptr != 0 && elf_result.addr_space_ptr != old_as_ptr {
+            crate::memory::virt::address_space::fork_impl::KERNEL_AS_CLONER
+                .free_addr_space(elf_result.addr_space_ptr);
         }
+        return Err(err);
     }
     #[cfg(target_os = "none")]
     unsafe {

@@ -47,13 +47,17 @@ fn loader_log_byte(b: u8) {
 
 /// Vérifie si un binaire ELF peut être exécuté.
 ///
-/// FIX-APP-09 : remplace `may_exec(mask)` par une vérification de la note EXOSIG.
-/// La présence de la note indique que le binaire a été signé par la clé de build.
-/// La vérification cryptographique complète est faite dans kernel::do_execve()
-/// via security::verify_module_signature().
+/// FIX-16: vérifie cryptographiquement la signature Ed25519 + BLAKE3 de la note EXOSIG.
+/// - `SignatureState::Valid`   -> `SignedOk`
+/// - `SignatureState::Invalid` -> TOUJOURS `Denied` (même en mode dev : falsification détectée)
+/// - `SignatureState::Unsigned` -> `Denied` si `require_signature`, sinon `UnsignedAllowed`
 pub fn check_exec_permission(image: &[u8], require_signature: bool) -> ExecCheckResult {
     match detect_signature_note(image) {
-        SignatureState::Present => ExecCheckResult::SignedOk,
+        SignatureState::Valid => ExecCheckResult::SignedOk,
+        SignatureState::Invalid => {
+            loader_log_byte(b'X');
+            ExecCheckResult::Denied
+        }
         SignatureState::Unsigned => {
             if require_signature {
                 loader_log_byte(b'U');
@@ -70,4 +74,26 @@ pub fn check_exec_permission(image: &[u8], require_signature: bool) -> ExecCheck
 #[inline(always)]
 pub fn may_exec(mask: u64) -> bool {
     mask & CAP_EXEC != 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn var13_forged_exosig_is_always_denied_even_in_dev_mode() {
+        let forged = b"\x7fELF\x02\x01\x01\0EXOSIG\0\0forged_payload";
+        assert_eq!(check_exec_permission(forged, false), ExecCheckResult::Denied);
+        assert_eq!(check_exec_permission(forged, true), ExecCheckResult::Denied);
+    }
+
+    #[test]
+    fn var13_unsigned_denied_when_signature_required() {
+        let unsigned = b"\x7fELF\x02\x01\x01\0plain_binary";
+        assert_eq!(check_exec_permission(unsigned, true), ExecCheckResult::Denied);
+        assert_eq!(
+            check_exec_permission(unsigned, false),
+            ExecCheckResult::UnsignedAllowed
+        );
+    }
 }

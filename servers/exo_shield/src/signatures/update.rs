@@ -163,20 +163,23 @@ fn crypto_ipc_roundtrip(req: &CryptoRequest, reply_endpoint: u64) -> Option<Cryp
 }
 
 fn ensure_crypto_service_token() -> bool {
+    // FIX-04: Refresh the ExoKairos temporal IPC token on each verification
+    // so short-lived 1s TTLs never cause stale-token failures.
     let mut token = CRYPTO_SERVICE_TOKEN.lock();
-    if !token.is_empty() {
-        return true;
-    }
-
+    let mut fresh = syscall::ExoCapTokenWire::empty();
     let rc = unsafe {
         syscall::exo_cap_create(
             syscall::EXO_CAP_TYPE_IPC_ENDPOINT,
             syscall::EXO_CAP_RIGHT_IPC_SEND,
             CRYPTO_SERVER_PID,
-            &mut *token,
+            &mut fresh,
         )
     };
-    rc >= 0 && !token.is_empty()
+    if rc >= 0 && !fresh.is_empty() {
+        *token = fresh;
+        return true;
+    }
+    !token.is_empty()
 }
 
 fn crypto_verify_finalize(ctx_handle: u32, reply_endpoint: u64) -> Option<CryptoReply> {

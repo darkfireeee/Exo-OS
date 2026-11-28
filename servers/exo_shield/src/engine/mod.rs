@@ -31,9 +31,10 @@ pub use scanner::{
 pub use realtime::{
     acknowledge_alert, add_event_filter, generate_manual_alert, get_alert, get_alerts_for_pid,
     get_process_rate, get_realtime_stats, is_process_monitored, monitor_process, realtime_init,
-    realtime_is_init, remove_event_filter, set_process_rate_limits, submit_event,
-    unacknowledged_alert_count, unmonitor_process, Alert, EventFilter, EventProcessResult,
-    EventType, FilterAction, MonitoredEvent, RateEntry, RealtimeStats, MAX_ALERTS,
+    realtime_is_init, record_violation_escalation, remove_event_filter, reset_violation_escalation,
+    set_process_rate_limits, submit_event, unacknowledged_alert_count, unmonitor_process, Alert,
+    EventFilter, EventProcessResult, EventType, FilterAction, MonitoredEvent, RateEntry,
+    RealtimeStats, MAX_ALERTS,
 };
 
 // ── Unified Engine Init ─────────────────────────────────────────────────────

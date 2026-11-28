@@ -143,7 +143,11 @@ pub(super) fn print_exo_caps() {
     let pid = unsafe { syscall::syscall0(syscall::SYS_GETPID) };
     let uid = unsafe { syscall::syscall0(syscall::SYS_GETUID) };
     let gid = unsafe { syscall::syscall0(syscall::SYS_GETGID) };
-    write_all(b"Process Identity & Capabilities (exosh):\n");
+    // FIX-25: Query live Zero-Trust restriction mask via SYS_EXO_PLEDGE(0, 1) and prctl state.
+    let restrictions = unsafe { syscall::syscall2(syscall::SYS_EXO_PLEDGE, 0, 1) };
+    let nnp = unsafe { syscall::syscall5(syscall::SYS_PRCTL, 39, 0, 0, 0, 0) }; // PR_GET_NO_NEW_PRIVS
+    let dumpable = unsafe { syscall::syscall5(syscall::SYS_PRCTL, 3, 0, 0, 0, 0) }; // PR_GET_DUMPABLE
+    write_all(b"Process Identity & Security State (exosh):\n");
     write_all(b"  PID / UID / GID : ");
     write_i64(pid);
     write_all(b" / ");
@@ -157,7 +161,13 @@ pub(super) fn print_exo_caps() {
     } else {
         write_all(b"offline\n");
     }
-    write_all(b"  Token listing   : kernel capability introspection syscall not exposed yet (ENOSYS)\n");
+    write_all(b"  Zero-Trust mask : ");
+    write_u64(if restrictions >= 0 { restrictions as u64 } else { 0 });
+    write_all(b"  (no_new_privs=");
+    write_i64(if nnp >= 0 { nnp } else { 0 });
+    write_all(b", dumpable=");
+    write_i64(if dumpable >= 0 { dumpable } else { 0 });
+    write_all(b")\n");
 }
 
 pub(super) fn print_exo_net(_args: &[u8]) {

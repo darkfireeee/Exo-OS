@@ -304,9 +304,35 @@ fn check_liveness_nonce() -> u32 {
     }
 }
 
+/// FIX-22: Consecutive PMC anomaly counter so persistent microarchitectural anomalies
+/// detected by SSR deltas OR `exoargos::check_anomaly()` escalate cleanly to
+/// `THREAT_THRESHOLD` instead of stalling at 10/100 forever.
+static PMC_CONSECUTIVE_ANOMALIES: core::sync::atomic::AtomicU32 =
+    core::sync::atomic::AtomicU32::new(0);
+
+/// Pure, unit-testable PMC anomaly scoring function (FIX-22 / VAR-20).
+pub fn score_pmc_anomalies(
+    ssr_anomalies: u32,
+    argos_anomaly: bool,
+    consecutive: &core::sync::atomic::AtomicU32,
+) -> u32 {
+    if ssr_anomalies >= 3 || argos_anomaly {
+        let streak = consecutive.fetch_add(1, Ordering::AcqRel) + 1;
+        match streak {
+            1 => SCORE_PMC_ANOMALY,
+            2 => 40,
+            _ => THREAT_THRESHOLD,
+        }
+    } else {
+        consecutive.store(0, Ordering::Release);
+        0
+    }
+}
+
 fn pmc_anomaly_score() -> u32 {
+    let argos_anomaly = crate::security::exoargos::check_anomaly();
     if !stage0::B_FEATURES.pmc_available() {
-        return 0;
+        return score_pmc_anomalies(0, argos_anomaly, &PMC_CONSECUTIVE_ANOMALIES);
     }
 
     let base = ssr::SSR_BASE as usize + ssr::pmc_snapshot_offset(0);
@@ -325,7 +351,7 @@ fn pmc_anomaly_score() -> u32 {
             PMC_BASELINE[i].store(ctrs[i], Ordering::Relaxed);
         }
         PMC_BASELINE_SET.store(true, Ordering::Release);
-        return 0;
+        return score_pmc_anomalies(0, argos_anomaly, &PMC_CONSECUTIVE_ANOMALIES);
     }
 
     const PMC_DELTA_THRESHOLD: u64 = 1_000_000;
@@ -339,11 +365,7 @@ fn pmc_anomaly_score() -> u32 {
         PMC_BASELINE[i].store(ctrs[i], Ordering::Relaxed);
     }
 
-    if anomalies >= 3 {
-        SCORE_PMC_ANOMALY
-    } else {
-        0
-    }
+    score_pmc_anomalies(anomalies, argos_anomaly, &PMC_CONSECUTIVE_ANOMALIES)
 }
 
 fn run_introspection_cycle() -> u32 {
@@ -396,4 +418,25 @@ pub fn run_forever() -> ! {
 
 pub fn smi_counter() -> u64 {
     SMI_COUNTER.load(Ordering::Relaxed)
+}
+
+#[cfg(test)]
+mod fix22_sentinel_tests {
+    use super::*;
+
+    #[test]
+    fn var20_pmc_consecutive_anomalies_escalate_to_threat_threshold() {
+        let streak = core::sync::atomic::AtomicU32::new(0);
+        // Clean cycle yields 0
+        assert_eq!(score_pmc_anomalies(0, false, &streak), 0);
+        // 1st ExoArgos anomaly -> 10
+        assert_eq!(score_pmc_anomalies(0, true, &streak), SCORE_PMC_ANOMALY);
+        // 2nd consecutive anomaly -> 40
+        assert_eq!(score_pmc_anomalies(3, false, &streak), 40);
+        // 3rd consecutive anomaly -> THREAT_THRESHOLD (100)
+        assert_eq!(score_pmc_anomalies(0, true, &streak), THREAT_THRESHOLD);
+        // Clean cycle resets streak
+        assert_eq!(score_pmc_anomalies(0, false, &streak), 0);
+        assert_eq!(streak.load(Ordering::Acquire), 0);
+    }
 }

@@ -50,17 +50,17 @@ Types de messages entrants :
 | `4` | `POLICY_UPDATE` | mise à jour des politiques de scan |
 | `5` | `HEARTBEAT` | liveness / surveillance |
 
-Le message reçu contient actuellement `sender_pid`, `msg_type` et `payload[120]`.
-Cette ABI reflète l'implémentation existante ; elle ne doit pas être confondue avec un modèle capability complet.
+Le message reçu contient `sender_pid`, `msg_type` et `payload[192]` (enveloppe ABI canonique de 200 octets).
+Cette ABI reflète l'implémentation active et le contrôle capability noyau.
 
 Contrat sécurité actif du protocole :
 
 - Toutes les requêtes passent par `ipc_gate` avec audit et rate limiting.
-- `QUARANTINE_CMD` et `POLICY_UPDATE` sont toujours capability-gated.
+- `QUARANTINE_CMD`, `POLICY_UPDATE`, `PMC_ANOMALY_REPORT` et `AUDIT_QUERY` sont toujours capability-gated (y compris pour les appelants Ring 1).
 - `SCAN_REQUEST` devient capability-gated dès qu'un appelant tente de scanner un autre PID que lui-même.
 - `EVENT_REPORT` devient capability-gated pour signaler un événement sur un autre PID que l'émetteur.
 - `THREAT_QUERY` devient capability-gated pour les requêtes détaillées (`by_id`, `stats`) et pour toute consultation d'un PID tiers.
-- Quand une requête est classée comme privilégiée, `payload[100..120]` transporte un `ExoCapTokenWire` vérifié par le noyau avant exécution.
+- Quand une requête est classée comme privilégiée, `payload[172..192]` transporte un `ExoCapTokenWire` de 20 octets vérifié par le noyau (`exo_cap_check`) avant exécution et prioritaire sur les règles `WILDCARD_PID -> Deny`.
 - Le token attendu porte le droit `IPC_SEND` vers l'endpoint `10` ; un simple `sender_pid` ne suffit donc plus pour piloter une action inter-processus ou muter l'état du serveur.
 
 Cette séparation aligne le serveur avec l'intention des modèles TLA d'autorité IPC bornée et avec le durcissement capability déjà appliqué à `crypto_server`.

@@ -253,6 +253,36 @@ impl AmdIommuUnit {
     pub fn is_enabled(&self) -> bool {
         self.enabled.load(Ordering::Acquire)
     }
+
+    /// FIX-19: Submits a 16-byte command to the AMD-Vi Command Buffer ring and waits
+    /// (bounded) for the hardware head pointer to advance.
+    ///
+    /// # Safety
+    /// Unit MMIO and Command Buffer must be mapped and enabled.
+    pub unsafe fn submit_command(&self, cmd: AmdIommuCmd) -> bool {
+        let cmdbuf_pa = self.cmdbuf_phys.load(Ordering::Acquire);
+        if !self.is_enabled() || self.mmio_base == 0 || cmdbuf_pa == 0 {
+            return false;
+        }
+        let ring_bytes = (CMD_BUF_CAPACITY * core::mem::size_of::<AmdIommuCmd>()) as u64;
+        let tail = self.read64(amd_iommu_regs::CMD_BUF_TAIL) & 0x7FF0;
+        let next_tail = (tail + 16) % ring_bytes;
+        let cmdbuf_va = crate::memory::phys_to_virt(PhysAddr::new(cmdbuf_pa)).as_u64();
+        core::ptr::write_volatile((cmdbuf_va + tail) as *mut AmdIommuCmd, cmd);
+        core::sync::atomic::fence(Ordering::SeqCst);
+        self.write64(amd_iommu_regs::CMD_BUF_TAIL, next_tail);
+
+        let mut timeout = 1_000_000u32;
+        while timeout > 0 {
+            let head = self.read64(amd_iommu_regs::CMD_BUF_HEAD) & 0x7FF0;
+            if head == next_tail {
+                return true;
+            }
+            core::hint::spin_loop();
+            timeout -= 1;
+        }
+        false
+    }
 }
 
 pub struct AmdIommuController {
@@ -302,6 +332,27 @@ impl AmdIommuController {
 
     pub fn mark_initialized(&self) {
         self.initialized.store(true, Ordering::Release);
+    }
+
+    /// FIX-19: Invalidates IOMMU pages for `domain_id` and issues `COMPLETION_WAIT`
+    /// across all enabled AMD-Vi units (replaces empty `fence(SeqCst)` stub).
+    ///
+    /// # Safety
+    /// CPL 0, AMD IOMMU initialized.
+    pub unsafe fn flush_domain_and_devtab(&self, domain_id: u16) {
+        if !self.is_initialized() {
+            return;
+        }
+        let count = self.unit_count().min(MAX_AMD_IOMMU);
+        for i in 0..count {
+            let unit = &self.units[i];
+            if !unit.is_enabled() {
+                continue;
+            }
+            let _ = unit.submit_command(AmdIommuCmd::invalidate_iommu_all(domain_id));
+            let _ = unit.submit_command(AmdIommuCmd::completion_wait(0, 0));
+        }
+        core::sync::atomic::fence(Ordering::SeqCst);
     }
 }
 

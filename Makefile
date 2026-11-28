@@ -546,10 +546,12 @@ qemu-compliance:
 	@python3 scripts/qemu/run_compliance_matrix.py "$(QEMU_EXOFS_DISK)"
 
 qemu-security-audit:
-	@echo "$(CYAN)Audit de securite adversarial automatise (S0 pure hygiene -> S1..S6 live QEMU)$(NC)"
+	@echo "$(CYAN)Audit de securite adversarial automatise (S0 pure hygiene -> S1..S6 + VAR-01..VAR-18 live QEMU)$(NC)"
 	@$(MAKE) --no-print-directory release rootfs-image EXO_PROFILE=pure COMPLIANCE_PROBE= P3_PROBE= KERNEL_EXTRA_FEATURES=
+	@mkdir -p target/exophoenix && cp $(KERNEL_BIN_REL) target/exophoenix/pure-release-kernel.elf
+	@python3 scripts/qemu/run_security_audit.py --s0-only --pure-kernel target/exophoenix/pure-release-kernel.elf
 	@$(MAKE) --no-print-directory iso EXO_PROFILE=compat COMPLIANCE_PROBE=1 P3_PROBE=1 KERNEL_EXTRA_FEATURES=qemu-compliance-exit
-	@python3 scripts/qemu/run_security_audit.py --disk "$(QEMU_EXOFS_DISK)" --iso "$(ISO_OUTPUT)"
+	@python3 scripts/qemu/run_security_audit.py --skip-s0 --disk "$(QEMU_EXOFS_DISK)" --iso "$(ISO_OUTPUT)"
 
 qemu-phoenix-bench:
 	@echo "$(CYAN)Benchmark ExoPhoenix 3-Strates O(1) & SLA <= 1s (Cas A vs Cas B)$(NC)"

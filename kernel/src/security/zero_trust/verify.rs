@@ -65,7 +65,21 @@ fn is_ring1_pid_trusted(pid: u32) -> bool {
 
 #[inline]
 pub fn ring1_pair_trusted(sender_pid: u32, receiver_pid: u32) -> bool {
-    is_ring1_pid_trusted(sender_pid) && is_ring1_pid_trusted(receiver_pid)
+    use super::context::{restriction_flags, TrustLevel};
+    use super::process_state::{process_restrictions, trust_for_pid};
+
+    if !is_ring1_pid_trusted(sender_pid) || !is_ring1_pid_trusted(receiver_pid) {
+        return false;
+    }
+    // FIX-07: Never fast-path bypass MLS/restrictions if either peer is quarantined
+    // or downgraded to Untrusted.
+    if (process_restrictions(sender_pid) & restriction_flags::SANDBOX_FULL) != 0
+        || (process_restrictions(receiver_pid) & restriction_flags::SANDBOX_FULL) != 0
+    {
+        return false;
+    }
+    trust_for_pid(sender_pid) >= TrustLevel::Trusted
+        && trust_for_pid(receiver_pid) >= TrustLevel::Trusted
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -238,7 +252,11 @@ pub fn verify_ipc_access(
     is_send: bool,
 ) -> Result<(), AccessError> {
     let receiver_pid = (endpoint_id >> 32) as u32;
-    if receiver_pid != 0 && ring1_pair_trusted(subject.principal.pid, receiver_pid) {
+    if receiver_pid != 0
+        && !subject.has_restriction(super::context::restriction_flags::SANDBOX_FULL)
+        && subject.trust_level() >= super::context::TrustLevel::Normal
+        && ring1_pair_trusted(subject.principal.pid, receiver_pid)
+    {
         return Ok(());
     }
     verify_ipc_peer_access(subject, None, ep_label, endpoint_id, is_send)
@@ -264,9 +282,11 @@ fn verify_ipc_peer_access(
     endpoint_id: u64,
     is_send: bool,
 ) -> Result<(), AccessError> {
-    if receiver_pid
-        .map(|pid| ring1_pair_trusted(subject.principal.pid, pid))
-        .unwrap_or(false)
+    if !subject.has_restriction(super::context::restriction_flags::SANDBOX_FULL)
+        && subject.trust_level() >= super::context::TrustLevel::Normal
+        && receiver_pid
+            .map(|pid| ring1_pair_trusted(subject.principal.pid, pid))
+            .unwrap_or(false)
     {
         return Ok(());
     }

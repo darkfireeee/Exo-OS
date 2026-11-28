@@ -183,8 +183,11 @@ impl IommuDriver for AmdIommuDriver {
         stage0_iommu_attach_all_to_blocked_domain(blocked_domain_id);
     }
 
-    fn flush_iotlb(&self, _blocked_domain_id: u32) {
-        core::sync::atomic::fence(Ordering::SeqCst);
+    fn flush_iotlb(&self, blocked_domain_id: u32) {
+        // SAFETY: CPL 0, issues AMD-Vi INVAL_IOMMU_PAGES + COMPLETION_WAIT (FIX-19).
+        unsafe {
+            AMD_IOMMU.flush_domain_and_devtab(blocked_domain_id as u16);
+        }
     }
 }
 

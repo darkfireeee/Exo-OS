@@ -171,10 +171,9 @@ pub fn revoke_object_cap(object_id: u64) {
 
 /// Droits ExoFS accordés à l'ouverture, dérivés des flags POSIX d'open.
 ///
-/// Politique TIER 0 = **permissive à l'open** (tout chemin ouvrable ⇒ on mint les droits
-/// correspondant aux flags). Le durcissement « qui peut ouvrir quoi » est le TIER 1.
-/// Le MÉCANISME (mint + vérif + révocation) est néanmoins réel dès maintenant.
-pub fn rights_from_open_flags(flags: u32) -> u32 {
+/// FIX-10: les chemins système protégés (`/etc`, `/sbin`, `/bin`, `/lib`, `/usr`, `/boot`)
+/// ne reçoivent jamais de droits d'écriture/création/suppression pour un appelant non-root.
+pub fn rights_from_open_flags_for_path(flags: u32, path: &[u8], is_root: bool) -> u32 {
     use super::object_fd::open_flags;
     use crate::fs::exofs::core::rights::{
         RIGHT_CREATE, RIGHT_DELETE, RIGHT_INSPECT_CONTENT, RIGHT_LIST, RIGHT_READ, RIGHT_SETMETA,
@@ -184,10 +183,16 @@ pub fn rights_from_open_flags(flags: u32) -> u32 {
     if open_flags::can_read(flags) {
         r |= RIGHT_READ | RIGHT_INSPECT_CONTENT;
     }
-    if open_flags::can_write(flags) {
+    let protected = crate::syscall::fs_bridge::path_ops::operations::is_protected_system_path(path);
+    if open_flags::can_write(flags) && (is_root || !protected) {
         r |= RIGHT_WRITE | RIGHT_CREATE | RIGHT_DELETE | RIGHT_SETMETA;
     }
     r
+}
+
+/// Compat wrapper pour l'ouverture d'un objet sans chemin connu (vérifie les flags bruts).
+pub fn rights_from_open_flags(flags: u32) -> u32 {
+    rights_from_open_flags_for_path(flags, b"/tmp/anon", true)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

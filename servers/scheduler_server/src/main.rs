@@ -28,8 +28,27 @@ use realtime_admit::RealtimeAdmission;
 use stats_collector::StatsCollector;
 use thread_table::ThreadTable;
 
-const fn is_rt_privileged(sender_pid: u32, owner_pid: u32) -> bool {
-    sender_pid == 1 || sender_pid == 8 || (sender_pid == owner_pid && sender_pid <= 10)
+/// FIX-14: Kernel-attested ServiceClass check replacing hardcoded `sender_pid <= 10` / `8`.
+fn is_rt_privileged(sender_pid: u32, owner_pid: u32) -> bool {
+    if sender_pid == 1 {
+        return true;
+    }
+    let class = exo_syscall_abi::peer_service_class(sender_pid);
+    if matches!(
+        class,
+        exo_syscall_abi::SVC_INIT_SERVER
+            | exo_syscall_abi::SVC_SCHEDULER_SERVER
+            | exo_syscall_abi::SVC_VIRTIO_DRIVER
+    ) {
+        return true;
+    }
+    sender_pid == owner_pid
+        && matches!(
+            class,
+            exo_syscall_abi::SVC_AUDIO_SERVER
+                | exo_syscall_abi::SVC_FB_SERVER
+                | exo_syscall_abi::SVC_EXO_COMPOSITOR
+        )
 }
 
 #[repr(C)]
@@ -475,7 +494,8 @@ fn apply_kernel_priority(tid: u32, nice: i8) -> Result<(), i64> {
             (nice as i64) as u64,
         )
     };
-    if rc < 0 && rc != exo_syscall_abi::ENOSYS {
+    // FIX-14: Do not silently swallow ENOSYS/errors as Ok(()).
+    if rc < 0 {
         Err(rc)
     } else {
         Ok(())
@@ -493,7 +513,7 @@ fn apply_kernel_policy(tid: u32, class: SchedulingClass, nice: i8) -> Result<(),
             &param as *const SchedParam as u64,
         )
     };
-    if rc < 0 && rc != exo_syscall_abi::ENOSYS {
+    if rc < 0 {
         Err(rc)
     } else {
         Ok(())
@@ -511,7 +531,7 @@ fn apply_kernel_affinity(tid: u32, affinity_mask: u64) -> Result<(), i64> {
             &mask as *const u64 as u64,
         )
     };
-    if rc < 0 && rc != exo_syscall_abi::ENOSYS {
+    if rc < 0 {
         Err(rc)
     } else {
         Ok(())

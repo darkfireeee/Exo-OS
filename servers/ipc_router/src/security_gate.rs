@@ -245,22 +245,43 @@ pub fn audit_log_violation(
     const MSG_EVENT_REPORT: u32 = 1;
     const EVENT_TYPE_IPC: u8 = 5;
     const THREAT_LEVEL_HIGH: u8 = 2;
+    const CAP_TOKEN_OFFSET: usize = 172;
 
-    let mut buf = [0u8; 40];
-    buf[0..4].copy_from_slice(&IPC_ROUTER_PID.to_le_bytes());
-    buf[4..8].copy_from_slice(&MSG_EVENT_REPORT.to_le_bytes());
-    buf[8..12].copy_from_slice(&src_pid.to_le_bytes());
-    buf[12] = EVENT_TYPE_IPC;
-    buf[16..20].copy_from_slice(&(reason as u32).to_le_bytes());
-    buf[20..28].copy_from_slice(&(dst_pid as u64).to_le_bytes());
-    buf[36] = THREAT_LEVEL_HIGH;
+    // FIX-06: Build a full 200-byte ABI envelope carrying a kernel-issued
+    // ExoCapTokenWire at payload[172..192] targeting exo_shield's live PID.
+    let shield_pid = exocordon::live_pid_of(exocordon::ServiceId::ExoShield);
+    let mut cap_token = exo_syscall_abi::ExoCapTokenWire::empty();
+    let _ = unsafe {
+        exo_syscall_abi::exo_cap_create(
+            exo_syscall_abi::EXO_CAP_TYPE_IPC_ENDPOINT,
+            exo_syscall_abi::EXO_CAP_RIGHT_IPC_SEND,
+            shield_pid,
+            &mut cap_token,
+        )
+    };
+
+    let self_pid = unsafe { exo_syscall_abi::syscall0(exo_syscall_abi::SYS_GETPID) };
+    let mut msg = exo_syscall_abi::IpcMessage::zeroed();
+    msg.sender_pid = if self_pid > 0 {
+        self_pid as u32
+    } else {
+        IPC_ROUTER_PID
+    };
+    msg.msg_type = MSG_EVENT_REPORT;
+    msg.payload[0..4].copy_from_slice(&src_pid.to_le_bytes());
+    msg.payload[4] = EVENT_TYPE_IPC;
+    msg.payload[8..12].copy_from_slice(&(reason as u32).to_le_bytes());
+    msg.payload[12..20].copy_from_slice(&(dst_pid as u64).to_le_bytes());
+    msg.payload[28] = THREAT_LEVEL_HIGH;
+    msg.payload[CAP_TOKEN_OFFSET..CAP_TOKEN_OFFSET + exo_syscall_abi::EXO_CAP_TOKEN_WIRE_SIZE]
+        .copy_from_slice(&cap_token.bytes);
 
     let _ = unsafe {
         exo_syscall_abi::syscall6(
             exo_syscall_abi::SYS_IPC_SEND,
             EXO_SHIELD_ENDPOINT,
-            buf.as_ptr() as u64,
-            buf.len() as u64,
+            &msg as *const exo_syscall_abi::IpcMessage as u64,
+            core::mem::size_of::<exo_syscall_abi::IpcMessage>() as u64,
             0x01, // IPC_FLAG_NOWAIT
             0,
             0,

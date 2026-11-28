@@ -58,6 +58,8 @@ use crate::security::exoveil::{self, PksDomain, PksPermission};
 /// TTL (Time-To-Live) per right in seconds.
 /// ExoShield Spec MODULE 5 — TTL defaults.
 pub mod ttl {
+    /// IPC_SEND: 1 second (= KAIROS_WINDOW_NS) for short-lived IPC service tokens.
+    pub const IPC_SEND_S: u64 = 1;
     /// NETWORK_SEND: 5 seconds.
     pub const NETWORK_SEND_S: u64 = 5;
     /// FILE_WRITE: 30 seconds.
@@ -722,39 +724,64 @@ fn get_kernel_secret() -> [u8; 32] {
 // TTL Lookup — Determines TTL for a given right
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Registers a temporal deadline for a newly created capability.
-///
-/// FIX-P1-KAIROS (Security_Application_Audit §GAP-07): `ttl_for_right()` had
-/// no external caller — IPC tokens never expired. This function
-/// is called from `capability::create()` to associate each issued token with
-/// a deadline = now + TTL(rights). Time base is `monotonic_ns()`
-/// (the same as `verify()` via `current_window_ns`), so that `TemporalCap::
-/// verify(monotonic_ns())` will detect expiration.
-///
-/// Best-effort: if clock is not yet calibrated (monotonic_ns == 0) or if
-/// table is full, registration is ignored (token remains non-temporal,
-/// identical behavior to existing — no regression).
-pub fn register_ttl_for_cap(oid: crate::security::capability::token::ObjectId, rights: Rights) {
-    // In host test, kernel clock does not exist — same convention as
-    // TemporalCap::current_window_ns (variant #[cfg(test)]): deterministic no-op.
+#[cfg(test)]
+static TEST_CLOCK_NS: AtomicU64 = AtomicU64::new(0);
+
+#[cfg(test)]
+pub fn set_test_clock_ns(now_ns: u64) {
+    TEST_CLOCK_NS.store(now_ns, Ordering::Release);
+}
+
+#[inline]
+fn current_kairos_ns() -> u64 {
     #[cfg(test)]
     {
-        let _ = (oid, rights);
+        TEST_CLOCK_NS.load(Ordering::Acquire)
     }
     #[cfg(not(test))]
     {
-        let now_ns = crate::scheduler::timer::clock::monotonic_ns();
-        if now_ns == 0 {
-            return;
-        }
-        let ttl_s = ttl_for_right(rights);
-        let deadline_ns = now_ns.saturating_add(ttl_s.saturating_mul(1_000_000_000));
-        // SAFETY: Ring 0, table protected by PKS Credentials via scoped_domain_access
-        // internal to insert(). ObjectId comes from kernel table (create()).
-        unsafe {
-            let _ = cap_deadline_table::insert(oid, deadline_ns);
-        }
+        crate::scheduler::timer::clock::monotonic_ns()
     }
+}
+
+/// Registers a temporal deadline for a newly created capability.
+///
+/// FIX-P1-KAIROS / FIX-04: Called from `capability::create()` to associate
+/// each issued token with a deadline = now + TTL(rights) using `monotonic_ns()`.
+pub fn register_ttl_for_cap(oid: crate::security::capability::token::ObjectId, rights: Rights) {
+    let now_ns = current_kairos_ns();
+    if now_ns == 0 {
+        return;
+    }
+    let ttl_s = ttl_for_right(rights);
+    let deadline_ns = now_ns.saturating_add(ttl_s.saturating_mul(1_000_000_000));
+    // SAFETY: Ring 0, table protected by PKS Credentials via scoped_domain_access
+    // internal to insert(). ObjectId comes from kernel table (create()).
+    unsafe {
+        let _ = cap_deadline_table::insert(oid, deadline_ns);
+    }
+}
+
+/// FIX-04: Constant-time verification of a capability's ExoKairos temporal deadline.
+///
+/// If an entry exists in `cap_deadline_table` (`deadline != u64::MAX`) and
+/// `now_ns >= deadline`, returns `Err(CapError::Expired)`.
+/// Non-temporal kernel-minted tokens (not in `cap_deadline_table`) return `Ok(())`.
+pub fn verify_cap_deadline(
+    oid: crate::security::capability::token::ObjectId,
+) -> Result<(), CapError> {
+    let deadline_ns = cap_deadline_table::get_const_time(oid);
+    if deadline_ns == u64::MAX {
+        return Ok(());
+    }
+    let now_ns = current_kairos_ns();
+    if now_ns == 0 {
+        return Ok(());
+    }
+    if ct_u64_gte_mask(now_ns, deadline_ns) != 0 {
+        return Err(CapError::Expired);
+    }
+    Ok(())
 }
 
 /// Returns TTL in seconds for a specific right.
@@ -766,7 +793,7 @@ pub fn ttl_for_right(rights: Rights) -> u64 {
         return ttl::EXEC_S;
     }
     if rights.contains(Rights::IPC_SEND) {
-        return ttl::NETWORK_SEND_S; // IPC_SEND ≈ NETWORK_SEND for TTL
+        return ttl::IPC_SEND_S;
     }
     if rights.contains(Rights::WRITE) {
         return ttl::FILE_WRITE_S;
@@ -917,5 +944,62 @@ mod tests {
         assert_eq!(cap.bytes_remaining(), 64);
 
         cap_deadline_table::remove(oid);
+    }
+
+    #[test]
+    fn fix04_service_token_expires_after_kairos_window_ns() {
+        use crate::process::core::pid::Pid;
+        use crate::security::capability::{
+            check_token, create, init_capability_subsystem, revoke_handle, KernelCapError,
+        };
+        use crate::security::{register_service_class, unregister_service, ServiceClass};
+
+        let _guard = TEST_LOCK.lock();
+        init_capability_subsystem();
+
+        let owner_pid = 73u32;
+        let target_pid = 74u32;
+        assert!(register_service_class(Pid(owner_pid), ServiceClass::Exosh));
+        assert!(register_service_class(
+            Pid(target_pid),
+            ServiceClass::CryptoServer
+        ));
+
+        let t0 = 10_000_000_000u64;
+        super::set_test_clock_ns(t0);
+        let token = create(
+            CapObjectType::IpcEndpoint as u32,
+            Rights::IPC_SEND.bits(),
+            target_pid,
+            owner_pid,
+        )
+        .expect("service token created");
+
+        // Valid before deadline (t0 + 0.5s < t0 + 1.0s).
+        super::set_test_clock_ns(t0 + 500_000_000);
+        assert!(check_token(
+            token,
+            Rights::IPC_SEND.bits(),
+            target_pid,
+            CapObjectType::IpcEndpoint as u32,
+        )
+        .is_ok());
+
+        // Expired past KAIROS_WINDOW_NS (t0 + 1.2s >= t0 + 1.0s).
+        super::set_test_clock_ns(t0 + KAIROS_WINDOW_NS + 200_000_000);
+        assert_eq!(
+            check_token(
+                token,
+                Rights::IPC_SEND.bits(),
+                target_pid,
+                CapObjectType::IpcEndpoint as u32,
+            ),
+            Err(KernelCapError::Expired)
+        );
+
+        super::set_test_clock_ns(0);
+        let _ = revoke_handle(token.object_id().as_u64() as u32);
+        let _ = unregister_service(Pid(owner_pid));
+        let _ = unregister_service(Pid(target_pid));
     }
 }

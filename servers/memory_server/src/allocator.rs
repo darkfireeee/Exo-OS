@@ -1,7 +1,9 @@
 use exo_syscall_abi as syscall;
 
 const MAX_QUOTA_ENTRIES: usize = 64;
-const DEFAULT_LIMIT_BYTES: u64 = u64::MAX;
+/// FIX-14: Bounded default per-PID quota (256 MiB) replacing unbounded `u64::MAX`.
+/// `init_server` (PID 1) may adjust individual PID limits via `MEMORY_MSG_QUOTA_SET`.
+const DEFAULT_LIMIT_BYTES: u64 = 256 * 1024 * 1024;
 
 #[derive(Clone, Copy)]
 struct QuotaEntry {

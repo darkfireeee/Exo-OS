@@ -182,13 +182,34 @@ pub fn sys_exo_perf_read(metric: u64, index: u64, _a3: u64, _a4: u64, _a5: u64, 
     }
 }
 
+fn caller_is_privileged_perf_controller() -> bool {
+    let caller = current_pid_u32();
+    if caller <= 1 {
+        return true;
+    }
+    let Some(pcb) = PROCESS_REGISTRY.find_by_pid(Pid(caller)) else {
+        return false;
+    };
+    if !pcb.is_root() || pcb.has_no_new_privs() {
+        return false;
+    }
+    crate::security::service_class_of(Pid(caller)) != crate::security::ServiceClass::Unknown
+}
+
 pub fn sys_exo_perf_enable(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_EXO_PERF_ENABLE);
+    // FIX-25: Restrict PMU/perf control strictly to kernel/init/attested root Ring 1 services.
+    if !caller_is_privileged_perf_controller() {
+        return EPERM;
+    }
     0
 }
 
 pub fn sys_exo_perf_disable(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_EXO_PERF_DISABLE);
+    if !caller_is_privileged_perf_controller() {
+        return EPERM;
+    }
     0
 }
 

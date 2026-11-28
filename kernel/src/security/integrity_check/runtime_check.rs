@@ -214,33 +214,68 @@ pub fn assert_kernel_integrity() {
     }
 }
 
-/// Periodic check in **OBSERVE MODE** (TIER 2.1-a): recalculates `.text/.rodata`
-/// hashes and, in case of divergence, **logs into ExoLedger** (P0 tamper-evident
-/// zone) + increments the `VIOLATIONS_DETECTED` counter — **WITHOUT panicking**.
+/// Active remediation policy: when `true`, a detected `.text`/`.rodata` corruption
+/// triggers an `ExoLedger` P0 alert AND requests an ExoPhoenix Kernel B handoff via
+/// `SSR_HANDOFF_FLAG` (FIX-18).
+static ENFORCE_HANDOFF_ON_VIOLATION: AtomicBool = AtomicBool::new(true);
+
+/// Returns the boot-time reference hashes `(text_hash, rodata_hash)` once initialized.
+pub fn reference_hashes() -> Option<([u8; 32], [u8; 32])> {
+    let state = INTEGRITY_STATE.lock();
+    if !state.initialized {
+        return None;
+    }
+    Some((state.text_hash, state.rodata_hash))
+}
+
+/// Enables or disables automatic ExoPhoenix handoff escalation on runtime integrity failure.
+pub fn set_enforce_handoff_on_violation(enabled: bool) {
+    ENFORCE_HANDOFF_ON_VIOLATION.store(enabled, Ordering::Release);
+}
+
+/// FIX-18: Records a kernel section integrity violation in `ExoLedger` P0 and escalates
+/// to ExoPhoenix handoff (`SSR_HANDOFF_FLAG = 1`) so Kernel B heals the corrupted image
+/// from the Golden RAM Mirror. Returns `true` if handoff escalation was triggered.
+pub fn handle_integrity_violation(e: IntegrityError) -> bool {
+    let code = match e {
+        IntegrityError::TextSectionCorrupted => 1,
+        IntegrityError::RodataSectionCorrupted => 2,
+        IntegrityError::StackGuardCorrupted => 3,
+        IntegrityError::NotInitialized => 0,
+    };
+    if code == 0 {
+        return false;
+    }
+    // 0x494E_5445_4752_5459 = b"INTEGRTY" — custom integrity audit tag.
+    crate::security::exoledger::exo_ledger_append_p0(
+        crate::security::exoledger::ActionTag::Custom {
+            tag: 0x494E_5445_4752_5459,
+            data: code,
+        },
+    );
+    if ENFORCE_HANDOFF_ON_VIOLATION.load(Ordering::Acquire) {
+        #[cfg(target_os = "none")]
+        // SAFETY: SSR_HANDOFF_FLAG is a mapped Ring 0 shared handoff trigger cell.
+        unsafe {
+            crate::exophoenix::ssr::ssr_atomic(crate::exophoenix::ssr::SSR_HANDOFF_FLAG)
+                .store(1, Ordering::Release);
+        }
+        return true;
+    }
+    false
+}
+
+/// Periodic kernel `.text`/`.rodata` integrity check (FIX-18).
 ///
-/// Boot-safe: a false positive (e.g. late `.text` patch) only produces
-/// an audit entry, never a halt on a fragile boot. FATAL mode
-/// (`assert_kernel_integrity` → panic + handoff ExoPhoenix) remains reserved for
-/// production, behind a flag. No-op until reference hashes
-/// are established (`init_runtime_integrity`).
+/// Logs any alteration into `ExoLedger` P0, increments `VIOLATIONS_DETECTED`,
+/// and escalates to ExoPhoenix Kernel B handoff (`SSR_HANDOFF_FLAG = 1`) for
+/// self-healing via the Golden RAM Mirror.
 pub fn security_periodic_check_observe() {
     if !INITIALIZED.load(Ordering::Acquire) {
         return;
     }
     if let Err(e) = check_kernel_integrity() {
-        let code = match e {
-            IntegrityError::TextSectionCorrupted => 1,
-            IntegrityError::RodataSectionCorrupted => 2,
-            IntegrityError::StackGuardCorrupted => 3,
-            IntegrityError::NotInitialized => 0,
-        };
-        // 0x494E_5445_4752_5459 = b"INTEGRTY" — custom integrity audit tag.
-        crate::security::exoledger::exo_ledger_append_p0(
-            crate::security::exoledger::ActionTag::Custom {
-                tag: 0x494E_5445_4752_5459,
-                data: code,
-            },
-        );
+        let _ = handle_integrity_violation(e);
     }
 }
 
@@ -262,5 +297,22 @@ pub fn integrity_stats() -> IntegrityStats {
         checks_performed: CHECKS_PERFORMED.load(Ordering::Relaxed),
         violations_detected: VIOLATIONS_DETECTED.load(Ordering::Relaxed),
         last_ok_tsc: state.last_ok_tsc,
+    }
+}
+
+#[cfg(test)]
+mod fix18_runtime_integrity_tests {
+    use super::*;
+
+    #[test]
+    fn var20_text_corruption_triggers_exoledger_and_handoff_escalation() {
+        set_enforce_handoff_on_violation(true);
+        assert!(handle_integrity_violation(
+            IntegrityError::TextSectionCorrupted
+        ));
+        assert!(handle_integrity_violation(
+            IntegrityError::RodataSectionCorrupted
+        ));
+        assert!(!handle_integrity_violation(IntegrityError::NotInitialized));
     }
 }

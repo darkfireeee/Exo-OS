@@ -375,6 +375,30 @@ fn spawn_strate2_async_after_reply(service_watchdog: &mut ServiceWatchdog) {
     }
 }
 
+#[inline]
+fn caller_can_control_services(sender_pid: u32) -> bool {
+    sender_pid == 0
+        || sender_pid == 1
+        || syscall::peer_is_any_service(
+            sender_pid,
+            &[syscall::SVC_INIT_SERVER, syscall::SVC_EXO_SHIELD],
+        )
+}
+
+#[inline]
+fn caller_can_power_action(sender_pid: u32) -> bool {
+    sender_pid == 0
+        || sender_pid == 1
+        || syscall::peer_is_any_service(
+            sender_pid,
+            &[
+                syscall::SVC_INIT_SERVER,
+                syscall::SVC_EXO_COMPOSITOR,
+                syscall::SVC_EXOSH,
+            ],
+        )
+}
+
 fn handle_control_plane(service_watchdog: &mut ServiceWatchdog) {
     let mut request = protocol::InitRequest::zeroed();
     let mut async_strate2_after_reply = false;
@@ -410,120 +434,156 @@ fn handle_control_plane(service_watchdog: &mut ServiceWatchdog) {
                 }
             }
             protocol::INIT_MSG_START => {
-                match protocol::read_service_name(&request.payload).and_then(|service_name| {
-                    supervisor::runtime_index_by_name(&SERVICES, service_name)
-                }) {
-                    Some(idx) => {
-                        let rc = start_service(idx, service_watchdog);
-                        if rc < 0 {
-                            protocol::InitReply::error(rc)
-                        } else {
-                            protocol::lifecycle_reply(
-                                rc as u32,
-                                supervisor::running_mask(&SERVICES),
-                            )
+                if !caller_can_control_services(request.sender_pid) {
+                    protocol::InitReply::error(syscall::EPERM)
+                } else {
+                    match protocol::read_service_name(&request.payload).and_then(|service_name| {
+                        supervisor::runtime_index_by_name(&SERVICES, service_name)
+                    }) {
+                        Some(idx) => {
+                            let rc = start_service(idx, service_watchdog);
+                            if rc < 0 {
+                                protocol::InitReply::error(rc)
+                            } else {
+                                protocol::lifecycle_reply(
+                                    rc as u32,
+                                    supervisor::running_mask(&SERVICES),
+                                )
+                            }
                         }
+                        None => protocol::InitReply::error(syscall::ENOENT),
                     }
-                    None => protocol::InitReply::error(syscall::ENOENT),
                 }
             }
             protocol::INIT_MSG_STOP => {
-                match protocol::read_service_name(&request.payload).and_then(|service_name| {
-                    supervisor::runtime_index_by_name(&SERVICES, service_name)
-                }) {
-                    Some(idx) => {
-                        let rc = stop_service(idx, service_watchdog);
-                        if rc < 0 {
-                            protocol::InitReply::error(rc)
-                        } else {
-                            protocol::lifecycle_reply(0, supervisor::running_mask(&SERVICES))
+                if !caller_can_control_services(request.sender_pid) {
+                    protocol::InitReply::error(syscall::EPERM)
+                } else {
+                    match protocol::read_service_name(&request.payload).and_then(|service_name| {
+                        supervisor::runtime_index_by_name(&SERVICES, service_name)
+                    }) {
+                        Some(idx) => {
+                            let rc = stop_service(idx, service_watchdog);
+                            if rc < 0 {
+                                protocol::InitReply::error(rc)
+                            } else {
+                                protocol::lifecycle_reply(0, supervisor::running_mask(&SERVICES))
+                            }
                         }
+                        None => protocol::InitReply::error(syscall::ENOENT),
                     }
-                    None => protocol::InitReply::error(syscall::ENOENT),
                 }
             }
             protocol::INIT_MSG_RESTART => {
-                match protocol::read_service_name(&request.payload).and_then(|service_name| {
-                    supervisor::runtime_index_by_name(&SERVICES, service_name)
-                }) {
-                    Some(idx) => {
-                        let rc = restart_service(idx, service_watchdog);
-                        if rc < 0 {
-                            protocol::InitReply::error(rc)
-                        } else {
-                            protocol::lifecycle_reply(
-                                rc as u32,
-                                supervisor::running_mask(&SERVICES),
-                            )
+                if !caller_can_control_services(request.sender_pid) {
+                    protocol::InitReply::error(syscall::EPERM)
+                } else {
+                    match protocol::read_service_name(&request.payload).and_then(|service_name| {
+                        supervisor::runtime_index_by_name(&SERVICES, service_name)
+                    }) {
+                        Some(idx) => {
+                            let rc = restart_service(idx, service_watchdog);
+                            if rc < 0 {
+                                protocol::InitReply::error(rc)
+                            } else {
+                                protocol::lifecycle_reply(
+                                    rc as u32,
+                                    supervisor::running_mask(&SERVICES),
+                                )
+                            }
                         }
+                        None => protocol::InitReply::error(syscall::ENOENT),
                     }
-                    None => protocol::InitReply::error(syscall::ENOENT),
                 }
             }
-            protocol::INIT_MSG_CHILD_DIED => match protocol::read_u32(&request.payload, 0) {
-                Ok(pid) => {
-                    let _ = protocol::read_i32(&request.payload, 4);
-                    if let Some(idx) = supervisor::note_child_exit(&SERVICES, pid) {
-                        if SERVICES[idx].is_disabled() {
-                            SERVICES[idx].disable();
-                        } else {
-                            service_watchdog.observe_stop(idx);
+            protocol::INIT_MSG_CHILD_DIED => {
+                if request.sender_pid != 0 && request.sender_pid != 1 {
+                    protocol::InitReply::error(syscall::EPERM)
+                } else {
+                    match protocol::read_u32(&request.payload, 0) {
+                        Ok(pid) => {
+                            let _ = protocol::read_i32(&request.payload, 4);
+                            if let Some(idx) = supervisor::note_child_exit(&SERVICES, pid) {
+                                if SERVICES[idx].is_disabled() {
+                                    SERVICES[idx].disable();
+                                } else {
+                                    service_watchdog.observe_stop(idx);
+                                }
+                            }
+                            protocol::lifecycle_reply(pid, supervisor::running_mask(&SERVICES))
                         }
+                        Err(err) => protocol::InitReply::error(err),
                     }
-                    protocol::lifecycle_reply(pid, supervisor::running_mask(&SERVICES))
                 }
-                Err(err) => protocol::InitReply::error(err),
-            },
-            protocol::INIT_MSG_PREPARE_ISOLATION => isolation::prepare_isolation_reply(&SERVICES),
+            }
+            protocol::INIT_MSG_PREPARE_ISOLATION => {
+                if !caller_can_control_services(request.sender_pid) {
+                    protocol::InitReply::error(syscall::EPERM)
+                } else {
+                    isolation::prepare_isolation_reply(&SERVICES)
+                }
+            }
             protocol::INIT_MSG_RELAUNCH_STRATE2 => {
-                let scheduled = supervisor::schedule_strate2_async_relaunch(&SERVICES);
-                if supervisor::all_strate2_ready(&SERVICES) {
-                    log::line(b"init_server: strate2 converged (t6)");
+                if !caller_can_control_services(request.sender_pid) {
+                    protocol::InitReply::error(syscall::EPERM)
+                } else {
+                    let scheduled = supervisor::schedule_strate2_async_relaunch(&SERVICES);
+                    if supervisor::all_strate2_ready(&SERVICES) {
+                        log::line(b"init_server: strate2 converged (t6)");
+                    }
+                    protocol::lifecycle_reply(scheduled, supervisor::running_mask(&SERVICES))
                 }
-                protocol::lifecycle_reply(scheduled, supervisor::running_mask(&SERVICES))
             }
             protocol::INIT_MSG_COLD_RESPAWN_PHOENIX => {
-                if request.sender_pid == 0 {
-                    override_reply_ep = u64::from_le_bytes([
-                        request.payload[0],
-                        request.payload[1],
-                        request.payload[2],
-                        request.payload[3],
-                        request.payload[4],
-                        request.payload[5],
-                        request.payload[6],
-                        request.payload[7],
-                    ]);
+                if request.sender_pid != 0 && request.sender_pid != 1 {
+                    protocol::InitReply::error(syscall::EPERM)
+                } else {
+                    if request.sender_pid == 0 {
+                        override_reply_ep = u64::from_le_bytes([
+                            request.payload[0],
+                            request.payload[1],
+                            request.payload[2],
+                            request.payload[3],
+                            request.payload[4],
+                            request.payload[5],
+                            request.payload[6],
+                            request.payload[7],
+                        ]);
+                    }
+                    async_strate2_after_reply = true;
+                    execute_cold_respawn_phoenix(service_watchdog)
                 }
-                async_strate2_after_reply = true;
-                execute_cold_respawn_phoenix(service_watchdog)
             }
             protocol::INIT_MSG_POWER_ACTION => {
-                const RB_AUTOBOOT: u64 = 0x0123_4567;
-                const RB_POWER_OFF: u64 = 0x4321_fedc;
-                let cmd = match request.payload[0] {
-                    1 => RB_AUTOBOOT,
-                    2 => RB_POWER_OFF,
-                    _ => 0,
-                };
-                if cmd != 0 {
-                    log::line(if cmd == RB_AUTOBOOT {
-                        b"init_server: reboot requested by desktop"
-                    } else {
-                        b"init_server: poweroff requested by desktop"
-                    });
-                    unsafe {
-                        let _ = syscall::syscall4(
-                            syscall::SYS_REBOOT,
-                            syscall::LINUX_REBOOT_MAGIC1,
-                            syscall::LINUX_REBOOT_MAGIC2,
-                            cmd,
-                            0,
-                        );
-                    }
-                    protocol::InitReply::ok()
+                if !caller_can_power_action(request.sender_pid) {
+                    protocol::InitReply::error(syscall::EPERM)
                 } else {
-                    protocol::InitReply::error(syscall::EINVAL)
+                    const RB_AUTOBOOT: u64 = 0x0123_4567;
+                    const RB_POWER_OFF: u64 = 0x4321_fedc;
+                    let cmd = match request.payload[0] {
+                        1 => RB_AUTOBOOT,
+                        2 => RB_POWER_OFF,
+                        _ => 0,
+                    };
+                    if cmd != 0 {
+                        log::line(if cmd == RB_AUTOBOOT {
+                            b"init_server: reboot requested by desktop"
+                        } else {
+                            b"init_server: poweroff requested by desktop"
+                        });
+                        unsafe {
+                            let _ = syscall::syscall4(
+                                syscall::SYS_REBOOT,
+                                syscall::LINUX_REBOOT_MAGIC1,
+                                syscall::LINUX_REBOOT_MAGIC2,
+                                cmd,
+                                0,
+                            );
+                        }
+                        protocol::InitReply::ok()
+                    } else {
+                        protocol::InitReply::error(syscall::EINVAL)
+                    }
                 }
             }
             _ => protocol::InitReply::error(syscall::EINVAL),

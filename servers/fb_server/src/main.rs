@@ -133,9 +133,42 @@ fn send_fb_reply(endpoint: u64, reply: &syscall::FbReply) {
 }
 
 #[cfg(target_os = "none")]
+#[inline]
+fn fb_caller_can_console(sender_pid: u32) -> bool {
+    sender_pid == 0
+        || syscall::peer_is_any_service(
+            sender_pid,
+            &[
+                syscall::SVC_INIT_SERVER,
+                syscall::SVC_TTY_SERVER,
+                syscall::SVC_FB_SERVER,
+                syscall::SVC_EXOSH,
+                syscall::SVC_EXO_COMPOSITOR,
+            ],
+        )
+}
+
+#[cfg(target_os = "none")]
+#[inline]
+fn fb_caller_is_root_compositor(sender_pid: u32) -> bool {
+    sender_pid == 0
+        || syscall::peer_is_any_service(
+            sender_pid,
+            &[syscall::SVC_INIT_SERVER, syscall::SVC_EXO_COMPOSITOR],
+        )
+}
+
+#[cfg(target_os = "none")]
 fn handle_in_batch(req: &syscall::FbRequest) -> syscall::FbReply {
     match req.msg_type {
         syscall::FB_MSG_WRITE => {
+            if !fb_caller_can_console(req.sender_pid) {
+                return syscall::FbReply {
+                    status: syscall::EACCES,
+                    len: 0,
+                    _pad: 0,
+                };
+            }
             let n = core::cmp::min(req.a as usize, syscall::FB_TEXT_MAX);
             if !surface_table_mut().has_active_root_compositor() {
                 console_mut().write_all_no_cursor(&req.data[..n]);
@@ -147,18 +180,39 @@ fn handle_in_batch(req: &syscall::FbRequest) -> syscall::FbReply {
             }
         }
         syscall::FB_MSG_CLEAR => {
+            if !fb_caller_can_console(req.sender_pid) {
+                return syscall::FbReply {
+                    status: syscall::EACCES,
+                    len: 0,
+                    _pad: 0,
+                };
+            }
             if !surface_table_mut().has_active_root_compositor() {
                 console_mut().clear();
             }
             syscall::FbReply::default()
         }
         syscall::FB_MSG_SCROLL => {
+            if !fb_caller_can_console(req.sender_pid) {
+                return syscall::FbReply {
+                    status: syscall::EACCES,
+                    len: 0,
+                    _pad: 0,
+                };
+            }
             if !surface_table_mut().has_active_root_compositor() {
                 console_mut().scroll_lines(req.a as u32);
             }
             syscall::FbReply::default()
         }
         syscall::FB_MSG_SET_CURSOR => {
+            if !fb_caller_can_console(req.sender_pid) {
+                return syscall::FbReply {
+                    status: syscall::EACCES,
+                    len: 0,
+                    _pad: 0,
+                };
+            }
             if !surface_table_mut().has_active_root_compositor() {
                 let console = console_mut();
                 if console.cursor_drawn {
@@ -184,6 +238,14 @@ fn handle_in_batch(req: &syscall::FbRequest) -> syscall::FbReply {
         }
         syscall::DISPLAY_OP_CREATE_SURFACE => {
             let is_root = (req.a & syscall::DISPLAY_SURFACE_FLAG_ROOT_DESKTOP) != 0;
+            // FIX-12: Only kernel-attested exo_compositor or init_server may claim ROOT_DESKTOP.
+            if is_root && !fb_caller_is_root_compositor(req.sender_pid) {
+                return syscall::FbReply {
+                    status: syscall::EPERM,
+                    len: 0,
+                    _pad: 0,
+                };
+            }
             let w = (req.a & 0xFFFF_FFFF) as u32;
             let h = (req.b & 0xFFFF_FFFF) as u32;
             let idx_opt = if is_root {
@@ -235,27 +297,47 @@ fn handle_in_batch(req: &syscall::FbRequest) -> syscall::FbReply {
             let wire_cnt = surface_table_mut().wire_messages_processed;
             let surf_cnt = surface_table_mut().active_surface_count();
             desktop_mut().set_wayland_stats(wire_cnt, surf_cnt);
-            if let Some((y_min, y_max)) =
-                surface_table_mut().commit_surface_damage(target_surface_id, req.sender_pid, rect, fb)
-            {
-                if surface_table_mut().has_active_root_compositor() {
-                    let x0 = rect.x.min(fb.width);
-                    let x1 = if rect.width == 0 {
-                        fb.width
+            match surface_table_mut().commit_surface_damage(
+                target_surface_id,
+                req.sender_pid,
+                rect,
+                fb,
+            ) {
+                Ok((y_min, y_max)) => {
+                    if surface_table_mut().has_active_root_compositor() {
+                        let x0 = rect.x.min(fb.width);
+                        let x1 = if rect.width == 0 {
+                            fb.width
+                        } else {
+                            rect.x.saturating_add(rect.width).min(fb.width)
+                        };
+                        console_mut().mark_dirty_rect(
+                            x0,
+                            y_min.min(fb.height),
+                            x1,
+                            y_max.min(fb.height),
+                        );
                     } else {
-                        rect.x.saturating_add(rect.width).min(fb.width)
-                    };
-                    console_mut().mark_dirty_rect(x0, y_min.min(fb.height), x1, y_max.min(fb.height));
-                } else {
-                    render_band_layers(fb, y_min, y_max);
-                    console_mut().mark_dirty_rows(y_min.min(fb.height), y_max.min(fb.height));
+                        render_band_layers(fb, y_min, y_max);
+                        console_mut().mark_dirty_rows(y_min.min(fb.height), y_max.min(fb.height));
+                    }
+                    syscall::FbReply::default()
                 }
-            } else if !surface_table_mut().has_active_root_compositor() {
-                console_mut().mark_dirty_rows(0, fb.height);
+                Err(err) => syscall::FbReply {
+                    status: err,
+                    len: 0,
+                    _pad: 0,
+                },
             }
-            syscall::FbReply::default()
         }
         syscall::DISPLAY_OP_MOVE_WINDOW => {
+            if !fb_caller_is_root_compositor(req.sender_pid) {
+                return syscall::FbReply {
+                    status: syscall::EPERM,
+                    len: 0,
+                    _pad: 0,
+                };
+            }
             // When Strate 2 root compositor owns the seat, DISPLAY_OP_MOVE_WINDOW syncs
             // the hardware/sprite cursor to the compositor's authoritative (x, y) position.
             syscall::FbReply::default()
@@ -767,6 +849,7 @@ pub extern "C" fn _start() -> ! {
                 mouse.y = fb.height / 2;
                 cursor_moved = true;
             } else if req.msg_type == syscall::DISPLAY_OP_MOVE_WINDOW
+                && reply.status >= 0
                 && surface_table_mut().has_active_root_compositor()
             {
                 let nx = (req.a as u32).min(fb.width.saturating_sub(1));
@@ -780,7 +863,7 @@ pub extern "C" fn _start() -> ! {
         }
         let is_commit = req.msg_type == syscall::DISPLAY_OP_COMMIT_DAMAGE
             || req.msg_type == syscall::DISPLAY_OP_FLIP;
-        if is_commit && req.reply_endpoint != 0 {
+        if is_commit && reply.status >= 0 && req.reply_endpoint != 0 {
             if commit_reply_len < commit_replies.len() {
                 commit_replies[commit_reply_len] = req.reply_endpoint;
                 commit_reply_len += 1;
@@ -813,6 +896,7 @@ pub extern "C" fn _start() -> ! {
                     mouse.y = fb.height / 2;
                     cursor_moved = true;
                 } else if req.msg_type == syscall::DISPLAY_OP_MOVE_WINDOW
+                    && r.status >= 0
                     && surface_table_mut().has_active_root_compositor()
                 {
                     let nx = (req.a as u32).min(fb.width.saturating_sub(1));
@@ -826,7 +910,7 @@ pub extern "C" fn _start() -> ! {
             }
             let b_is_commit = req.msg_type == syscall::DISPLAY_OP_COMMIT_DAMAGE
                 || req.msg_type == syscall::DISPLAY_OP_FLIP;
-            if b_is_commit && req.reply_endpoint != 0 {
+            if b_is_commit && r.status >= 0 && req.reply_endpoint != 0 {
                 let mut dup = false;
                 let mut ci = 0usize;
                 while ci < commit_reply_len {

@@ -12,6 +12,7 @@ pub const THREAT_QUERY: u32 = 3;
 pub const POLICY_UPDATE: u32 = 4;
 pub const HEARTBEAT: u32 = 5;
 pub const PMC_ANOMALY_REPORT: u32 = 6;
+pub const AUDIT_QUERY: u32 = 7;
 
 // ── Reply Status Codes ──────────────────────────────────────────────────────
 
@@ -35,9 +36,9 @@ const _: () = assert!(
 
 // ── IPC Message Structures ──────────────────────────────────────────────────
 
-/// Incoming IPC request (128 bytes).
+/// Incoming IPC request (200 bytes).
 ///
-/// When `ipc_gate` classifies a request as privileged, `payload[100..120]`
+/// When `ipc_gate` classifies a request as privileged, `payload[172..192]`
 /// carries an `ExoCapTokenWire` targeting the live exo_shield service PID.
 #[repr(C)]
 pub struct ShieldRequest {
@@ -68,6 +69,9 @@ impl ShieldReply {
 // ── IPC Constants ───────────────────────────────────────────────────────────
 
 pub const IPC_RECV_TIMEOUT_MS: u64 = 5_000;
+/// FIX-05: Monotonic upper bound between `drain_shield_feed()` / maintenance runs
+/// (must be even because bit 0 of flags encodes `IPC_FLAG_TIMEOUT`).
+pub const MAINTENANCE_INTERVAL_MS: u64 = 200;
 pub const IPC_FLAG_TIMEOUT: u64 = syscall::IPC_FLAG_TIMEOUT;
 pub const ETIMEDOUT: i64 = syscall::ETIMEDOUT;
 pub const EXO_SHIELD_ENDPOINT: u64 = 10;
@@ -99,6 +103,35 @@ pub static REQUESTS_ERR: AtomicU64 = AtomicU64::new(0);
 pub static IPC_RECV_TIMEOUTS: AtomicU32 = AtomicU32::new(0);
 pub static PERIODIC_SCAN_TICKS: AtomicU64 = AtomicU64::new(0);
 pub static MAINTENANCE_TICKS: AtomicU64 = AtomicU64::new(0);
+pub static CONTAINMENT_KILLS: AtomicU64 = AtomicU64::new(0);
+
+#[repr(C)]
+struct Timespec {
+    tv_sec: i64,
+    tv_nsec: i64,
+}
+
+/// FIX-05: Monotonic millisecond clock used to schedule non-starvable maintenance.
+pub fn monotonic_ms() -> u64 {
+    let mut ts = Timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    let rc = unsafe {
+        syscall::syscall2(
+            syscall::SYS_CLOCK_GETTIME,
+            1, // CLOCK_MONOTONIC
+            &mut ts as *mut Timespec as u64,
+        )
+    };
+    if rc == 0 && ts.tv_sec >= 0 && ts.tv_nsec >= 0 {
+        (ts.tv_sec as u64)
+            .saturating_mul(1_000)
+            .saturating_add((ts.tv_nsec as u64) / 1_000_000)
+    } else {
+        read_tsc() / 2_000_000
+    }
+}
 
 // ── Global Tick Counter ─────────────────────────────────────────────────────
 

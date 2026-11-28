@@ -482,16 +482,31 @@ impl SurfaceTable {
         sender_pid: u32,
         rect: syscall::DamageRect,
         fb: Framebuffer,
-    ) -> Option<(u32, u32)> {
+    ) -> Result<(u32, u32), i64> {
         let mut i = 0usize;
         while i < MAX_SHM_SURFACES {
             if self.surfaces[i].active && self.surfaces[i].surface_id == surface_id {
-                if sender_pid != 0
-                    && sender_pid != 1
-                    && self.surfaces[i].owner_pid != 0
-                    && self.surfaces[i].owner_pid != sender_pid
-                {
-                    return None;
+                // FIX-12: Protect both client surfaces AND surface_id=1 (owner_pid == 0)
+                // against unauthorized third-party damage commits.
+                let authorized = if self.surfaces[i].owner_pid == 0 {
+                    sender_pid == 0
+                        || syscall::peer_is_any_service(
+                            sender_pid,
+                            &[
+                                syscall::SVC_INIT_SERVER,
+                                syscall::SVC_TTY_SERVER,
+                                syscall::SVC_FB_SERVER,
+                                syscall::SVC_EXO_COMPOSITOR,
+                                syscall::SVC_EXOSH,
+                            ],
+                        )
+                } else {
+                    sender_pid == 0
+                        || sender_pid == 1
+                        || self.surfaces[i].owner_pid == sender_pid
+                };
+                if !authorized {
+                    return Err(syscall::EACCES);
                 }
                 let first_commit = !self.surfaces[i].committed && !self.surfaces[i].is_terminal;
                 self.surfaces[i].damaged = true;
@@ -549,7 +564,7 @@ impl SurfaceTable {
                         };
                         if copy_rc == syscall::ENOENT || copy_rc == syscall::ESRCH {
                             self.surfaces[i] = CompositorSurface::empty();
-                            return None;
+                            return Err(syscall::ENOENT);
                         }
                     }
                 }
@@ -558,7 +573,7 @@ impl SurfaceTable {
                     if !direct_shadow_copy {
                         self.blit_root_compositor_rect(i, fb, dmg_x, dmg_y, dmg_w, dmg_h);
                     }
-                    return Some((dmg_y.min(fb.height), dmg_y.saturating_add(dmg_h).min(fb.height)));
+                    return Ok((dmg_y.min(fb.height), dmg_y.saturating_add(dmg_h).min(fb.height)));
                 }
 
                 self.composite_surface(i, fb);
@@ -566,11 +581,11 @@ impl SurfaceTable {
                 let y_start = self.surfaces[i].y.max(0) as u32;
                 let y_end =
                     (self.surfaces[i].y + self.surfaces[i].height as i32 + 34).max(0) as u32;
-                return Some((y_start.min(fb.height), y_end.min(fb.height)));
+                return Ok((y_start.min(fb.height), y_end.min(fb.height)));
             }
             i += 1;
         }
-        None
+        Err(syscall::ENOENT)
     }
 
     /// Ultra-fast borderless scanout of the Strate 2 root desktop compositor surface (`0xAARRGGBB`).

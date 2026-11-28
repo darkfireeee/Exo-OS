@@ -686,10 +686,16 @@ pub fn do_fork(ctx: &ForkContext<'_>) -> Result<ForkResult, ForkError> {
     // via fork (RULE ZT-03 / SAND-03). No-op if parent is not restricted.
     crate::security::zero_trust::inherit_restrictions(parent_pcb.pid.0, child_pid.0);
 
-    // Mark FORKED.
-    child_pcb
-        .flags
-        .fetch_or(child_process_flags(ctx.flags), Ordering::Release);
+    // FIX-25: Inherit NO_NEW_PRIVS, NO_DUMP, and personality across fork (pdeathsig stays 0).
+    let inherited_sec_flags = parent_pcb.flags.load(Ordering::Acquire)
+        & (process_flags::NO_NEW_PRIVS | process_flags::NO_DUMP);
+    child_pcb.set_personality(parent_pcb.personality());
+
+    // Mark FORKED + inherited security flags.
+    child_pcb.flags.fetch_or(
+        child_process_flags(ctx.flags) | inherited_sec_flags,
+        Ordering::Release,
+    );
     child_pcb.set_state(ProcessState::Running);
     fork_trace(b"fork: pcb state\n");
 

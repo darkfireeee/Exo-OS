@@ -334,6 +334,28 @@ pub fn mailbox_open_count() -> usize {
     OPEN_COUNT.load(Ordering::Relaxed)
 }
 
+/// Returns `true` if a mailbox slot is currently open for `ep_id`.
+#[inline]
+pub fn has_mailbox(ep_id: EndpointId) -> bool {
+    let id = ep_id.get();
+    id != 0 && find_slot(id).is_some()
+}
+
+/// Counts open mailboxes whose packed high-32-bit owner PID equals `pid`.
+pub fn count_mailboxes_for_pid(pid: u32) -> usize {
+    if pid == 0 {
+        return 0;
+    }
+    let mut count = 0usize;
+    for slot in RAW_TABLE.iter() {
+        let ep = slot.endpoint_id.load(Ordering::Acquire);
+        if ep != 0 && (ep >> 32) as u32 == pid {
+            count += 1;
+        }
+    }
+    count
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Main API — send_raw / recv_raw
 // ─────────────────────────────────────────────────────────────────────────────
@@ -341,11 +363,32 @@ pub fn mailbox_open_count() -> usize {
 /// Sends `data` into mailbox of `ep_id`.
 ///
 /// If slot does not exist yet, it is created automatically (auto-open).
+/// Used by kernel-internal paths. Userspace syscall boundaries should use
+/// `send_raw_no_auto_open` unless an explicit owner-bounded reply slot is authorized.
 /// `flags`: bitmask
 ///   - `0x0001` (NOWAIT) — returns `Err(WouldBlock)` if ring is full.
 ///
 /// Returns unique kernel-allocated `MessageId`.
 pub fn send_raw(ep_id: EndpointId, data: &[u8], flags: u32) -> Result<MessageId, IpcError> {
+    send_raw_inner(ep_id, data, flags, true)
+}
+
+/// Sends `data` into an ALREADY-OPEN mailbox of `ep_id` (FIX-02: never auto-opens
+/// new slots in `RAW_TABLE`, preventing 128-slot mailbox exhaustion DoS).
+pub fn send_raw_no_auto_open(
+    ep_id: EndpointId,
+    data: &[u8],
+    flags: u32,
+) -> Result<MessageId, IpcError> {
+    send_raw_inner(ep_id, data, flags, false)
+}
+
+fn send_raw_inner(
+    ep_id: EndpointId,
+    data: &[u8],
+    flags: u32,
+    allow_auto_open: bool,
+) -> Result<MessageId, IpcError> {
     if data.len() > MAX_MSG_SIZE {
         return Err(IpcError::MessageTooLarge);
     }
@@ -355,8 +398,11 @@ pub fn send_raw(ep_id: EndpointId, data: &[u8], flags: u32) -> Result<MessageId,
         return Err(IpcError::NullEndpoint);
     }
 
-    // Auto-open if necessary.
+    // Auto-open only when explicitly allowed (kernel-internal or bounded owner reply).
     if find_slot(id).is_none() {
+        if !allow_auto_open {
+            return Err(IpcError::NotFound);
+        }
         if !mailbox_open(ep_id) {
             return Err(IpcError::OutOfResources);
         }
@@ -787,5 +833,24 @@ mod tests {
         assert_eq!(&out[..n], &payload);
 
         mailbox_close(ep);
+    }
+
+    #[test]
+    fn test_fix02_no_auto_open_prevents_raw_table_dos() {
+        use super::{has_mailbox, send_raw_no_auto_open};
+        for i in 1u64..=130 {
+            let bogus = EndpointId::new((1u64 << 63) | (0x9000 + i)).unwrap();
+            assert_eq!(
+                send_raw_no_auto_open(bogus, b"flood", 0x0001),
+                Err(crate::ipc::core::types::IpcError::NotFound)
+            );
+            assert!(!has_mailbox(bogus));
+        }
+        // Legitimate mailbox remains allocatable after 130 rejected attempts.
+        let legit = EndpointId::new(0x7777).unwrap();
+        mailbox_close(legit);
+        assert!(mailbox_open(legit));
+        assert!(send_raw_no_auto_open(legit, b"ok", 0x0001).is_ok());
+        mailbox_close(legit);
     }
 }

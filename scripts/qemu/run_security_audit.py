@@ -128,7 +128,13 @@ def input_prompt_ready(data: bytes) -> bool:
     return prompt_start >= 0 and b"\x1b[7m" in data[prompt_start:]
 
 
-def run_live_security_audit(base_disk: Path, iso_path: Path, smp: int = 1) -> tuple[bool, list[str], int | None]:
+def run_live_security_audit(
+    base_disk: Path,
+    iso_path: Path,
+    smp: int = 1,
+    accel: str = "auto",
+    timeout_s: int = 240,
+) -> tuple[bool, list[str], int | None]:
     pid = os.getpid()
     ephemeral_disk = Path(f"/tmp/exoos-sec-disk-{pid}.img")
     qmp_path = Path(f"/tmp/exoos-sec-qmp-{pid}.sock")
@@ -140,10 +146,15 @@ def run_live_security_audit(base_disk: Path, iso_path: Path, smp: int = 1) -> tu
     proc: subprocess.Popen[bytes] | None = None
     sec_lines: list[str] = []
 
+    has_kvm = os.path.exists("/dev/kvm") and os.access("/dev/kvm", os.R_OK | os.W_OK)
+    use_kvm = has_kvm if accel == "auto" else (accel == "kvm")
+
     try:
+        machine_arg = "q35,accel=kvm" if use_kvm else "q35"
         qemu_cmd = [
             "qemu-system-x86_64",
-            "-machine", "q35",
+            "-machine", machine_arg,
+            *(["-cpu", "host"] if use_kvm else []),
             "-smp", str(smp),
             "-m", "2G",
             "-boot", "d",
@@ -247,7 +258,7 @@ def run_live_security_audit(base_disk: Path, iso_path: Path, smp: int = 1) -> tu
         start_pos = len(e9_bytes())
         send_text("/bin/exo-compliance-runner --security-audit --exit-qemu\n")
 
-        exit_deadline = time.time() + 240
+        exit_deadline = time.time() + timeout_s
         qemu_rc: int | None = None
         printed: set[str] = set()
         while time.time() < exit_deadline:
@@ -264,11 +275,21 @@ def run_live_security_audit(base_disk: Path, iso_path: Path, smp: int = 1) -> tu
 
         if qemu_rc is None:
             tail = e9_bytes()[start_pos:].decode("utf-8", "replace")
-            print("[SEC-QEMU] TIMEOUT tail:\n" + tail[-4096:], file=sys.stderr, flush=True)
+            print("[SEC-QEMU] TIMEOUT e9 tail:\n" + tail[-4096:], file=sys.stderr, flush=True)
+            try:
+                ser_tail = serial_log.read_bytes().decode("utf-8", "replace")
+                print("[SEC-QEMU] TIMEOUT serial tail:\n" + ser_tail[-6144:], file=sys.stderr, flush=True)
+            except Exception:
+                pass
             return False, sec_lines, None
 
         sock.close()
-        required = ["S1", "S2", "S3", "S4", "S5", "S6"]
+        required = [
+            "S1", "S2", "S3", "S4", "S5", "S6",
+            "VAR-01", "VAR-02", "VAR-03", "VAR-04", "VAR-05", "VAR-06",
+            "VAR-07", "VAR-08", "VAR-09", "VAR-10", "VAR-11", "VAR-12",
+            "VAR-13", "VAR-14", "VAR-15", "VAR-16", "VAR-17", "VAR-18",
+        ]
         all_ok = qemu_rc == 33
         for tier in required:
             if not any(f"[EXO_SEC] {tier} PASS" in l for l in sec_lines):
@@ -295,22 +316,30 @@ def main() -> int:
     ap.add_argument("--disk", default="target/qemu/exofs-root.img")
     ap.add_argument("--iso", default="exo-os.iso")
     ap.add_argument("--s0-only", action="store_true")
+    ap.add_argument("--skip-s0", action="store_true")
     ap.add_argument("--smp", type=int, default=1)
+    ap.add_argument("--accel", default="auto", choices=["auto", "tcg", "kvm"])
+    ap.add_argument("--timeout", type=int, default=240)
     args = ap.parse_args()
 
     os.chdir(REPO_ROOT)
-    s0_ok, s0_issues = audit_s0_pure_hygiene(Path(args.pure_root), Path(args.pure_kernel))
-    print(f"[EXO_SEC] S0 {'PASS' if s0_ok else 'FAIL'} pure-profile hygiene", flush=True)
-    for iss in s0_issues:
-        print(f"  [S0 ISSUE] {iss}", file=sys.stderr, flush=True)
+    if args.skip_s0:
+        s0_ok = True
+    else:
+        s0_ok, s0_issues = audit_s0_pure_hygiene(Path(args.pure_root), Path(args.pure_kernel))
+        print(f"[EXO_SEC] S0 {'PASS' if s0_ok else 'FAIL'} pure-profile hygiene", flush=True)
+        for iss in s0_issues:
+            print(f"  [S0 ISSUE] {iss}", file=sys.stderr, flush=True)
 
-    if args.s0_only:
-        return 0 if s0_ok else 1
+        if args.s0_only:
+            return 0 if s0_ok else 1
 
-    live_ok, sec_lines, qemu_rc = run_live_security_audit(Path(args.disk), Path(args.iso), smp=args.smp)
+    live_ok, sec_lines, qemu_rc = run_live_security_audit(
+        Path(args.disk), Path(args.iso), smp=args.smp, accel=args.accel, timeout_s=args.timeout
+    )
     print(
         f"\n[SECURITY AUDIT SUMMARY] S0={'PASS' if s0_ok else 'FAIL'} "
-        f"LIVE_S1_S6={'PASS' if live_ok else 'FAIL'} QEMU_RC={qemu_rc}",
+        f"LIVE_S1_S6_VAR01_VAR18={'PASS' if live_ok else 'FAIL'} QEMU_RC={qemu_rc}",
         flush=True,
     )
     return 0 if (s0_ok and live_ok) else 1

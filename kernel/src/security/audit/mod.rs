@@ -28,8 +28,12 @@ pub use syscall_audit::{
 /// Initializes the audit subsystem.
 ///
 /// Installs default rules:
+///   - Deny `SYS_PTRACE` by default (FIX-09 / VAR-12, priority 5)
 ///   - Log all syscalls (priority 128)
 ///   - Alert on SecurityViolation (covered by RULE AUDIT-02 — always active)
 pub fn audit_init() {
+    let _ = add_global_rule(AuditRule::new_deny_syscall(
+        crate::syscall::numbers::SYS_PTRACE as u32,
+    ));
     let _ = add_global_rule(AuditRule::new_log_all());
 }

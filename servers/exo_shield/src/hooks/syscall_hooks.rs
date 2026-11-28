@@ -497,10 +497,10 @@ pub fn pre_syscall_check(pid: u32, syscall_nr: u32, _args: [u64; 3]) -> bool {
     if is_dangerous_syscall(syscall_nr) {
         DANGEROUS_SYSCALL_COUNT.fetch_add(1, Ordering::Relaxed);
 
-        // ptrace by non-root is always blocked
-        if syscall_nr == SYS_PTRACE {
-            // In a real system, we'd check the UID here.
-            // For the model, ptrace is monitored but not auto-blocked.
+        // FIX-23: ptrace by any userspace process outside PID 0/1 is blocked.
+        if syscall_nr == SYS_PTRACE && pid > 1 {
+            BLOCKED_SYSCALLS.fetch_add(1, Ordering::Relaxed);
+            return true;
         }
 
         // Kernel-only module/BPF/kexec syscalls are always blocked for userspace PIDs

@@ -228,7 +228,9 @@ pub extern "C" fn _start() -> ! {
             }
             IPC_MSG_ROUTE => {
                 // payload[0..4] = dest_endpoint, payload[4..] = données
-                if payload_len >= 4 {
+                // FIX-01: rejeter tout appelant non authentifié (sender_pid == 0)
+                // et réécrire inconditionnellement inner[0..4] avec msg.sender_pid.
+                if payload_len >= 4 && msg.sender_pid != 0 {
                     let Some(dest) = read_payload_u32(&msg, 0, payload_len) else {
                         continue;
                     };
@@ -264,6 +266,17 @@ pub extern "C" fn _start() -> ! {
                         );
                         continue;
                     }
+                    let mut fwd_buf = [0u8; IPC_PAYLOAD_SIZE];
+                    let inner_slice = unsafe {
+                        core::slice::from_raw_parts(payload_ptr(&msg, 4), route_payload_len)
+                    };
+                    let Some(fwd_len) = exo_ipc_router::router::stamp_routed_payload(
+                        msg.sender_pid,
+                        inner_slice,
+                        &mut fwd_buf,
+                    ) else {
+                        continue;
+                    };
                     // Résoudre le next-hop configuré (fallback sur dest si route directe).
                     let target_ep = exo_ipc_router::router::resolve_route(dest)
                         .map(|(hop, _)| hop)
@@ -273,8 +286,8 @@ pub extern "C" fn _start() -> ! {
                         syscall::syscall6(
                             syscall::SYS_IPC_SEND,
                             target_ep as u64,
-                            payload_ptr(&msg, 4) as u64,
-                            route_payload_len as u64,
+                            fwd_buf.as_ptr() as u64,
+                            fwd_len as u64,
                             syscall::IPC_FLAG_TIMEOUT | 10,
                             0,
                             0,
@@ -284,10 +297,23 @@ pub extern "C" fn _start() -> ! {
             }
             IPC_MSG_HEARTBEAT => {
                 // Répondre avec notre propre PID pour confirmer que le router est vivant.
+                // FIX-01: valider que reply_endpoint appartient bien à msg.sender_pid
+                // (évite d'utiliser ipc_router comme réflecteur vers un endpoint tiers).
+                if msg.sender_pid == 0 {
+                    continue;
+                }
                 let our_pid = unsafe { syscall::syscall0(syscall::SYS_GETPID) };
                 let pid_bytes = (our_pid as u32).to_le_bytes();
-                let reply_endpoint =
+                let requested_reply =
                     read_payload_u64(&msg, 0, payload_len).unwrap_or(msg.sender_pid as u64);
+                let reply_packed_pid = (requested_reply >> 32) as u32;
+                let reply_endpoint = if requested_reply == msg.sender_pid as u64
+                    || reply_packed_pid == msg.sender_pid
+                {
+                    requested_reply
+                } else {
+                    continue;
+                };
                 let _ = unsafe {
                     syscall::syscall6(
                         syscall::SYS_IPC_SEND,

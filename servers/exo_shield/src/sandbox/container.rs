@@ -15,8 +15,8 @@ use spin::Mutex;
 // Constants
 // ---------------------------------------------------------------------------
 
-/// Maximum number of concurrent containers.
-pub const MAX_CONTAINERS: usize = 8;
+/// Maximum number of concurrent containers (FIX-08: raised from 8 to 64 + LRU eviction).
+pub const MAX_CONTAINERS: usize = 64;
 
 /// Maximum length of a filesystem root path.
 pub const MAX_FS_ROOT_LEN: usize = 128;
@@ -510,6 +510,42 @@ impl ContainerManager {
         self.generation.store(0, Ordering::Release);
     }
 
+    /// FIX-08: Evicts one obsolete or oldest container slot so quarantine
+    /// containment never silently fails when all `MAX_CONTAINERS` slots are occupied.
+    fn evict_lru_slot(&mut self) -> bool {
+        let mut candidate: Option<usize> = None;
+        let mut candidate_non_running = false;
+        let mut candidate_id = u32::MAX;
+
+        for (i, c) in self.containers.iter().enumerate() {
+            if !c.is_active() {
+                return true;
+            }
+            let non_running = !matches!(c.state(), ContainerState::Running);
+            let id_raw = c.id().raw();
+            let better = match candidate {
+                None => true,
+                Some(_) => {
+                    (non_running && !candidate_non_running)
+                        || (non_running == candidate_non_running && id_raw < candidate_id)
+                }
+            };
+            if better {
+                candidate = Some(i);
+                candidate_non_running = non_running;
+                candidate_id = id_raw;
+            }
+        }
+
+        if let Some(idx) = candidate {
+            self.containers[idx].reset_slot();
+            self.generation.fetch_add(1, Ordering::Release);
+            true
+        } else {
+            false
+        }
+    }
+
     // -- Internal -----------------------------------------------------------
 
     fn find_by_id(&self, id: ContainerId) -> Option<&ContainerProfile> {
@@ -544,12 +580,20 @@ pub fn quarantine_pid(pid: u32) -> bool {
         );
     }
 
-    let id = manager.create(
+    let mut id = manager.create(
         pid,
         b"/quarantine",
         b"quarantine",
         SyscallBitmap::deny_all(),
     );
+    if !id.is_valid() && manager.evict_lru_slot() {
+        id = manager.create(
+            pid,
+            b"/quarantine",
+            b"quarantine",
+            SyscallBitmap::deny_all(),
+        );
+    }
     id.is_valid() && manager.start(id)
 }
 

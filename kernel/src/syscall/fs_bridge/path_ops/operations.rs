@@ -11,6 +11,93 @@ use crate::fs::exofs::path::symlink::invalidate_symlink;
 use crate::fs::exofs::syscall::object_fd::{open_flags, OBJECT_TABLE};
 use crate::syscall::validation::write_user_typed;
 
+/// FIX-10: Returns `true` for kernel/system-owned directory hierarchies that
+/// non-root processes (`euid != 0`) MUST NOT mutate (write/create/unlink/rename/mkdir).
+#[inline]
+pub fn is_protected_system_path(path: &[u8]) -> bool {
+    path == b"/"
+        || path == b"/etc"
+        || path.starts_with(b"/etc/")
+        || path == b"/sbin"
+        || path.starts_with(b"/sbin/")
+        || path == b"/bin"
+        || path.starts_with(b"/bin/")
+        || path == b"/lib"
+        || path.starts_with(b"/lib/")
+        || path == b"/usr"
+        || path.starts_with(b"/usr/")
+        || path == b"/boot"
+        || path.starts_with(b"/boot/")
+        || path == b"/sys"
+        || path.starts_with(b"/sys/")
+        || path == b"/proc"
+        || path.starts_with(b"/proc/")
+}
+
+#[inline]
+fn is_user_writable_prefix(path: &[u8]) -> bool {
+    path == b"/tmp"
+        || path.starts_with(b"/tmp/")
+        || path == b"/home"
+        || path.starts_with(b"/home/")
+        || path == b"/var/tmp"
+        || path.starts_with(b"/var/tmp/")
+        || path == b"/run"
+        || path.starts_with(b"/run/")
+}
+
+/// FIX-10: Checks whether `pid` holds root effective credentials (`euid == 0`).
+/// Kernel context (`pid == 0`) or PID 1 (`init_server`) are root.
+/// In host unit tests without a registered PCB for a synthetic PID, defaults to root
+/// so standalone `fs_bridge` tests remain unaffected, while any registered non-root PCB
+/// (`euid != 0`) is strictly enforced.
+#[inline]
+pub fn caller_has_root_creds(pid: u32) -> bool {
+    if pid <= 1 {
+        return true;
+    }
+    match crate::process::core::registry::PROCESS_REGISTRY
+        .find_by_pid(crate::process::core::pid::Pid(pid))
+    {
+        Some(pcb) => pcb.get_creds().euid == 0,
+        None => cfg!(test),
+    }
+}
+
+/// FIX-10: Enforces Zero-Trust `FS_READONLY`/`NO_FS`/`SANDBOX_FULL` + UID/protected-path
+/// write authorization before any filesystem mutation.
+fn check_fs_mutation_access_with_root(
+    normalized_path: &[u8],
+    pid: u32,
+    is_root: bool,
+) -> Result<(), FsBridgeError> {
+    if pid > 1 {
+        let restrictions = crate::security::zero_trust::process_restrictions(pid);
+        let deny_bits = crate::security::zero_trust::restriction_flags::FS_READONLY
+            | crate::security::zero_trust::restriction_flags::NO_FS
+            | crate::security::zero_trust::restriction_flags::SANDBOX_FULL;
+        if (restrictions & deny_bits) != 0 {
+            return Err(FsBridgeError::PermDenied);
+        }
+    }
+    if !is_root && is_protected_system_path(normalized_path) {
+        crate::security::shield_feed::push(crate::security::shield_feed::ShieldEvent::new(
+            pid,
+            crate::security::shield_feed::event_type::CAPABILITY,
+            crate::security::shield_feed::severity::HIGH,
+            crate::syscall::numbers::SYS_OPEN as u32,
+            0,
+            0,
+        ));
+        return Err(FsBridgeError::PermDenied);
+    }
+    Ok(())
+}
+
+fn check_fs_mutation_access(normalized_path: &[u8], pid: u32) -> Result<(), FsBridgeError> {
+    check_fs_mutation_access_with_root(normalized_path, pid, caller_has_root_creds(pid))
+}
+
 /// `open(path, flags, mode)` → fd.
 #[inline]
 pub fn fs_open(path: &[u8], flags: u32, mode: u32, pid: u32) -> Result<i64, FsBridgeError> {
@@ -30,8 +117,18 @@ pub fn fs_open(path: &[u8], flags: u32, mode: u32, pid: u32) -> Result<i64, FsBr
     }
 
     ensure_root_directory()?;
-    let normalized_path = resolve_path_with_symlinks(path, true, fd_flags & open_flags::O_CREAT != 0)?;
+    // FIX-10: Honor POSIX O_NOFOLLOW — do not dereference terminal symlink, return -ELOOP.
+    let nofollow = (fd_flags & open_flags::O_NOFOLLOW) != 0;
+    let normalized_path =
+        resolve_path_with_symlinks(path, !nofollow, fd_flags & open_flags::O_CREAT != 0)?;
     let existing_entry = path_entry(&normalized_path).ok();
+    if nofollow
+        && existing_entry
+            .map(|(_, kind)| kind == PATH_INDEX_KIND_SYMLINK)
+            .unwrap_or(false)
+    {
+        return Err(FsBridgeError::Loop);
+    }
     let blob_id = match existing_entry {
         Some((existing_blob_id, _)) => existing_blob_id,
         None => allocate_fresh_file_blob(&normalized_path)?,
@@ -47,6 +144,30 @@ pub fn fs_open(path: &[u8], flags: u32, mode: u32, pid: u32) -> Result<i64, FsBr
     }
     if is_dir && open_flags::can_write(fd_flags) {
         return Err(FsBridgeError::IsDir);
+    }
+
+    let wants_write = open_flags::can_write(fd_flags)
+        || (fd_flags & (open_flags::O_CREAT | open_flags::O_TRUNC)) != 0;
+    if wants_write {
+        check_fs_mutation_access(&normalized_path, pid)?;
+    }
+    if exists && !caller_has_root_creds(pid) {
+        if let Some(file_mode) = stored_mode(&blob_id) {
+            let perm_bits = file_mode & 0o777;
+            if open_flags::can_write(fd_flags) || (fd_flags & open_flags::O_TRUNC) != 0 {
+                let writable_for_user = if is_user_writable_prefix(&normalized_path) {
+                    (perm_bits & 0o222) != 0
+                } else {
+                    (perm_bits & 0o002) != 0
+                };
+                if !writable_for_user {
+                    return Err(FsBridgeError::PermDenied);
+                }
+            }
+            if open_flags::can_read(fd_flags) && (perm_bits & 0o444) == 0 {
+                return Err(FsBridgeError::PermDenied);
+            }
+        }
     }
 
     if !exists && fd_flags & open_flags::O_CREAT == 0 {
@@ -225,6 +346,7 @@ pub fn fs_mkdir(path: &[u8], mode: u32, pid: u32) -> Result<i64, FsBridgeError> 
     if normalized_path == b"/" {
         return Err(FsBridgeError::Exists);
     }
+    check_fs_mutation_access(&normalized_path, pid)?;
     let (parent_path, leaf) = split_parent_and_leaf(&normalized_path)?;
     ensure_directory_exists(&parent_path)?;
     if path_entry(&normalized_path).is_ok() {
@@ -264,6 +386,7 @@ pub fn fs_rmdir(path: &[u8], pid: u32) -> Result<i64, FsBridgeError> {
     if normalized_path == b"/" {
         return Err(FsBridgeError::PermDenied);
     }
+    check_fs_mutation_access(&normalized_path, pid)?;
     let (parent_path, leaf) = split_parent_and_leaf(&normalized_path)?;
     let (blob_id, _kind) = path_entry(&normalized_path)?;
     let data = snapshot_blob(&blob_id)?;
@@ -292,6 +415,7 @@ pub fn fs_unlink(path: &[u8], pid: u32) -> Result<i64, FsBridgeError> {
     if normalized_path == b"/" {
         return Err(FsBridgeError::PermDenied);
     }
+    check_fs_mutation_access(&normalized_path, pid)?;
     let (parent_path, leaf) = split_parent_and_leaf(&normalized_path)?;
     let (blob_id, kind) = path_entry(&normalized_path)?;
     let data = snapshot_blob(&blob_id)?;
@@ -326,6 +450,8 @@ pub fn fs_rename(old_path: &[u8], new_path: &[u8], pid: u32) -> Result<i64, FsBr
     if old_normalized == b"/" || new_normalized == b"/" {
         return Err(FsBridgeError::PermDenied);
     }
+    check_fs_mutation_access(&old_normalized, pid)?;
+    check_fs_mutation_access(&new_normalized, pid)?;
 
     let (old_parent, old_leaf) = split_parent_and_leaf(&old_normalized)?;
     let (new_parent, new_leaf) = split_parent_and_leaf(&new_normalized)?;
@@ -425,4 +551,87 @@ pub fn fs_linkat(
     let old_resolved = resolve_dirfd_path(olddirfd, old_path, pid)?;
     let new_resolved = resolve_dirfd_path(newdirfd, new_path, pid)?;
     fs_link_with_follow(&old_resolved, &new_resolved, flags & AT_SYMLINK_FOLLOW != 0, pid)
+}
+
+#[cfg(test)]
+mod fix10_fs_security_tests {
+    use super::*;
+
+    #[test]
+    fn fix10_protected_system_paths_and_nonroot_write_guard() {
+        assert!(is_protected_system_path(b"/etc/shadow"));
+        assert!(is_protected_system_path(b"/sbin/exo-init-server"));
+        assert!(is_protected_system_path(b"/bin/exosh"));
+        assert!(is_protected_system_path(b"/boot/kernel"));
+        assert!(!is_protected_system_path(b"/tmp/test.txt"));
+        assert!(!is_protected_system_path(b"/home/user/Notes/note.txt"));
+
+        let pid = 4100u32;
+        crate::security::zero_trust::clear_process_restrictions(pid);
+
+        // Non-root callers MUST be denied writes to protected system hierarchies.
+        assert_eq!(
+            check_fs_mutation_access_with_root(b"/etc/passwd", pid, false),
+            Err(FsBridgeError::PermDenied)
+        );
+        assert_eq!(
+            check_fs_mutation_access_with_root(b"/sbin/exo-shield", pid, false),
+            Err(FsBridgeError::PermDenied)
+        );
+        // User-writable hierarchies remain writable for non-root callers.
+        assert_eq!(
+            check_fs_mutation_access_with_root(b"/tmp/user_ok.txt", pid, false),
+            Ok(())
+        );
+        assert_eq!(
+            check_fs_mutation_access_with_root(b"/home/user/note.txt", pid, false),
+            Ok(())
+        );
+        // Root may write system paths unless FS_READONLY/SANDBOX_FULL is active.
+        assert_eq!(
+            check_fs_mutation_access_with_root(b"/etc/passwd", pid, true),
+            Ok(())
+        );
+        assert!(crate::security::zero_trust::quarantine_process(pid));
+        assert_eq!(
+            check_fs_mutation_access_with_root(b"/tmp/user_ok.txt", pid, true),
+            Err(FsBridgeError::PermDenied)
+        );
+        crate::security::zero_trust::clear_process_restrictions(pid);
+    }
+
+    #[test]
+    fn fix10_open_o_nofollow_rejects_symlink_with_eloop() {
+        unsafe {
+            crate::syscall::fs_bridge::fs_bridge_init();
+        }
+        let _ = ensure_root_directory();
+        let _ = fs_mkdir(b"/tmp", 0o777, 0);
+        // Create target file and symlink pointing to it
+        let fd = fs_open(
+            b"/tmp/fix10_target",
+            open_flags::O_RDWR | open_flags::O_CREAT | open_flags::O_TRUNC,
+            0o644,
+            0,
+        )
+        .expect("create target");
+        let _ = crate::syscall::fs_bridge::fs_close(fd as u32, 0);
+        let _ = fs_unlink(b"/tmp/fix10_link", 0);
+        fs_symlink(b"/tmp/fix10_target", b"/tmp/fix10_link", 0).expect("create symlink");
+
+        // Opening symlink WITH O_NOFOLLOW MUST fail with FsBridgeError::Loop (-ELOOP).
+        let res = fs_open(
+            b"/tmp/fix10_link",
+            open_flags::O_RDONLY | open_flags::O_NOFOLLOW,
+            0,
+            0,
+        );
+        assert_eq!(res, Err(FsBridgeError::Loop));
+
+        // Opening symlink WITHOUT O_NOFOLLOW still follows it cleanly.
+        let ok_fd = fs_open(b"/tmp/fix10_link", open_flags::O_RDONLY, 0, 0).expect("follow link");
+        let _ = crate::syscall::fs_bridge::fs_close(ok_fd as u32, 0);
+        let _ = fs_unlink(b"/tmp/fix10_link", 0);
+        let _ = fs_unlink(b"/tmp/fix10_target", 0);
+    }
 }

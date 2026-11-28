@@ -583,11 +583,55 @@ pub fn sys_capset(hdrp: u64, datap: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64)
     }
 }
 
-/// `personality(persona)` — Linux syscall 135 (x86_64 compat).
-/// Returns 0 (standard PER_LINUX).
-pub fn sys_personality(_persona: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+/// FIX-25: Pure validator for Linux `personality(2)` security hardening (VAR-17).
+/// - `0xFFFF_FFFF` queries current personality.
+/// - `READ_IMPLIES_EXEC` (`0x0040_0000`) is ALWAYS forbidden (`EPERM` — enforces W^X).
+/// - `ADDR_NO_RANDOMIZE` (`0x0004_0000`) is forbidden for non-root or `no_new_privs` callers (`EPERM` — enforces ASLR).
+pub fn validate_personality_request(
+    persona: u64,
+    is_root: bool,
+    no_new_privs: bool,
+) -> Result<Option<u32>, i64> {
+    const PER_QUERY: u64 = 0xFFFF_FFFF;
+    const ADDR_NO_RANDOMIZE: u64 = 0x0004_0000;
+    const READ_IMPLIES_EXEC: u64 = 0x0040_0000;
+
+    if persona == PER_QUERY {
+        return Ok(None);
+    }
+    if (persona & READ_IMPLIES_EXEC) != 0 {
+        return Err(EPERM);
+    }
+    if (persona & ADDR_NO_RANDOMIZE) != 0 && (!is_root || no_new_privs) {
+        return Err(EPERM);
+    }
+    if persona > u32::MAX as u64 {
+        return Err(EINVAL);
+    }
+    Ok(Some(persona as u32))
+}
+
+/// `personality(persona)` — Linux syscall 135 (x86_64 compat, FIX-25).
+pub fn sys_personality(persona: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     inc_posix();
-    0
+    let pid = crate::syscall::fast_path::syscall_current_pid();
+    let pcb = crate::process::core::registry::PROCESS_REGISTRY
+        .find_by_pid(crate::process::core::pid::Pid(pid));
+    let (is_root, no_new_privs, cur) = match pcb {
+        Some(p) => (p.is_root(), p.has_no_new_privs(), p.personality()),
+        None => (pid <= 1, false, 0),
+    };
+    match validate_personality_request(persona, is_root, no_new_privs) {
+        Ok(None) => cur as i64,
+        Ok(Some(new_val)) => {
+            if let Some(p) = pcb {
+                p.set_personality(new_val) as i64
+            } else {
+                cur as i64
+            }
+        }
+        Err(errno) => errno,
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -337,21 +337,45 @@ fn record_route_stat(dst_pid: u32, ok: bool, payload_len: usize) {
     }
 }
 
+/// FIX-01 (Anti-spoofing): prépare le payload routé en écrasant
+/// inconditionnellement les 4 premiers octets (`sender_pid`) par le PID
+/// authentifié par le kernel (`msg.sender_pid`). Rejette tout `sender_pid == 0`.
+pub fn stamp_routed_payload(
+    authenticated_sender_pid: u32,
+    src_payload: &[u8],
+    dst_buf: &mut [u8],
+) -> Option<usize> {
+    if authenticated_sender_pid == 0 || src_payload.len() > dst_buf.len() {
+        return None;
+    }
+    let len = src_payload.len();
+    dst_buf[..len].copy_from_slice(src_payload);
+    if len >= 4 {
+        dst_buf[..4].copy_from_slice(&authenticated_sender_pid.to_le_bytes());
+    }
+    Some(len)
+}
+
 /// Transmet un message IPC selon la politique de routage.
 /// Retourne true si le message a été transmis avec succès.
 pub fn forward_message(src_pid: u32, dst_pid: u32, payload: &[u8], payload_len: usize) -> bool {
-    if payload_len > payload.len() {
+    if src_pid == 0 || payload_len > payload.len() || payload_len > syscall_abi::IPC_INLINE_PAYLOAD_SIZE {
         return false;
     }
     let Some(policy) = apply_policy(src_pid, dst_pid) else {
         return false;
     };
+    let mut stamped = [0u8; syscall_abi::IPC_INLINE_PAYLOAD_SIZE];
+    let Some(stamped_len) = stamp_routed_payload(src_pid, &payload[..payload_len], &mut stamped) else {
+        return false;
+    };
+    let payload = &stamped[..stamped_len];
 
     match policy {
         RoutePolicy::Direct | RoutePolicy::Forwarded => {
             let (dest, _) = resolve_route(dst_pid).unwrap_or((dst_pid, RoutePolicy::Direct));
-            let result = send_ipc(dest, payload, payload_len);
-            record_route_stat(dst_pid, result >= 0, payload_len);
+            let result = send_ipc(dest, payload, stamped_len);
+            record_route_stat(dst_pid, result >= 0, stamped_len);
             result >= 0
         }
         RoutePolicy::Broadcast => {
@@ -379,7 +403,7 @@ pub fn forward_message(src_pid: u32, dst_pid: u32, payload: &[u8], payload_len: 
             let mut sent = 0u32;
             for &dest in &targets[..target_count] {
                 if crate::exocordon::check_ipc(src_pid, dest).is_ok()
-                    && send_ipc(dest, payload, payload_len) >= 0
+                    && send_ipc(dest, payload, stamped_len) >= 0
                 {
                     sent += 1;
                 }
@@ -390,8 +414,8 @@ pub fn forward_message(src_pid: u32, dst_pid: u32, payload: &[u8], payload_len: 
             let dest = crate::load_balancer::select_instance(dst_pid)
                 .or_else(|| resolve_route(dst_pid).map(|(d, _)| d))
                 .unwrap_or(dst_pid);
-            let result = send_ipc(dest, payload, payload_len);
-            record_route_stat(dst_pid, result >= 0, payload_len);
+            let result = send_ipc(dest, payload, stamped_len);
+            record_route_stat(dst_pid, result >= 0, stamped_len);
             result >= 0
         }
     }

@@ -221,22 +221,49 @@ pub extern "C" fn _start() -> ! {
             continue;
         }
 
+        let mut status = 0i64;
+        // FIX-15: Authenticate system audio & stop requests via kernel-attested ServiceClass.
+        let audio_privileged = syscall::peer_is_any_service(
+            req.sender_pid,
+            &[
+                syscall::SVC_INIT_SERVER,
+                syscall::SVC_EXO_SHIELD,
+                syscall::SVC_EXO_COMPOSITOR,
+                syscall::SVC_TTY_SERVER,
+                syscall::SVC_EXOSH,
+                syscall::SVC_AUDIO_SERVER,
+            ],
+        );
         match req.msg_type {
             syscall::AUDIO_MSG_PLAY_SYSTEM_SOUND => {
-                handle_play_sound(req.a);
+                if audio_privileged {
+                    handle_play_sound(req.a);
+                } else {
+                    status = syscall::EPERM;
+                }
             }
             syscall::AUDIO_MSG_BEEP => {
-                handle_beep(req.a, req.b);
+                if audio_privileged {
+                    handle_beep(req.a, req.b);
+                } else {
+                    status = syscall::EPERM;
+                }
             }
             syscall::AUDIO_MSG_STOP => {
-                handle_stop();
+                if audio_privileged {
+                    handle_stop();
+                } else {
+                    status = syscall::EPERM;
+                }
             }
-            _ => {}
+            _ => {
+                status = syscall::EINVAL;
+            }
         }
 
         if req.reply_endpoint != 0 {
             let reply = syscall::AudioReply {
-                status: 0,
+                status,
                 _reserved: [0; 16],
             };
             unsafe {

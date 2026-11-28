@@ -40,7 +40,9 @@ use core::sync::atomic::{AtomicU32, Ordering};
 use exo_syscall_abi as syscall;
 use exo_vfs_server::{
     compat,
-    mount_table::{check_vfs_write_access, fnv32, FsType, MountEntry, MAX_MOUNTS},
+    mount_table::{
+        check_vfs_write_access_with_class, fnv32, is_safe_vfs_path, FsType, MountEntry, MAX_MOUNTS,
+    },
     ops, translation_layer,
 };
 use spin::Mutex as SpinMutex;
@@ -51,6 +53,42 @@ static MOUNT_COUNT: AtomicU32 = AtomicU32::new(0);
 static MOUNTS: SpinMutex<[MountEntry; MAX_MOUNTS]> =
     SpinMutex::new([MountEntry::empty(); MAX_MOUNTS]);
 static IPC_RECV_TIMEOUTS: AtomicU32 = AtomicU32::new(0);
+const MAX_TRACKED_VFS_FDS: usize = 64;
+static FD_OWNERS: SpinMutex<[(u64, u32); MAX_TRACKED_VFS_FDS]> =
+    SpinMutex::new([(0, 0); MAX_TRACKED_VFS_FDS]);
+
+#[inline]
+fn vfs_caller_can_write(sender_pid: u32) -> bool {
+    check_vfs_write_access_with_class(sender_pid, syscall::peer_service_class(sender_pid))
+}
+
+fn register_fd_owner(fd: u64, owner_pid: u32) {
+    let mut table = FD_OWNERS.lock();
+    for slot in table.iter_mut() {
+        if slot.0 == fd || slot.1 == 0 {
+            *slot = (fd, owner_pid);
+            return;
+        }
+    }
+    table[0] = (fd, owner_pid);
+}
+
+fn check_fd_owner(fd: u64, sender_pid: u32) -> bool {
+    if sender_pid == 1 {
+        return true;
+    }
+    let table = FD_OWNERS.lock();
+    table.iter().any(|&(f, owner)| f == fd && owner == sender_pid)
+}
+
+fn unregister_fd_owner(fd: u64) {
+    let mut table = FD_OWNERS.lock();
+    for slot in table.iter_mut() {
+        if slot.0 == fd {
+            *slot = (0, 0);
+        }
+    }
+}
 const CROSS_PROCESS_CHUNK: usize = 4096;
 const LINUX_STAT_SIZE: usize = 144;
 const SERVER_ENDPOINT_ID: u64 = 3;
@@ -197,6 +235,9 @@ fn handle_resolve(payload: &[u8]) -> VfsReply {
             }
         }
     };
+    if !is_safe_vfs_path(&path[..path_len]) {
+        return reply_status(syscall::EACCES);
+    }
     let mut resolved = syscall::ExofsPathResolveResult::default();
 
     let rc = unsafe {
@@ -226,7 +267,7 @@ fn handle_resolve(payload: &[u8]) -> VfsReply {
     }
 }
 
-fn handle_open(payload: &[u8]) -> VfsReply {
+fn handle_open(sender_pid: u32, payload: &[u8]) -> VfsReply {
     // Format préféré: payload[0..4] = flags u32 LE, payload[4..] = chemin C.
     // Compatibilité: si payload[0] ressemble à un chemin, flags=O_RDONLY.
     let (flags, path_payload) = match ops::open_payload_parts(payload) {
@@ -241,6 +282,12 @@ fn handle_open(payload: &[u8]) -> VfsReply {
         }
     };
 
+    // FIX-10: Reject mutating open flags from unauthorized senders.
+    const WRITE_OPEN_MASK: u64 = 0x0001 | 0x0002 | 0x0040 | 0x0200 | 0x0400;
+    if (flags & WRITE_OPEN_MASK) != 0 && !vfs_caller_can_write(sender_pid) {
+        return reply_status(syscall::EACCES);
+    }
+
     let mut path = [0u8; ops::PATH_PAYLOAD_MAX + 1];
     let path_len = match ops::path_payload_to_cstr(path_payload, &mut path) {
         Ok(len) => len,
@@ -253,6 +300,9 @@ fn handle_open(payload: &[u8]) -> VfsReply {
             }
         }
     };
+    if !is_safe_vfs_path(&path[..path_len]) {
+        return reply_status(syscall::EACCES);
+    }
 
     let rights = ops::exofs_rights_for_open(flags);
 
@@ -266,6 +316,7 @@ fn handle_open(payload: &[u8]) -> VfsReply {
             _pad: [0; 40],
         }
     } else {
+        register_fd_owner(fd as u64, sender_pid);
         let mut resolved = syscall::ExofsPathResolveResult::default();
         let resolve_rc = unsafe {
             syscall::exofs_path_resolve_raw(
@@ -361,15 +412,19 @@ fn reply_count(status: i64, count: i64) -> VfsReply {
     }
 }
 
-fn handle_close(payload: &[u8]) -> VfsReply {
+fn handle_close(sender_pid: u32, payload: &[u8]) -> VfsReply {
     let fd = match ops::read_u64(payload, 0) {
         Ok(fd) => fd,
         Err(status) => return reply_status(status),
     };
+    if !check_fd_owner(fd, sender_pid) {
+        return reply_status(syscall::EACCES);
+    }
     let rc = unsafe { syscall::syscall1(syscall::SYS_CLOSE, fd) };
     if rc < 0 {
         reply_status(rc)
     } else {
+        unregister_fd_owner(fd);
         reply_count(0, rc)
     }
 }
@@ -405,6 +460,9 @@ fn handle_read(sender_pid: u32, payload: &[u8]) -> VfsReply {
         Ok(fd) => fd,
         Err(status) => return reply_status(status),
     };
+    if !check_fd_owner(fd, sender_pid) {
+        return reply_status(syscall::EACCES);
+    }
     let buf = match ops::read_u64(payload, 8) {
         Ok(buf) => buf,
         Err(status) => return reply_status(status),
@@ -460,6 +518,9 @@ fn handle_write(sender_pid: u32, payload: &[u8]) -> VfsReply {
         Ok(fd) => fd,
         Err(status) => return reply_status(status),
     };
+    if !check_fd_owner(fd, sender_pid) {
+        return reply_status(syscall::EACCES);
+    }
     let buf = match ops::read_u64(payload, 8) {
         Ok(buf) => buf,
         Err(status) => return reply_status(status),
@@ -517,7 +578,9 @@ fn handle_path_mode(payload: &[u8], nr: u64) -> VfsReply {
         Ok(len) => len,
         Err(status) => return reply_status(status),
     };
-    let _ = path_len;
+    if !is_safe_vfs_path(&path[..path_len]) {
+        return reply_status(syscall::EACCES);
+    }
     let rc = unsafe { syscall::syscall2(nr, path.as_ptr() as u64, mode) };
     reply_status(if rc < 0 { rc } else { 0 })
 }
@@ -528,7 +591,9 @@ fn handle_path_only(payload: &[u8], nr: u64) -> VfsReply {
         Ok(len) => len,
         Err(status) => return reply_status(status),
     };
-    let _ = path_len;
+    if !is_safe_vfs_path(&path[..path_len]) {
+        return reply_status(syscall::EACCES);
+    }
     let rc = unsafe { syscall::syscall1(nr, path.as_ptr() as u64) };
     reply_status(if rc < 0 { rc } else { 0 })
 }
@@ -543,7 +608,9 @@ fn handle_stat(sender_pid: u32, payload: &[u8]) -> VfsReply {
         Ok(len) => len,
         Err(status) => return reply_status(status),
     };
-    let _ = path_len;
+    if !is_safe_vfs_path(&path[..path_len]) {
+        return reply_status(syscall::EACCES);
+    }
     let mut stat_buf = [0u8; LINUX_STAT_SIZE];
     let rc = unsafe {
         syscall::syscall2(
@@ -564,6 +631,9 @@ fn handle_getdents(sender_pid: u32, payload: &[u8]) -> VfsReply {
         Ok(fd) => fd,
         Err(status) => return reply_status(status),
     };
+    if !check_fd_owner(fd, sender_pid) {
+        return reply_status(syscall::EACCES);
+    }
     let buf = match ops::read_u64(payload, 8) {
         Ok(buf) => buf,
         Err(status) => return reply_status(status),
@@ -634,7 +704,9 @@ fn handle_rename(payload: &[u8]) -> VfsReply {
         Ok(len) => len,
         Err(status) => return reply_status(status),
     };
-    let _ = new_len;
+    if !is_safe_vfs_path(&old_path[..old_len]) || !is_safe_vfs_path(&new_path[..new_len]) {
+        return reply_status(syscall::EACCES);
+    }
     let rc = unsafe {
         syscall::syscall2(
             syscall::SYS_RENAME,
@@ -655,16 +727,21 @@ fn handle_truncate(payload: &[u8]) -> VfsReply {
         Ok(len) => len,
         Err(status) => return reply_status(status),
     };
-    let _ = path_len;
+    if !is_safe_vfs_path(&path[..path_len]) {
+        return reply_status(syscall::EACCES);
+    }
     let rc = unsafe { syscall::syscall2(syscall::SYS_TRUNCATE, path.as_ptr() as u64, len) };
     reply_status(if rc < 0 { rc } else { 0 })
 }
 
-fn handle_fsync(payload: &[u8]) -> VfsReply {
+fn handle_fsync(sender_pid: u32, payload: &[u8]) -> VfsReply {
     let fd = match ops::read_u64(payload, 0) {
         Ok(fd) => fd,
         Err(status) => return reply_status(status),
     };
+    if !check_fd_owner(fd, sender_pid) {
+        return reply_status(syscall::EACCES);
+    }
     let rc = unsafe { syscall::syscall1(syscall::SYS_FSYNC, fd) };
     reply_status(if rc < 0 { rc } else { 0 })
 }
@@ -673,25 +750,21 @@ fn handle_request(req: &VfsRequest) -> VfsReply {
     match req.msg_type {
         ops::VFS_MOUNT => handle_mount(req.sender_pid, &req.payload),
         ops::VFS_RESOLVE => handle_resolve(&req.payload),
-        ops::VFS_OPEN => handle_open(&req.payload),
+        ops::VFS_OPEN => handle_open(req.sender_pid, &req.payload),
         ops::VFS_UMOUNT => handle_umount(req.sender_pid, &req.payload),
-        ops::VFS_CLOSE => handle_close(&req.payload),
+        ops::VFS_CLOSE => handle_close(req.sender_pid, &req.payload),
         ops::VFS_READ => handle_read(req.sender_pid, &req.payload),
         ops::VFS_WRITE => {
-            // FIX-APP-06: vérification write access
-            if !check_vfs_write_access(req.sender_pid) {
+            if !vfs_caller_can_write(req.sender_pid) {
                 return VfsReply { status: syscall::EACCES, blob_id: 0, fd: -1, _pad: [0; 40] };
             }
             handle_write(req.sender_pid, &req.payload)
         }
         ops::VFS_STAT => handle_stat(req.sender_pid, &req.payload),
         ops::VFS_GETDENTS => handle_getdents(req.sender_pid, &req.payload),
-        // FIX-APP-06 (complément) : mkdir/unlink/rmdir/rename/truncate sont des
-        // mutations au même titre que write — la garde d'accès ne couvrait que
-        // VFS_WRITE, laissant les services read-only détruire des fichiers.
         ops::VFS_MKDIR | ops::VFS_UNLINK | ops::VFS_RMDIR | ops::VFS_RENAME
         | ops::VFS_TRUNCATE
-            if !check_vfs_write_access(req.sender_pid) =>
+            if !vfs_caller_can_write(req.sender_pid) =>
         {
             VfsReply { status: syscall::EACCES, blob_id: 0, fd: -1, _pad: [0; 40] }
         }
@@ -700,7 +773,7 @@ fn handle_request(req: &VfsRequest) -> VfsReply {
         ops::VFS_RMDIR => handle_path_only(&req.payload, syscall::SYS_RMDIR),
         ops::VFS_RENAME => handle_rename(&req.payload),
         ops::VFS_TRUNCATE => handle_truncate(&req.payload),
-        ops::VFS_FSYNC => handle_fsync(&req.payload),
+        ops::VFS_FSYNC => handle_fsync(req.sender_pid, &req.payload),
         _ => VfsReply {
             status: syscall::EINVAL,
             blob_id: 0,

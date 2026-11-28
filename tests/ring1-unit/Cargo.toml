@@ -11,6 +11,7 @@ description       = "Host unit & integration tests against real Ring 1 server [l
 exo-ipc-router    = { path = "../../servers/ipc_router" }
 exo-init-server   = { path = "../../servers/init_server" }
 exo-crypto-server = { path = "../../servers/crypto_server" }
-exo-vfs-server    = { path = "../../servers/vfs_server" }
-exo-shield        = { path = "../../servers/exo_shield" }
+exo-vfs-server     = { path = "../../servers/vfs_server" }
+exo-network-server = { path = "../../servers/network_server" }
+exo-shield         = { path = "../../servers/exo_shield" }
 exo-syscall-abi   = { path = "../../servers/syscall_abi" }

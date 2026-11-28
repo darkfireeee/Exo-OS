@@ -219,9 +219,58 @@ fn queue_mut() -> &'static mut InputQueue {
     unsafe { &mut *QUEUE.0.get() }
 }
 
+#[inline]
+fn input_caller_can_push(sender_pid: u32) -> bool {
+    syscall::peer_is_any_service(
+        sender_pid,
+        &[
+            syscall::SVC_INIT_SERVER,
+            syscall::SVC_PS2_DRIVER,
+            syscall::SVC_USB_SERVER,
+            syscall::SVC_FB_SERVER,
+        ],
+    )
+}
+
+#[inline]
+fn input_caller_can_subscribe(sender_pid: u32) -> bool {
+    syscall::peer_is_any_service(
+        sender_pid,
+        &[
+            syscall::SVC_INIT_SERVER,
+            syscall::SVC_TTY_SERVER,
+            syscall::SVC_FB_SERVER,
+            syscall::SVC_EXO_COMPOSITOR,
+            syscall::SVC_EXOSH,
+        ],
+    )
+}
+
+#[inline]
+fn endpoint_owned_by_sender(endpoint: u64, sender_pid: u32) -> bool {
+    if endpoint == 0 {
+        return true;
+    }
+    let hi_pid = (endpoint >> 32) as u32;
+    if hi_pid != 0 {
+        hi_pid == sender_pid
+    } else {
+        endpoint == sender_pid as u64
+    }
+}
+
 fn handle(req: &syscall::InputRequest) -> syscall::InputReply {
     match req.msg_type {
         syscall::INPUT_MSG_PUSH => {
+            // FIX-13: Only kernel-attested input producers may inject synthetic HID events.
+            if !input_caller_can_push(req.sender_pid) {
+                return syscall::InputReply {
+                    status: syscall::EPERM,
+                    event: syscall::InputEventWire::default(),
+                    queue_depth: queue_mut().len as u32,
+                    _pad: [0; 4],
+                };
+            }
             let status = if deliver_to_subscriber(req.event, queue_mut().len as u32) {
                 0
             } else {
@@ -241,6 +290,14 @@ fn handle(req: &syscall::InputRequest) -> syscall::InputReply {
             }
         }
         syscall::INPUT_MSG_POLL => {
+            if !input_caller_can_subscribe(req.sender_pid) {
+                return syscall::InputReply {
+                    status: syscall::EPERM,
+                    event: syscall::InputEventWire::default(),
+                    queue_depth: queue_mut().len as u32,
+                    _pad: [0; 4],
+                };
+            }
             let event = queue_mut().pop();
             syscall::InputReply {
                 status: if event.is_some() { 0 } else { syscall::EAGAIN },
@@ -256,7 +313,17 @@ fn handle(req: &syscall::InputRequest) -> syscall::InputReply {
             _pad: [0; 4],
         },
         syscall::INPUT_MSG_ATTACH => {
-            // FIX-INPUT-MULTI: enregistrement dans la table multi-abonnés.
+            // FIX-13: Prevent arbitrary Ring 3 keylogging via INPUT_MSG_ATTACH.
+            if !input_caller_can_subscribe(req.sender_pid)
+                || !endpoint_owned_by_sender(req.reply_endpoint, req.sender_pid)
+            {
+                return syscall::InputReply {
+                    status: syscall::EPERM,
+                    event: syscall::InputEventWire::default(),
+                    queue_depth: queue_mut().len as u32,
+                    _pad: [0; 4],
+                };
+            }
             let ok = SUBSCRIBERS.attach(req.reply_endpoint);
             syscall::InputReply {
                 status: if ok { 0 } else { syscall::ENOMEM },
@@ -266,7 +333,16 @@ fn handle(req: &syscall::InputRequest) -> syscall::InputReply {
             }
         }
         syscall::INPUT_MSG_DETACH => {
-            // FIX-INPUT-MULTI: support du détachement (nouveau type de message).
+            if !input_caller_can_subscribe(req.sender_pid)
+                || !endpoint_owned_by_sender(req.reply_endpoint, req.sender_pid)
+            {
+                return syscall::InputReply {
+                    status: syscall::EPERM,
+                    event: syscall::InputEventWire::default(),
+                    queue_depth: queue_mut().len as u32,
+                    _pad: [0; 4],
+                };
+            }
             SUBSCRIBERS.detach(req.reply_endpoint);
             let _ = KBD_FOCUS_ENDPOINT.compare_exchange(
                 req.reply_endpoint,
@@ -282,6 +358,17 @@ fn handle(req: &syscall::InputRequest) -> syscall::InputReply {
             }
         }
         syscall::INPUT_MSG_GRAB_KBD => {
+            // FIX-13: Only authorized display/seat services may grab exclusive keyboard focus.
+            if !input_caller_can_subscribe(req.sender_pid)
+                || !endpoint_owned_by_sender(req.reply_endpoint, req.sender_pid)
+            {
+                return syscall::InputReply {
+                    status: syscall::EPERM,
+                    event: syscall::InputEventWire::default(),
+                    queue_depth: queue_mut().len as u32,
+                    _pad: [0; 4],
+                };
+            }
             if req.event.value != 0 && req.reply_endpoint != 0 {
                 KBD_FOCUS_ENDPOINT.store(req.reply_endpoint, Ordering::Release);
             } else {
@@ -340,11 +427,15 @@ pub extern "C" fn _start() -> ! {
             continue;
         }
         let reply = handle(&req);
-        let reply_endpoint = if req.msg_type == syscall::INPUT_MSG_ATTACH
+        let reply_endpoint = if (req.msg_type == syscall::INPUT_MSG_ATTACH
             || req.msg_type == syscall::INPUT_MSG_GRAB_KBD
+            || (req.msg_type == syscall::INPUT_MSG_PUSH && req.reply_endpoint == 0))
+            && reply.status >= 0
         {
             0
-        } else if req.reply_endpoint != 0 {
+        } else if req.reply_endpoint != 0
+            && endpoint_owned_by_sender(req.reply_endpoint, req.sender_pid)
+        {
             req.reply_endpoint
         } else {
             req.sender_pid as u64

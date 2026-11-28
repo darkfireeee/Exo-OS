@@ -64,46 +64,58 @@ pub fn map_kernel_event_type(et: u8) -> engine::EventType {
 /// FEED réel qui rend le NGAV non-aveugle (TIER 3.1).
 pub fn drain_shield_feed() {
     let mut buf = [KShieldEvent::zero(); SHIELD_FEED_BATCH];
-    let n = unsafe {
-        syscall::syscall3(
-            syscall::SYS_EXO_SHIELD_DRAIN,
-            buf.as_mut_ptr() as u64,
-            SHIELD_FEED_BATCH as u64,
-            0,
-        )
-    };
-    if n <= 0 {
-        return;
-    }
-    let count = (n as usize).min(SHIELD_FEED_BATCH);
-    let tick = current_tick();
     let empty_payload = [0u8; syscall::IPC_INLINE_PAYLOAD_SIZE];
 
-    for ev in &buf[..count] {
-        if ev.pid == 0 {
-            continue;
-        }
-        let event = engine::MonitoredEvent {
-            pid: ev.pid,
-            event_type: map_kernel_event_type(ev.event_type),
-            opcode: ev.opcode,
-            arg0: ev.arg0,
-            arg1: ev.arg1,
-            timestamp: tick,
-            severity: engine::ThreatLevel::from_u8(ev.severity),
+    // FIX-05: Drain up to 4 batches per tick so bursts cannot starve the ring.
+    for _batch in 0..4 {
+        let n = unsafe {
+            syscall::syscall3(
+                syscall::SYS_EXO_SHIELD_DRAIN,
+                buf.as_mut_ptr() as u64,
+                SHIELD_FEED_BATCH as u64,
+                0,
+            )
         };
-        // Pipeline NGAV : hooks + ML ensemble + soumission moteur.
-        let hook_result = process_security_hooks(&event, &empty_payload);
-        let data = behaviour_data_for_event(&event, &hook_result);
-        let fv = ml::FeatureExtractor::extract(&data);
-        let et_raw = engine_event_to_markov_cat(event.event_type);
-        let ml_result = ml::ensemble_classify(event.pid, et_raw, &fv);
-        let _ = engine::submit_event(&event, tick);
-        // Confinement auto sur menace critique OU ML malicious.
-        if hook_result.level >= engine::ThreatLevel::Critical
-            || ml_result.classification == ml::Classification::Malicious
-        {
-            apply_containment(event.pid, tick);
+        if n <= 0 {
+            return;
+        }
+        let count = (n as usize).min(SHIELD_FEED_BATCH);
+        let tick = current_tick();
+
+        for ev in &buf[..count] {
+            if ev.pid == 0 {
+                continue;
+            }
+            let event = engine::MonitoredEvent {
+                pid: ev.pid,
+                event_type: map_kernel_event_type(ev.event_type),
+                opcode: ev.opcode,
+                arg0: ev.arg0,
+                arg1: ev.arg1,
+                timestamp: tick,
+                severity: engine::ThreatLevel::from_u8(ev.severity),
+            };
+            // Pipeline NGAV : hooks + ML ensemble + soumission moteur.
+            let hook_result = process_security_hooks(&event, &empty_payload);
+            let data = behaviour_data_for_event(&event, &hook_result);
+            let fv = ml::FeatureExtractor::extract(&data);
+            let et_raw = engine_event_to_markov_cat(event.event_type);
+            let ml_result = ml::ensemble_classify(event.pid, et_raw, &fv);
+            let submit_res = engine::submit_event(&event, tick);
+
+            // FIX-08: Honor escalation to Kill (SYS_KILL) or Quarantine (Zero-Trust).
+            if hook_result.kill_recommended {
+                apply_kill_containment(event.pid, tick);
+            } else if hook_result.level >= engine::ThreatLevel::Critical
+                || ml_result.classification == ml::Classification::Malicious
+                || submit_res.contained
+            {
+                apply_containment(event.pid, tick);
+            }
+        }
+
+        if count < SHIELD_FEED_BATCH {
+            break;
         }
     }
 }

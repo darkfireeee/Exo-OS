@@ -150,7 +150,7 @@ pub fn sys_exo_cap_check(
 /// restrictions, never removes any. Init (PID 1) cannot pledge (PLEDGE-03).
 ///
 /// Returns: `0` if applied (or nothing to restrict), `EPERM` if init / PID out of range.
-pub fn sys_exo_pledge(promises: u64, flags: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
+pub fn sys_exo_pledge(promises: u64, flags: u64, a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_EXO_PLEDGE);
     let caller_pid = crate::syscall::fast_path::syscall_current_pid();
     if caller_pid == 0 {
@@ -159,6 +159,25 @@ pub fn sys_exo_pledge(promises: u64, flags: u64, _a3: u64, _a4: u64, _a5: u64, _
     // Read-only restriction query (`promises == 0 && flags == 1`) used by `ld-exo.so` (`dlopen` check).
     if promises == 0 && flags == 1 {
         return crate::security::zero_trust::process_restrictions(caller_pid) as i64;
+    }
+    // FIX-11..FIX-15: Kernel-attested Ring 1 peer identity & zero-trust restriction queries.
+    // Strictly restricted to PID 1 (`init_server`) and kernel-attested Ring 1 services.
+    if promises == 0 && (flags == 2 || flags == 3) {
+        let caller_class =
+            crate::security::ipc_policy::service_class_of(crate::process::core::pid::Pid(caller_pid));
+        if caller_pid != 1 && caller_class == crate::security::ipc_policy::ServiceClass::Unknown {
+            return EPERM;
+        }
+        let target_pid = match checked_u32_sysarg(a3) {
+            Ok(v) => v,
+            Err(e) => return e,
+        };
+        if flags == 2 {
+            return crate::security::ipc_policy::service_class_of(
+                crate::process::core::pid::Pid(target_pid),
+            ) as u8 as i64;
+        }
+        return crate::security::zero_trust::process_restrictions(target_pid) as i64;
     }
     let mut restrictions = crate::security::zero_trust::pledge_promises_to_restrictions(promises);
     if promises != crate::security::isolation::pledge::pledge_flags::UNRESTRICTED {
@@ -171,8 +190,9 @@ pub fn sys_exo_pledge(promises: u64, flags: u64, _a3: u64, _a4: u64, _a5: u64, _
     if restrictions == 0 {
         return 0;
     }
-    // restrict_process is monotonic and rejects init (PID 1) / PID out of range.
-    if crate::security::zero_trust::restrict_process(caller_pid, restrictions) {
+    // FIX-07 (RULE PLEDGE-01): record_pledge_restrictions persists base pledge
+    // separately from transient quarantine, and rejects init (PID 1) / out of range.
+    if crate::security::zero_trust::record_pledge_restrictions(caller_pid, restrictions) {
         0
     } else {
         EPERM

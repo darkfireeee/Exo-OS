@@ -59,10 +59,51 @@ pub fn fnv32(s: &[u8]) -> u32 {
     h
 }
 
-/// FIX-APP-06: PIDs 2..9 (non-storage Ring 1 servers) are read-only except PID 1 (init) & PID 5 (vfs).
+/// FIX-10: Strict VFS IPC write authorization.
+/// Removes the insecure `sender_pid >= 10` and static `sender_pid == 5` wildcards:
+/// only `init_server` (PID 1) or a kernel-attested `VfsServer`/`InitServer` may
+/// issue direct VFS IPC mutations (Ring 3 apps use kernel POSIX syscalls enforced
+/// by `fs_bridge` UID/mode/Zero-Trust rules).
+#[inline]
+pub const fn check_vfs_write_access_with_class(sender_pid: u32, service_class: u8) -> bool {
+    sender_pid == 1
+        || service_class == syscall::SVC_INIT_SERVER
+        || service_class == syscall::SVC_VFS_SERVER
+}
+
+/// Pure static predicate (host-testable without syscalls): only PID 1 is authorized
+/// without a kernel-attested `ServiceClass`.
 #[inline]
 pub const fn check_vfs_write_access(sender_pid: u32) -> bool {
-    sender_pid == 1 || sender_pid == 5 || sender_pid >= 10
+    sender_pid == 1
+}
+
+/// FIX-10: Rejects relative paths, empty paths, interior NULs, and `..` traversal components.
+pub fn is_safe_vfs_path(path: &[u8]) -> bool {
+    if path.is_empty() || path[0] != b'/' {
+        return false;
+    }
+    let mut i = 0usize;
+    while i < path.len() {
+        if path[i] == 0 {
+            return false;
+        }
+        while i < path.len() && path[i] == b'/' {
+            i += 1;
+        }
+        let start = i;
+        while i < path.len() && path[i] != b'/' {
+            if path[i] == 0 {
+                return false;
+            }
+            i += 1;
+        }
+        let seg = &path[start..i];
+        if seg == b".." {
+            return false;
+        }
+    }
+    true
 }
 
 /// Pure stateful mount table usable both in Ring 1 (`vfs_server`) and host unit tests.

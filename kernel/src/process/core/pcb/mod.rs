@@ -41,6 +41,10 @@ pub struct ProcessControlBlock {
     pub flags: AtomicU32,
     pub exit_code: AtomicU32,
     pub umask: AtomicU32,
+    /// FIX-25: PR_SET_PDEATHSIG signal number (cleared on fork).
+    pub pdeathsig: AtomicU32,
+    /// FIX-25: Process execution domain personality (Linux personality(2)).
+    pub personality: AtomicU32,
 
     // ── Threads ───────────────────────────────────────────────────────────────
     pub thread_count: AtomicU32,

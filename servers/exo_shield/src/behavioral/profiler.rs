@@ -50,25 +50,23 @@ pub enum SyscallCategory {
 }
 
 impl SyscallCategory {
-    /// Classifie un numéro de syscall dans sa catégorie.
-    /// Classification Linux/x86_64 simplifiée.
+    /// Classifie un numéro de syscall dans sa catégorie (FIX-24 : aligné sur l'ABI Exo-OS / x86_64).
     pub fn from_syscall_nr(nr: u64) -> SyscallCategory {
         match nr {
-            0..=19 => SyscallCategory::File,  // read, write, open, close, etc.
-            20..=39 => SyscallCategory::File, // more file ops
-            40..=59 => SyscallCategory::Process, // pid, execve, etc.
-            60..=79 => SyscallCategory::File, // more file ops
-            80..=99 => SyscallCategory::File, // more file ops
-            100..=119 => SyscallCategory::File, // more file ops
-            120..=139 => SyscallCategory::Process, // clone, wait, etc.
-            140..=159 => SyscallCategory::File, // more file ops
-            160..=179 => SyscallCategory::Ipc, // ipc, shm, etc.
-            200..=219 => SyscallCategory::File, // more file ops
-            220..=239 => SyscallCategory::File, // more file ops
-            240..=259 => SyscallCategory::File, // more file ops
-            260..=279 => SyscallCategory::Network, // socket, bind, etc.
-            280..=299 => SyscallCategory::Ipc, // ipc extended
-            300..=319 => SyscallCategory::Ipc, // ipc router
+            // File I/O: read(0), write(1), open(2), close(3), stat..lseek(4..8), pread/pwrite/readv/writev(17..22), openat..statx(257..332)
+            0..=8 | 16..=22 | 32..=33 | 72..=94 | 257..=269 | 332 => SyscallCategory::File,
+            // Memory: mmap(9), mprotect(10), munmap(11), brk(12), mremap(25), madvise(28)
+            9..=12 | 25..=28 => SyscallCategory::Memory,
+            // Signal: rt_sigaction(13), rt_sigprocmask(14), rt_sigreturn(15), kill(62), tkill(200), tgkill(234)
+            13..=15 | 62 | 127..=131 | 200 | 234 => SyscallCategory::Signal,
+            // Network: socket(41)..getsockopt(55), accept4(288)
+            41..=55 | 288 => SyscallCategory::Network,
+            // Process: getpid(39), clone(56), fork(57), vfork(58), execve(59), exit(60), wait4(61), ptrace(101), prctl(157), exit_group(231)
+            39 | 56..=61 | 101..=112 | 157 | 231 => SyscallCategory::Process,
+            // Time: nanosleep(35), gettimeofday(96), clock_gettime(228..230)
+            35 | 96 | 228..=230 => SyscallCategory::Time,
+            // Exo-OS native IPC, Capabilities, Ring 1 & ExoShield syscalls (350..=599)
+            300..=599 => SyscallCategory::Ipc,
             _ => SyscallCategory::Other,
         }
     }

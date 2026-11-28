@@ -67,6 +67,8 @@ fn mark_exit(
     thread.set_state(TaskState::Dead);
     unsafe {
         crate::scheduler::fpu::free_fpu_state(&mut thread.sched_tcb);
+        // FIX-21: Release per-thread CET Shadow Stack pages (no-op if CET inactive for thread).
+        crate::security::exocage::disable_cet_for_thread(&mut thread.sched_tcb);
     }
 
     // T6-003 FIX: Distinguish thread-exit and process-exit.

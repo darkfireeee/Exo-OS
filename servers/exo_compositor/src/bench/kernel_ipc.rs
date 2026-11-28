@@ -141,7 +141,7 @@ pub fn bench_ipc_security() -> ModuleBenchReport {
         name: String::from("Intégrité Bus IPC"),
         value_text: format!("{} perdus", drops),
         score_100: if drops == 0 { 100 } else { 72 },
-        detail: String::from("Politique 125 arêtes vérifiée"),
+        detail: String::from("Politique 118 arêtes vérifiée"),
     });
 
     let score = avg_score(&metrics);

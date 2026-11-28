@@ -67,6 +67,8 @@ impl ProcessControlBlock {
             flags: AtomicU32::new(0),
             exit_code: AtomicU32::new(0),
             umask: AtomicU32::new(DEFAULT_UMASK),
+            pdeathsig: AtomicU32::new(0),
+            personality: AtomicU32::new(0),
             thread_count: AtomicU32::new(1),
             max_threads: AtomicU32::new(types::DEFAULT_MAX_THREADS_PER_PROCESS),
             main_thread,
@@ -206,6 +208,53 @@ impl ProcessControlBlock {
     pub fn set_exiting(&self) {
         self.flags
             .fetch_or(process_flags::EXITING, Ordering::Release);
+    }
+
+    #[inline(always)]
+    pub fn has_no_new_privs(&self) -> bool {
+        (self.flags.load(Ordering::Acquire) & process_flags::NO_NEW_PRIVS) != 0
+    }
+
+    #[inline(always)]
+    pub fn set_no_new_privs(&self) {
+        self.flags
+            .fetch_or(process_flags::NO_NEW_PRIVS, Ordering::Release);
+    }
+
+    #[inline(always)]
+    pub fn is_dumpable(&self) -> bool {
+        (self.flags.load(Ordering::Acquire) & process_flags::NO_DUMP) == 0
+    }
+
+    #[inline(always)]
+    pub fn set_dumpable(&self, dumpable: bool) {
+        if dumpable {
+            self.flags
+                .fetch_and(!process_flags::NO_DUMP, Ordering::Release);
+        } else {
+            self.flags
+                .fetch_or(process_flags::NO_DUMP, Ordering::Release);
+        }
+    }
+
+    #[inline(always)]
+    pub fn pdeathsig(&self) -> u32 {
+        self.pdeathsig.load(Ordering::Acquire)
+    }
+
+    #[inline(always)]
+    pub fn set_pdeathsig(&self, sig: u32) {
+        self.pdeathsig.store(sig, Ordering::Release);
+    }
+
+    #[inline(always)]
+    pub fn personality(&self) -> u32 {
+        self.personality.load(Ordering::Acquire)
+    }
+
+    #[inline(always)]
+    pub fn set_personality(&self, persona: u32) -> u32 {
+        self.personality.swap(persona, Ordering::AcqRel)
     }
 
     #[inline(always)]

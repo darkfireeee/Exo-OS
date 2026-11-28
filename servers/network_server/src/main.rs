@@ -422,7 +422,32 @@ impl NetworkService {
             .with_u32(8, snap.so_error as u32)
     }
 
+    #[inline]
+    fn is_sender_inet_blocked(sender_pid: u32) -> bool {
+        if sender_pid <= 1 {
+            return false;
+        }
+        let r = exo_syscall_abi::peer_restrictions(sender_pid);
+        (r & (exo_syscall_abi::EXO_RESTRICT_SANDBOX_FULL
+            | exo_syscall_abi::EXO_RESTRICT_NO_NETWORK
+            | exo_syscall_abi::EXO_RESTRICT_NO_INET))
+            != 0
+    }
+
+    #[inline]
+    fn is_sender_unix_blocked(sender_pid: u32) -> bool {
+        if sender_pid <= 1 {
+            return false;
+        }
+        let r = exo_syscall_abi::peer_restrictions(sender_pid);
+        (r & (exo_syscall_abi::EXO_RESTRICT_SANDBOX_FULL | exo_syscall_abi::EXO_RESTRICT_NO_NETWORK))
+            != 0
+    }
+
     fn handle_socketpair(&mut self, msg: NetMsg) -> NetReply {
+        if Self::is_sender_unix_blocked(msg.sender_pid) {
+            return NetReply::error(exo_syscall_abi::EACCES);
+        }
         let domain = msg.arg1 as u32;
         let ty = msg.arg2 as u32;
         const AF_UNIX: u32 = 1;
@@ -487,11 +512,16 @@ impl NetworkService {
     }
 
     fn handle_open(&mut self, msg: NetMsg) -> NetReply {
-        let kind = match SocketKind::from_domain_type_privileged(
+        if Self::is_sender_inet_blocked(msg.sender_pid) {
+            return NetReply::error(exo_syscall_abi::EACCES);
+        }
+        let caller_class = exo_syscall_abi::peer_service_class(msg.sender_pid);
+        let kind = match SocketKind::from_domain_type_for_service(
             msg.arg1 as u32,
             msg.arg2 as u32,
             msg.arg3,
             msg.sender_pid,
+            caller_class,
         ) {
             Ok(kind) => kind,
             Err(err) => return NetReply::error(err),
@@ -509,6 +539,9 @@ impl NetworkService {
     }
 
     fn handle_bind(&mut self, msg: NetMsg) -> NetReply {
+        if Self::is_sender_inet_blocked(msg.sender_pid) {
+            return NetReply::error(exo_syscall_abi::EACCES);
+        }
         self.iface.ensure_interface(&mut self.device, &self.pool);
         match self
             .sockets
@@ -524,6 +557,9 @@ impl NetworkService {
     }
 
     fn handle_connect(&mut self, msg: NetMsg) -> NetReply {
+        if Self::is_sender_inet_blocked(msg.sender_pid) {
+            return NetReply::error(exo_syscall_abi::EACCES);
+        }
         let remote_addr = msg.arg1 as u32;
         let remote_port = msg.arg2 as u16;
         let nonblock = (msg.arg4 & 1) != 0;
@@ -644,6 +680,9 @@ impl NetworkService {
     }
 
     fn handle_sendto_data(&mut self, msg: NetMsg, inline_data: &[u8]) -> NetReply {
+        if Self::is_sender_inet_blocked(msg.sender_pid) {
+            return NetReply::error(exo_syscall_abi::EACCES);
+        }
         let use_window = (msg.arg4 & NET_FLAG_USE_DATA_WINDOW) != 0;
         let len = msg.arg1.min(u32::MAX as u64) as usize;
         if use_window {

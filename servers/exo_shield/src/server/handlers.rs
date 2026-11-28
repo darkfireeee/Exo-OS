@@ -38,11 +38,48 @@ pub fn handle_scan_request(req: &ShieldRequest) -> ShieldReply {
         return ShieldReply::new(SHIELD_ERR_ARGS);
     }
 
-    // Execute the scan directly against provided data
+    // Execute the scan directly against provided data — or, for `scan_type == 2` (memory)
+    // with `data_len == 0` on bare-metal, pull up to 4 KiB from `target_pid` via
+    // read-only `SYS_EXO_MEM_COPY_FROM_PID` (FIX-24).
     let profile = engine::active_scan_profile();
     let heuristic_level = profile.map(|p| p.heuristic_level).unwrap_or(1);
 
-    let result = engine::execute_scan(target_pid, scan_data, scan_type, heuristic_level, tick);
+    let mut remote_buf = [0u8; 4096];
+    let effective_data: &[u8] = if scan_type == 2 && data_len == 0 {
+        #[cfg(target_os = "none")]
+        {
+            let remote_addr = read_u64_le(&req.payload, 10);
+            let remote_len = (read_u32_le(&req.payload, 18) as usize).min(remote_buf.len());
+            if remote_addr != 0 && remote_len > 0 {
+                let rc = unsafe {
+                    syscall::syscall5(
+                        syscall::SYS_EXO_MEM_COPY_FROM_PID,
+                        target_pid as u64,
+                        remote_addr,
+                        remote_buf.as_mut_ptr() as u64,
+                        remote_len as u64,
+                        0,
+                    )
+                };
+                if rc > 0 {
+                    &remote_buf[..(rc as usize).min(remote_len)]
+                } else {
+                    scan_data
+                }
+            } else {
+                scan_data
+            }
+        }
+        #[cfg(not(target_os = "none"))]
+        {
+            let _ = &mut remote_buf;
+            scan_data
+        }
+    } else {
+        scan_data
+    };
+
+    let result = engine::execute_scan(target_pid, effective_data, scan_type, heuristic_level, tick);
     engine::stat_scan_executed(result.matched);
 
     // Also queue for periodic tracking
@@ -149,7 +186,9 @@ pub fn handle_event_report(req: &ShieldRequest) -> ShieldReply {
         .unwrap_or(0);
     }
 
-    if hook_result.level >= engine::ThreatLevel::Critical
+    if hook_result.kill_recommended {
+        contained = apply_kill_containment(target_pid, tick) || contained;
+    } else if hook_result.level >= engine::ThreatLevel::Critical
         || ml_classification == ml::Classification::Malicious
     {
         contained = apply_containment(target_pid, tick) || contained;
@@ -463,6 +502,27 @@ pub fn handle_policy_update(req: &ShieldRequest) -> ShieldReply {
 
             match engine::add_signature(&entry) {
                 Some(id) => {
+                    // FIX-24: Mirror added signature into the YARA-like rule engine too.
+                    let pat_len =
+                        (entry.pattern_len as usize).min(signatures::yara::CONDITION_VALUE_SIZE);
+                    if pat_len > 0 {
+                        let rule_name = &entry.name[..(entry.name_len as usize).min(entry.name.len())];
+                        let mut rule = signatures::yara::Rule::new(
+                            if rule_name.is_empty() { b"dyn_sig" } else { rule_name },
+                            signatures::yara::RuleAction::Alert,
+                            100,
+                            entry.severity.as_u8(),
+                        );
+                        let mut cond = signatures::yara::Condition::empty();
+                        cond.cond_type = signatures::yara::ConditionType::Contains;
+                        cond.field = signatures::yara::FieldType::RawData;
+                        cond.length = pat_len as u8;
+                        cond.value[..pat_len].copy_from_slice(&entry.pattern[..pat_len]);
+                        cond.enabled = true;
+                        rule.conditions[0] = cond;
+                        rule.condition_count = 1;
+                        let _ = signatures::yara::add_rule(&rule);
+                    }
                     let mut reply = ShieldReply::new(SHIELD_OK);
                     reply.data[0..4].copy_from_slice(&id.to_le_bytes());
                     reply
@@ -642,6 +702,46 @@ pub fn handle_pmc_anomaly_report(req: &ShieldRequest) -> ShieldReply {
     reply
 }
 
+/// Handle AUDIT_QUERY (msg_type 7 — FIX-06).
+///
+/// Capability-gated read of `ipc_gate` audit counters and most recent matching entry.
+/// Payload layout:
+///   [0..4] filter_src_pid (0 = any)
+///   [4..8] filter_msg_type (0 = any)
+///   [8]    filter_action (0xFF = any)
+/// Reply:
+///   data[0..8]   = total_entries (LE)
+///   data[8..16]  = denied_count (LE)
+///   data[16..24] = rate_limited_count (LE)
+///   data[24..28] = matched_count (LE)
+///   data[28..32] = latest.src_pid (LE)
+///   data[32..36] = latest.msg_type (LE)
+///   data[36]     = latest.action
+///   data[37]     = latest.result
+pub fn handle_audit_query(req: &ShieldRequest) -> ShieldReply {
+    let mut filter = ipc_gate::AuditFilter::default();
+    filter.src_pid = read_u32_le(&req.payload, 0);
+    filter.msg_type = read_u32_le(&req.payload, 4);
+    filter.action = req.payload[8];
+
+    let stats = ipc_gate::get_audit_stats();
+    let mut recent = [AuditEntry::empty(); 1];
+    let res = ipc_gate::query_audit_filtered(&filter, &mut recent);
+
+    let mut reply = ShieldReply::new(SHIELD_OK);
+    reply.data[0..8].copy_from_slice(&stats.total_entries.to_le_bytes());
+    reply.data[8..16].copy_from_slice(&stats.denied.to_le_bytes());
+    reply.data[16..24].copy_from_slice(&stats.rate_limited.to_le_bytes());
+    reply.data[24..28].copy_from_slice(&res.matched.to_le_bytes());
+    if res.written > 0 {
+        reply.data[28..32].copy_from_slice(&recent[0].src_pid.to_le_bytes());
+        reply.data[32..36].copy_from_slice(&recent[0].msg_type.to_le_bytes());
+        reply.data[36] = recent[0].action;
+        reply.data[37] = recent[0].result;
+    }
+    reply
+}
+
 // ── Dispatch ────────────────────────────────────────────────────────────────
 
 pub fn handle_request(req: &ShieldRequest) -> ShieldReply {
@@ -661,6 +761,7 @@ pub fn handle_request(req: &ShieldRequest) -> ShieldReply {
         POLICY_UPDATE => handle_policy_update(req),
         HEARTBEAT => handle_heartbeat(req),
         PMC_ANOMALY_REPORT => handle_pmc_anomaly_report(req),
+        AUDIT_QUERY => handle_audit_query(req),
         _ => ShieldReply::new(SHIELD_ERR_ARGS),
     };
 

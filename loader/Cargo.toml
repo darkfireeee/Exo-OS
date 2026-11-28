@@ -19,4 +19,6 @@ default = []
 dynamic_linking = []
 
 [dependencies]
+blake3 = { workspace = true }
+ed25519-dalek = { workspace = true }
 exo-abi = { path = "../libs/exo-abi" }

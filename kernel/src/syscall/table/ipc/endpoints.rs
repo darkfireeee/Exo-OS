@@ -80,6 +80,59 @@ pub(super) enum ReserveEndpointOwnerOutcome {
     AlreadyOwned,
 }
 
+/// FIX-03: Validates that a process's normalized PCB binary name matches the
+/// canonical Ring 1 / system binary allowed to claim `class`.
+#[cfg_attr(test, allow(dead_code))]
+fn pcb_name_matches_service_class(
+    name_snap: &[u8; crate::process::core::pcb::PROCESS_NAME_LEN],
+    class: crate::security::ServiceClass,
+) -> bool {
+    let mut len = 0usize;
+    while len < name_snap.len() && name_snap[len] != 0 {
+        len += 1;
+    }
+    let n = &name_snap[..len];
+    use crate::security::ServiceClass;
+    match class {
+        ServiceClass::IpcBroker => n.starts_with(b"ipc-router") || n.starts_with(b"ipc_router"),
+        ServiceClass::MemoryServer => {
+            n.starts_with(b"memory_server") || n.starts_with(b"memory-server")
+        }
+        ServiceClass::VfsServer => n.starts_with(b"vfs_server") || n.starts_with(b"vfs-server"),
+        ServiceClass::CryptoServer => {
+            n.starts_with(b"crypto_server") || n.starts_with(b"crypto-server")
+        }
+        ServiceClass::DeviceServer => {
+            n.starts_with(b"device_server") || n.starts_with(b"device-server")
+        }
+        ServiceClass::VirtioDriver => {
+            n.starts_with(b"virtio") || n.starts_with(b"e1000") || n.starts_with(b"loopback")
+        }
+        ServiceClass::Ps2Driver => n.starts_with(b"ps2"),
+        ServiceClass::NetworkServer => {
+            n.starts_with(b"network_server") || n.starts_with(b"network-server")
+        }
+        ServiceClass::SchedulerServer => {
+            n.starts_with(b"scheduler_serv") || n.starts_with(b"scheduler-serv")
+        }
+        ServiceClass::InputServer => {
+            n.starts_with(b"input_server") || n.starts_with(b"input-server")
+        }
+        ServiceClass::TtyServer => n.starts_with(b"tty_server") || n.starts_with(b"tty-server"),
+        ServiceClass::FbServer => n.starts_with(b"fb_server") || n.starts_with(b"fb-server"),
+        ServiceClass::ExoShield => n.starts_with(b"exo-shield") || n.starts_with(b"exo_shield"),
+        ServiceClass::Exosh => n.starts_with(b"exosh"),
+        ServiceClass::ExoCompositor => {
+            n.starts_with(b"exo_compositor") || n.starts_with(b"exo-compositor")
+        }
+        ServiceClass::AudioServer => {
+            n.starts_with(b"audio_server") || n.starts_with(b"audio-server")
+        }
+        ServiceClass::UsbServer => n.starts_with(b"usb_server") || n.starts_with(b"usb-server"),
+        ServiceClass::InitServer | ServiceClass::Unknown => false,
+    }
+}
+
 pub(super) fn reserve_ipc_endpoint_owner(
     endpoint: u64,
     owner_pid: u32,
@@ -109,7 +162,9 @@ pub(super) fn reserve_ipc_endpoint_owner(
             if entry.owner_pid == owner_pid {
                 return Ok(ReserveEndpointOwnerOutcome::AlreadyOwned);
             }
-            if !crate::process::is_alive(entry.owner_pid) || is_system {
+            // FIX-03: Never allow overwriting an endpoint owned by a live process,
+            // even when `is_system` is true.
+            if !crate::process::is_alive(entry.owner_pid) {
                 owners[idx] = IpcEndpointOwner {
                     endpoint,
                     owner_pid,
@@ -206,6 +261,28 @@ pub(super) fn ipc_endpoint_owner_pid(endpoint: u64) -> Option<u32> {
         .map(|entry| entry.owner_pid)
 }
 
+/// Returns `true` when `endpoint` is a well-known registered Ring 1 service
+/// request mailbox (`(endpoint >> 32) == 0`) owned by a different process with
+/// a recognized `ServiceClass` (never a raw Ring 3 client PID reply target).
+pub(super) fn is_registered_service_request_mailbox(endpoint: u64, caller_pid: u32) -> bool {
+    if endpoint == 0 || (endpoint >> 32) != 0 {
+        return false;
+    }
+    let owner_pid = {
+        let owners = IPC_ENDPOINT_OWNERS.lock();
+        owners
+            .iter()
+            .find(|entry| entry.endpoint == endpoint && entry.owner_pid != 0)
+            .map(|entry| entry.owner_pid)
+    };
+    match owner_pid {
+        Some(owner) if owner != caller_pid => {
+            crate::security::service_class_of(Pid(owner)) != crate::security::ServiceClass::Unknown
+        }
+        _ => false,
+    }
+}
+
 pub(super) fn primary_ipc_endpoint_for_owner(owner_pid: u32) -> Option<u64> {
     if owner_pid == 0 {
         return None;
@@ -261,6 +338,8 @@ pub fn sys_exo_ipc_create(
         return EFAULT;
     }
 
+    let reserved_class = service_class_for_endpoint_name(name);
+
     let is_system = if cfg!(test) {
         true
     } else if caller_pid == 1 {
@@ -268,12 +347,45 @@ pub fn sys_exo_ipc_create(
     } else {
         crate::process::core::registry::PROCESS_REGISTRY
             .find_by_pid(Pid(caller_pid))
-            .map(|pcb| pcb.ppid().0 == 1 && pcb.creds.lock().euid == 0)
+            .map(|pcb| {
+                let is_init_root = pcb.ppid().0 == 1 && pcb.creds.lock().euid == 0;
+                if !is_init_root {
+                    return false;
+                }
+                // FIX-03: Reserved Ring 1 / system service classes require canonical
+                // binary identity attestation (prevents rogue root/init children like
+                // test runners from hijacking reserved service classes).
+                if let Some(class) = reserved_class {
+                    pcb_name_matches_service_class(&pcb.name_snapshot(), class)
+                } else {
+                    true
+                }
+            })
             .unwrap_or(false)
     };
 
-    if service_class_for_endpoint_name(name).is_some() && !is_system {
-        return EPERM;
+    if let Some(class) = reserved_class {
+        let _ = class;
+        if !is_system {
+            return EPERM;
+        }
+        // FIX-03: Prevent a second live process from claiming an already-active
+        // single-instance reserved service class (VirtioDriver is multi-driver).
+        #[cfg(not(test))]
+        if class != crate::security::ServiceClass::VirtioDriver
+            && crate::security::ipc_policy::class_has_other_live_owner(class, caller_pid)
+        {
+            return EEXIST;
+        }
+    }
+
+    // FIX-03: Never overwrite a live endpoint name owned by another live process.
+    if let Some(existing_ep) = crate::ipc::endpoint::lookup_endpoint(name) {
+        if let Some(existing_owner) = ipc_endpoint_owner_pid(existing_ep.get()) {
+            if existing_owner != caller_pid && crate::process::is_alive(existing_owner) {
+                return EEXIST;
+            }
+        }
     }
 
     let reserve_outcome = match reserve_ipc_endpoint_owner(endpoint, caller_pid, is_system) {

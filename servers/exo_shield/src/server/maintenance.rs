@@ -30,12 +30,18 @@ pub fn perform_maintenance() {
         let assessment = engine::assess_pid(scan_req.pid, tick);
         engine::stat_assessments_inc();
 
-        // If assessment shows high threat, auto-contain
-        if assessment.recommended_action as u8 >= engine::ContainmentAction::Quarantine as u8 {
+        // If assessment shows high threat, auto-contain (and kill on Critical/Kill).
+        if assessment.recommended_action == engine::ContainmentAction::Kill {
+            if apply_kill_containment(scan_req.pid, tick) {
+                engine::stat_containments_inc();
+            }
+        } else if assessment.recommended_action as u8 >= engine::ContainmentAction::Quarantine as u8
+        {
             if apply_containment(scan_req.pid, tick) {
                 engine::stat_containments_inc();
             }
-
+        }
+        if assessment.recommended_action as u8 >= engine::ContainmentAction::Quarantine as u8 {
             // Generate alert
             let desc: &[u8] = if assessment.composite_score >= 750 {
                 b"auto_contain_critical"

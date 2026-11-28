@@ -106,8 +106,26 @@ impl SettingsApp {
         for idx in 0..3 {
             let r = Rect::new(c.x + 24, y, c.w - 48, 46);
             if Rect::new(r.right() - 124, r.y + 9, 110, 28).contains(mx, my) {
+                // FIX-25: Require explicit ExoAuth admin elevation before altering NetCap policies.
+                if !cfg.admin_unlocked {
+                    return AppAction::RequestAdminElevation {
+                        reason: String::from(cfg.lang.pick(
+                            "Modifier la politique pare-feu NetCap par application",
+                            "Modify per-application NetCap firewall policy",
+                        )),
+                    };
+                }
                 cfg.net_policies[idx] = (cfg.net_policies[idx] + 1) % 3;
-                return AppAction::Redraw;
+                let state = match cfg.net_policies[idx] {
+                    1 => cfg.lang.pick("Autoriser", "Allow"),
+                    2 => cfg.lang.pick("Bloquer", "Block"),
+                    _ => cfg.lang.pick("Demander", "Ask"),
+                };
+                return AppAction::StatusToast(format!(
+                    "{}: {}",
+                    cfg.lang.pick("Politique NetCap enregistrée", "NetCap policy updated"),
+                    state
+                ));
             }
             y += 54;
         }
@@ -214,7 +232,7 @@ impl SettingsApp {
         let mut bx = scard.x + 14;
         bx += draw_badge(cv, bx, scard.y + 44, "KPTI + SMAP + SMEP", pal.success, &fonts.sm) + 8;
         bx += draw_badge(cv, bx, scard.y + 44, "IOMMU VT-d", pal.success, &fonts.sm) + 8;
-        draw_badge(cv, bx, scard.y + 44, lang.pick("125 règles IPC", "125 IPC rules"), pal.accent, &fonts.sm);
+        draw_badge(cv, bx, scard.y + 44, lang.pick("118 règles IPC", "118 IPC rules"), pal.accent, &fonts.sm);
         cv.draw_text(
             &fonts.sm,
             scard.x + 14,

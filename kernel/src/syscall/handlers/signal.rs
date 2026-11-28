@@ -292,6 +292,32 @@ pub fn sys_rt_sigreturn(_a1: u64, _a2: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u
     EINVAL
 }
 
+/// FIX-07 / VAR-08: Enforces Zero-Trust / Pledge confinement on cross-PID signals.
+/// Processes pledged without `PROC` (`NO_FORK | NO_PROCESS_CREATE`) or quarantined
+/// (`SANDBOX_FULL`) cannot signal other PIDs, and `NO_RING1_CRITICAL_IPC` processes
+/// cannot signal init (PID 1) or registered Ring 1 services.
+#[inline]
+fn cross_pid_signal_allowed_by_zero_trust(caller_pid: u32, target_pid: u32) -> bool {
+    use crate::security::zero_trust::restriction_flags;
+    let restrictions = crate::security::zero_trust::process_restrictions(caller_pid);
+    if (restrictions
+        & (restriction_flags::NO_FORK
+            | restriction_flags::NO_PROCESS_CREATE
+            | restriction_flags::SANDBOX_FULL))
+        != 0
+    {
+        return false;
+    }
+    if (restrictions & restriction_flags::NO_RING1_CRITICAL_IPC) != 0
+        && (target_pid == 1
+            || crate::security::service_class_of(Pid(target_pid))
+                != crate::security::ServiceClass::Unknown)
+    {
+        return false;
+    }
+    true
+}
+
 /// `kill(pid, sig)` -> 0 or errno.
 pub fn sys_kill(pid: u64, signum: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     use crate::process::signal::delivery::{send_signal_number_to_pid, SendError};
@@ -319,9 +345,12 @@ pub fn sys_kill(pid: u64, signum: u64, _a3: u64, _a4: u64, _a5: u64, _a6: u64) -
         target_pid as u32
     };
 
-    // Verify POSIX privileges for kill (AUDIT-SEC3)
+    // Verify POSIX privileges & Zero-Trust confinement for kill (AUDIT-SEC3 / FIX-07 / VAR-08)
     let caller_pid = crate::syscall::fast_path::syscall_current_pid();
     if caller_pid != real_pid {
+        if !cross_pid_signal_allowed_by_zero_trust(caller_pid, real_pid) {
+            return EPERM;
+        }
         let caller_pcb = match PROCESS_REGISTRY.find_by_pid(Pid(caller_pid)) {
             Some(p) => p,
             None => return EPERM,
@@ -388,9 +417,12 @@ pub fn sys_tgkill(tgid: u64, tid: u64, signum: u64, _a4: u64, _a5: u64, _a6: u64
         None => return ESRCH,
     };
 
-    // Verify POSIX privileges for tgkill
+    // Verify POSIX privileges & Zero-Trust confinement for tgkill (FIX-07 / VAR-08)
     let target_pid = tgid as u32;
     if sender_pid != target_pid {
+        if !cross_pid_signal_allowed_by_zero_trust(sender_pid, target_pid) {
+            return EPERM;
+        }
         let caller_pcb = match PROCESS_REGISTRY.find_by_pid(Pid(sender_pid)) {
             Some(p) => p,
             None => return EPERM,

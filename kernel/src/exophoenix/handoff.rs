@@ -243,7 +243,14 @@ fn notify_crypto_server_phoenix_wake_with_timeout(timeout_ns: u64) -> Result<u64
     // live runtime PID (unforgeable by Ring 3) and revoke it immediately after the reply.
     let mut minted_oid: Option<u32> = None;
     let mut cap_token_wire = [0u8; crate::security::capability::CAP_TOKEN_WIRE_SIZE];
-    if let Some(crypto_pid) = find_crypto_server_runtime_pid() {
+    let crypto_pid = find_crypto_server_runtime_pid();
+    // FIX-02: authorize `crypto_server` to send its single-use ACK to this bit-63 reply endpoint.
+    let _ = crate::ipc::rpc::raw::register_ephemeral_reply_cap(
+        reply_endpoint.get(),
+        0,
+        crypto_pid.unwrap_or(0),
+    );
+    if let Some(crypto_pid) = crypto_pid {
         let wake_rights = crate::security::capability::Rights::IPC_SEND
             | crate::security::capability::Rights::IPC_MANAGE;
         if let Ok(token) = crate::security::capability::mint_kernel_ipc_token(crypto_pid, wake_rights)
@@ -277,6 +284,7 @@ fn notify_crypto_server_phoenix_wake_with_timeout(timeout_ns: u64) -> Result<u64
         .map(|_| ())
         .map_err(|_| "phoenix_wake_send_failed");
     if let Err(err) = send_result {
+        crate::ipc::rpc::raw::unregister_ephemeral_reply_cap(reply_endpoint.get());
         crate::ipc::channel::raw::mailbox_close(reply_endpoint);
         if let Some(oid) = minted_oid {
             let _ = crate::security::capability::revoke_handle(oid);
@@ -285,6 +293,7 @@ fn notify_crypto_server_phoenix_wake_with_timeout(timeout_ns: u64) -> Result<u64
     }
 
     let ack_result = wait_crypto_phoenix_ack(reply_endpoint, timeout_ns);
+    crate::ipc::rpc::raw::unregister_ephemeral_reply_cap(reply_endpoint.get());
     crate::ipc::channel::raw::mailbox_close(reply_endpoint);
     if let Some(oid) = minted_oid {
         let _ = crate::security::capability::revoke_handle(oid);
@@ -365,7 +374,10 @@ fn stage_soft_revoke_iommu() {
             INTEL_VTD.flush_iotlb_domain(blocked_domain as u16, 0);
         }
     } else if AMD_IOMMU.is_initialized() && AMD_IOMMU.unit_count() > 0 {
-        core::sync::atomic::fence(Ordering::SeqCst);
+        // SAFETY: CPL0, AMD-Vi initialized (FIX-19).
+        unsafe {
+            AMD_IOMMU.flush_domain_and_devtab(blocked_domain as u16);
+        }
     }
 
     IOMMU_DRAIN_CONFIRMED.store(true, Ordering::Release);
@@ -379,13 +391,16 @@ fn stage_hard_revoke_iommu(with_drain: bool) {
     let blocked_domain = stage0::blocked_domain_id();
 
     if INTEL_VTD.is_initialized() && INTEL_VTD.unit_count() > 0 {
-        // SAFETY: CPL0, flush blocked domain IOTLB (QI-like sync).
+        // SAFETY: CPL0, FIX-19 global Context-Cache + IOTLB invalidation across all DRHDs.
         unsafe {
+            INTEL_VTD.invalidate_context_and_iotlb_global();
             INTEL_VTD.flush_iotlb_domain(blocked_domain as u16, 0);
         }
     } else if AMD_IOMMU.is_initialized() && AMD_IOMMU.unit_count() > 0 {
-        // AMD completion wait fallback (strict barrier).
-        core::sync::atomic::fence(Ordering::SeqCst);
+        // SAFETY: CPL0, AMD-Vi INVAL_IOMMU_PAGES + COMPLETION_WAIT (FIX-19).
+        unsafe {
+            AMD_IOMMU.flush_domain_and_devtab(blocked_domain as u16);
+        }
     }
 }
 
@@ -737,6 +752,8 @@ fn request_init_cold_respawn_phoenix() -> Result<u32, &'static str> {
     if !crate::ipc::channel::raw::mailbox_open(reply_ep) {
         return Err("cold_respawn_reply_open_failed");
     }
+    // FIX-02: authorize `init_server` (PID 1) to send its single-use ACK to this bit-63 reply endpoint.
+    let _ = crate::ipc::rpc::raw::register_ephemeral_reply_cap(reply_ep.get(), 0, 1);
 
     // InitRequest layout: sender_pid(u32=0), msg_type(u32=9), payload[0..8]=reply_ep(u64).
     let mut msg = [0u8; 64];
@@ -744,6 +761,7 @@ fn request_init_cold_respawn_phoenix() -> Result<u32, &'static str> {
     msg[8..16].copy_from_slice(&reply_ep.get().to_le_bytes());
 
     if crate::ipc::channel::raw::send_raw(init_ep, &msg, RAW_NOWAIT).is_err() {
+        crate::ipc::rpc::raw::unregister_ephemeral_reply_cap(reply_ep.get());
         crate::ipc::channel::raw::mailbox_close(reply_ep);
         return Err("cold_respawn_send_failed");
     }
@@ -778,6 +796,7 @@ fn request_init_cold_respawn_phoenix() -> Result<u32, &'static str> {
         }
     };
 
+    crate::ipc::rpc::raw::unregister_ephemeral_reply_cap(reply_ep.get());
     crate::ipc::channel::raw::mailbox_close(reply_ep);
     result
 }

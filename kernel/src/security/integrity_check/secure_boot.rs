@@ -123,6 +123,7 @@ impl SecureBootState {
 
 static SECBOOT_STATE: spin::Mutex<SecureBootState> = spin::Mutex::new(SecureBootState::new());
 static CHAIN_VERIFIED: AtomicBool = AtomicBool::new(false);
+static BOOT_MEASURED: AtomicBool = AtomicBool::new(false);
 static SECBOOT_ENFORCE: AtomicBool = AtomicBool::new(true);
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -239,6 +240,46 @@ pub fn read_pcr(index: usize) -> Option<[u8; 32]> {
 /// Extends a PCR with a measurement.
 pub fn extend_pcr(index: usize, measurement: &[u8]) {
     PCR_BANK.lock().extend(index, measurement);
+}
+
+/// FIX-17: Measures the loaded kernel `.text` and `.rodata` BLAKE3 digests into
+/// simulated PCR[0] and PCR[1] at early boot and records an `ExoLedger` boot-measurement
+/// event. Does NOT forge `CHAIN_VERIFIED` (which remains `true` strictly after a real
+/// Ed25519 `verify_boot_attestation()` succeeds).
+pub fn measure_boot_sections(text_hash: &[u8; 32], rodata_hash: &[u8; 32]) {
+    if BOOT_MEASURED.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    {
+        let mut bank = PCR_BANK.lock();
+        bank.extend(0, text_hash);
+        bank.extend(1, rodata_hash);
+    }
+    let mut state = SECBOOT_STATE.lock();
+    if !state.attestation_verified {
+        state.kernel_hash = *text_hash;
+    }
+    drop(state);
+    crate::security::exoledger::exo_ledger_append(
+        crate::security::exoledger::ActionTag::Custom {
+            tag: 0x5043_5230, // "PCR0"
+            data: u64::from_le_bytes([
+                text_hash[0],
+                text_hash[1],
+                text_hash[2],
+                text_hash[3],
+                rodata_hash[0],
+                rodata_hash[1],
+                rodata_hash[2],
+                rodata_hash[3],
+            ]),
+        },
+    );
+}
+
+/// Returns true if early boot PCR[0..1] measurements were recorded.
+pub fn is_boot_measured() -> bool {
+    BOOT_MEASURED.load(Ordering::Acquire)
 }
 
 /// Returns true if the chain of trust is verified.

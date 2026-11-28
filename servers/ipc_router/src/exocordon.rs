@@ -156,7 +156,7 @@ impl AuthEdge {
 ///   50_000   — services d'infrastructure (fs, crypto, réseau)
 ///   100_000  — services d'affichage/entrée (tty, fb, input)
 ///   500_000+ — drivers et shell (haut débit)
-static AUTHORIZED_GRAPH: [AuthEdge; 125] = [
+static AUTHORIZED_GRAPH: [AuthEdge; 118] = [
     // ── Init ↔ services de base (requêtes + réponses) ────────────────────────
     AuthEdge::new(ServiceId::Init,      ServiceId::Memory,        4, 10_000),
     AuthEdge::new(ServiceId::Memory,    ServiceId::Init,          2, 50_000),
@@ -250,19 +250,13 @@ static AUTHORIZED_GRAPH: [AuthEdge; 125] = [
     AuthEdge::new(ServiceId::Input,     ServiceId::Fb,            2, 100_000),
     AuthEdge::new(ServiceId::Fb,        ServiceId::Input,         2, 100_000),
 
-    // ── Exosh <-> core & UI services ─────────────────────────────────────────
+    // ── Exosh <-> core & UI services (FIX-03: narrowed critical edges) ───────
     AuthEdge::new(ServiceId::Exosh,     ServiceId::Fb,            4, 500_000),
     AuthEdge::new(ServiceId::Fb,        ServiceId::Exosh,         4, 500_000),
     AuthEdge::new(ServiceId::Exosh,     ServiceId::Vfs,           4, 500_000),
     AuthEdge::new(ServiceId::Vfs,       ServiceId::Exosh,         4, 500_000),
-    AuthEdge::new(ServiceId::Exosh,     ServiceId::Memory,        4, 500_000),
-    AuthEdge::new(ServiceId::Memory,    ServiceId::Exosh,         4, 500_000),
-    AuthEdge::new(ServiceId::Exosh,     ServiceId::Scheduler,     2, 100_000),
-    AuthEdge::new(ServiceId::Scheduler, ServiceId::Exosh,         2, 100_000),
     AuthEdge::new(ServiceId::Exosh,     ServiceId::Network,       2, 100_000),
     AuthEdge::new(ServiceId::Network,   ServiceId::Exosh,         2, 100_000),
-    AuthEdge::new(ServiceId::Exosh,     ServiceId::Device,        2, 100_000),
-    AuthEdge::new(ServiceId::Device,    ServiceId::Exosh,         2, 100_000),
     AuthEdge::new(ServiceId::Exosh,     ServiceId::Audio,         2, 100_000),
     AuthEdge::new(ServiceId::Audio,     ServiceId::Exosh,         2, 100_000),
     AuthEdge::new(ServiceId::Exosh,     ServiceId::Usb,           2, 100_000),
@@ -282,7 +276,6 @@ static AUTHORIZED_GRAPH: [AuthEdge; 125] = [
     AuthEdge::new(ServiceId::Init,      ServiceId::VirtioDrivers, 4, 10_000),
     AuthEdge::new(ServiceId::VirtioDrivers, ServiceId::Init,      2, 50_000),
     AuthEdge::new(ServiceId::Init,      ServiceId::Exosh,         4, 10_000),
-    AuthEdge::new(ServiceId::Exosh,     ServiceId::Init,          2, 50_000),
 
     // ── ExoShield <-> monitored Ring 1 services ──────────────────────────────
     AuthEdge::new(ServiceId::ExoShield, ServiceId::Network,       2, 50_000),
@@ -320,11 +313,11 @@ const _: () = assert!(
 );
 
 // FIX-EXOCORDON-02 : miroir strict — même cardinalité que la politique kernel.
-// kernel/src/security/ipc_policy.rs vérifie `POLICY.len() == 125` ; toute
+// kernel/src/security/ipc_policy.rs vérifie `POLICY.len() == 118` ; toute
 // évolution de la politique kernel doit être répercutée ici (et inversement).
 const _: () = assert!(
-    AUTHORIZED_GRAPH.len() == 125,
-    "DAG ExoCordon doit rester le miroir exact des 125 paires de ipc_policy.rs"
+    AUTHORIZED_GRAPH.len() == 118,
+    "DAG ExoCordon doit rester le miroir exact des 118 paires de ipc_policy.rs"
 );
 
 static LAST_REFILL_TSC: AtomicU64 = AtomicU64::new(0);
@@ -387,6 +380,18 @@ fn dynamic_service_id_of(pid: Pid) -> Option<ServiceId> {
         }
     }
     None
+}
+
+/// Returns the live registered PID for `id` (or its static convention fallback).
+pub fn live_pid_of(id: ServiceId) -> Pid {
+    let want = id as u8;
+    for slot in DYNAMIC_PIDS.iter() {
+        let cur = slot.load(Ordering::Acquire);
+        if cur != 0 && ((cur >> 32) as u8) == want {
+            return cur as u32;
+        }
+    }
+    id as u32
 }
 
 /// Résout un PID (ou endpoint fixe) vers un ServiceId.

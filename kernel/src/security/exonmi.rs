@@ -86,6 +86,9 @@ static LAST_PING_TSC: AtomicU64 = AtomicU64::new(0);
 
 /// Watchdog armed (arm_watchdog called).
 static WATCHDOG_ARMED: AtomicBool = AtomicBool::new(false);
+/// FIX-22: True when LAPIC timer is owned by the scheduler, so ExoNmi operates in
+/// cooperative deadline-check mode (`check_liveness_deadline`) instead of silent dormancy.
+static SHARED_TIMER_DEGRADED: AtomicBool = AtomicBool::new(false);
 
 /// Virtual LAPIC base for MMIO timer access.
 /// Set by exonmi_init() from MSR_IA32_APIC_BASE.
@@ -376,11 +379,16 @@ pub fn arm_watchdog(timeout_ms: u64) {
     let timeout_ms = normalize_timeout_ms(timeout_ms);
     let owns_lapic_timer = local_apic::claim_lapic_timer(LapicTimerOwner::ExoNmiWatchdog);
     if !owns_lapic_timer {
-        WATCHDOG_ARMED.store(false, Ordering::Release);
+        // FIX-22: LAPIC timer is owned by scheduler; keep watchdog active in cooperative
+        // deadline-monitoring mode (`check_liveness_deadline`) and audit degraded state.
+        SHARED_TIMER_DEGRADED.store(true, Ordering::Release);
+        WATCHDOG_ARMED.store(true, Ordering::Release);
         CONFIGURED_TIMEOUT_MS.store(timeout_ms, Ordering::Release);
         CACHED_INITIAL_COUNT.store(0, Ordering::Release);
+        LAST_PING_TSC.store(tsc::read_tsc(), Ordering::Release);
         return;
     }
+    SHARED_TIMER_DEGRADED.store(false, Ordering::Release);
 
     // Compute the APIC timer initial count for the requested timeout
     let initial_count = compute_initial_count(timeout_ms);
@@ -509,6 +517,28 @@ pub fn current_strikes() -> u32 {
 #[inline(always)]
 pub fn is_armed() -> bool {
     WATCHDOG_ARMED.load(Ordering::Relaxed)
+}
+
+/// Returns true if ExoNmi is operating in shared-timer cooperative mode (FIX-22).
+#[inline(always)]
+pub fn is_shared_timer_degraded() -> bool {
+    SHARED_TIMER_DEGRADED.load(Ordering::Acquire)
+}
+
+/// FIX-22: Checks whether scheduler heartbeat (`ping()`) exceeded `timeout_ms` in
+/// cooperative shared-timer mode. Increments strike count when expired; returns
+/// `true` if the 3-strike threshold was reached.
+pub fn check_liveness_deadline(now_tsc: u64, deadline_cycles: u64) -> bool {
+    if !WATCHDOG_ARMED.load(Ordering::Acquire) || deadline_cycles == 0 {
+        return false;
+    }
+    let last = LAST_PING_TSC.load(Ordering::Acquire);
+    if now_tsc.wrapping_sub(last) >= deadline_cycles {
+        let strikes = STRIKE_COUNT.fetch_add(1, Ordering::AcqRel) + 1;
+        MISSED_COUNT.fetch_add(1, Ordering::Relaxed);
+        return strikes >= STRIKE_THRESHOLD;
+    }
+    false
 }
 
 /// Returns the configured timeout in milliseconds, or 0 if disarmed.

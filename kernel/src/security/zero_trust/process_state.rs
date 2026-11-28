@@ -43,6 +43,12 @@ const INIT_PID: u32 = 1;
 static PROCESS_RESTRICTIONS: [AtomicU64; MAX_TRACKED_PIDS] =
     [const { AtomicU64::new(0) }; MAX_TRACKED_PIDS];
 
+/// FIX-07 (RULE PLEDGE-01): Irreversible base pledge restrictions per PID.
+/// Preserved across `release_process_quarantine()` so lifting quarantine never
+/// erases prior `exo_pledge()` hardening. Cleared ONLY on PID exit/recycling.
+static PROCESS_BASE_PLEDGE: [AtomicU64; MAX_TRACKED_PIDS] =
+    [const { AtomicU64::new(0) }; MAX_TRACKED_PIDS];
+
 /// Explicit trust override per PID (`0` = dynamic default, `1 + (TrustLevel as u8)` = override).
 static PROCESS_TRUST_OVERRIDE: [AtomicU8; MAX_TRACKED_PIDS] =
     [const { AtomicU8::new(0) }; MAX_TRACKED_PIDS];
@@ -59,6 +65,22 @@ pub fn restrict_process(pid: u32, flags: u64) -> bool {
     if idx >= MAX_TRACKED_PIDS {
         return false;
     }
+    PROCESS_RESTRICTIONS[idx].fetch_or(flags, Ordering::Release);
+    true
+}
+
+/// FIX-07 (RULE PLEDGE-01): Applies irreversible `exo_pledge()` restrictions to `pid`,
+/// persisting them in `PROCESS_BASE_PLEDGE` so a subsequent quarantine/release cycle
+/// can never weaken pledged restrictions.
+pub fn record_pledge_restrictions(pid: u32, flags: u64) -> bool {
+    if pid == 0 || pid == INIT_PID {
+        return false;
+    }
+    let idx = pid as usize;
+    if idx >= MAX_TRACKED_PIDS {
+        return false;
+    }
+    PROCESS_BASE_PLEDGE[idx].fetch_or(flags, Ordering::Release);
     PROCESS_RESTRICTIONS[idx].fetch_or(flags, Ordering::Release);
     true
 }
@@ -114,11 +136,17 @@ pub fn quarantine_process(pid: u32) -> bool {
 }
 
 /// Releases a previously quarantined process from kernel-side Zero-Trust confinement.
+///
+/// FIX-07 (RULE PLEDGE-01): Restores `PROCESS_BASE_PLEDGE` rather than clearing to 0,
+/// preserving irreversible `exo_pledge()` restrictions across quarantine release.
 pub fn release_process_quarantine(pid: u32) -> bool {
     if pid <= 2 || (pid as usize) >= MAX_TRACKED_PIDS {
         return false;
     }
-    clear_process_restrictions(pid);
+    let idx = pid as usize;
+    let base_pledge = PROCESS_BASE_PLEDGE[idx].load(Ordering::Acquire);
+    PROCESS_RESTRICTIONS[idx].store(base_pledge, Ordering::Release);
+    PROCESS_TRUST_OVERRIDE[idx].store(0, Ordering::Release);
     true
 }
 
@@ -128,6 +156,7 @@ pub fn clear_process_restrictions(pid: u32) {
     let idx = pid as usize;
     if idx < MAX_TRACKED_PIDS {
         PROCESS_RESTRICTIONS[idx].store(0, Ordering::Release);
+        PROCESS_BASE_PLEDGE[idx].store(0, Ordering::Release);
         PROCESS_TRUST_OVERRIDE[idx].store(0, Ordering::Release);
     }
 }
@@ -135,6 +164,13 @@ pub fn clear_process_restrictions(pid: u32) {
 /// Fork inheritance: child receives AT LEAST the parent's restrictions
 /// (RULE ZT-03 / SAND-03: a child cannot be less restricted than its parent).
 pub fn inherit_restrictions(parent_pid: u32, child_pid: u32) {
+    let p_idx = parent_pid as usize;
+    if p_idx < MAX_TRACKED_PIDS {
+        let base = PROCESS_BASE_PLEDGE[p_idx].load(Ordering::Acquire);
+        if base != 0 {
+            let _ = record_pledge_restrictions(child_pid, base);
+        }
+    }
     let parent = process_restrictions(parent_pid);
     if parent != 0 {
         let _ = restrict_process(child_pid, parent);
@@ -192,7 +228,7 @@ pub fn context_for_caller(pid: u32, tid: u32) -> SecurityContext {
 ///
 /// Mapping (Linux-compat numbers, cf. [`crate::syscall::numbers`]):
 ///   - process creation (fork/clone/vfork) → `NO_FORK | NO_PROCESS_CREATE`
-///   - exec (execve)                       → `NO_EXEC | NO_PROCESS_CREATE`
+///   - exec (execve)                       → `NO_EXEC | SANDBOX_FULL`
 ///   - network (socket/connect/bind/listen/ → `NO_NETWORK`
 ///     accept/sendto/recvfrom/…)
 #[inline]
@@ -202,7 +238,7 @@ pub fn syscall_restriction_mask(nr: u64) -> u64 {
         numbers::SYS_FORK | numbers::SYS_CLONE | numbers::SYS_VFORK => {
             NO_FORK | NO_PROCESS_CREATE
         }
-        numbers::SYS_EXECVE => NO_EXEC,
+        numbers::SYS_EXECVE => NO_EXEC | SANDBOX_FULL,
         numbers::SYS_SOCKET
         | numbers::SYS_CONNECT
         | numbers::SYS_BIND
@@ -213,6 +249,26 @@ pub fn syscall_restriction_mask(nr: u64) -> u64 {
         | numbers::SYS_SENDMSG
         | numbers::SYS_RECVMSG
         | numbers::SYS_SOCKETPAIR => NO_NETWORK,
+        // FIX-07: Quarantined / fully sandboxed processes cannot escape via
+        // IPC, mmap/mprotect, signals (kill/tkill/tgkill), prctl/ptrace/ioctl,
+        // sendfile/splice, driver syscalls (530..=549), or ExoPhoenix hooks.
+        numbers::SYS_KILL
+        | numbers::SYS_TKILL
+        | numbers::SYS_TGKILL
+        | numbers::SYS_PRCTL
+        | numbers::SYS_PTRACE
+        | numbers::SYS_MMAP
+        | numbers::SYS_MPROTECT
+        | numbers::SYS_IOCTL
+        | numbers::SYS_EXO_IPC_SEND
+        | numbers::SYS_EXO_IPC_CALL
+        | numbers::SYS_EXO_IPC_CREATE
+        | numbers::SYS_EXO_IPC_DESTROY
+        | numbers::SYS_EXO_IPC_LOOKUP
+        | numbers::SYS_EXOPHOENIX_TEST
+        | numbers::SYS_PHOENIX_FORCE => SANDBOX_FULL,
+        numbers::SYS_IRQ_REGISTER..=numbers::SYS_IOPORT_WRITE => SANDBOX_FULL,
+        numbers::SYS_SENDFILE | numbers::SYS_SPLICE => SANDBOX_FULL | NO_FS,
         numbers::SYS_OPEN
         | numbers::SYS_OPENAT
         | numbers::SYS_OPENAT2
@@ -456,5 +512,45 @@ mod tests {
         let net_only = pledge_promises_to_restrictions(pledge_flags::INET);
         assert_eq!(net_only & NO_NETWORK, 0);
         assert!(net_only & NO_FORK != 0 && net_only & NO_EXEC != 0);
+    }
+
+    /// FIX-07 / VAR-08: Quarantined process is blocked on IPC, mmap, kill, prctl, ptrace,
+    /// and lifting quarantine restores prior `exo_pledge()` restrictions (RULE PLEDGE-01).
+    #[test]
+    fn fix07_quarantine_blocks_escape_syscalls_and_release_preserves_pledge() {
+        use super::super::verify::{verify_syscall, AccessError};
+        use restriction_flags::*;
+
+        const P_VAR08: u32 = 718;
+        reset(&[P_VAR08]);
+
+        // 1. Process pledges NO_NETWORK | NO_EXEC.
+        assert!(record_pledge_restrictions(
+            P_VAR08,
+            NO_NETWORK | NO_EXEC | PLEDGE_ACTIVE
+        ));
+
+        // 2. exo_shield quarantines the PID.
+        assert!(quarantine_process(P_VAR08));
+        let ctx_q = context_for_caller(P_VAR08, P_VAR08);
+        assert_eq!(verify_syscall(&ctx_q, numbers::SYS_EXO_IPC_SEND), Err(AccessError::Denied));
+        assert_eq!(verify_syscall(&ctx_q, numbers::SYS_MMAP), Err(AccessError::Denied));
+        assert_eq!(verify_syscall(&ctx_q, numbers::SYS_KILL), Err(AccessError::Denied));
+        assert_eq!(verify_syscall(&ctx_q, numbers::SYS_PRCTL), Err(AccessError::Denied));
+        assert_eq!(verify_syscall(&ctx_q, numbers::SYS_PTRACE), Err(AccessError::Denied));
+        assert_eq!(verify_syscall(&ctx_q, numbers::SYS_DMA_ALLOC), Err(AccessError::Denied));
+
+        // 3. Release quarantine -> SANDBOX_FULL lifted, but prior pledge MUST survive!
+        assert!(release_process_quarantine(P_VAR08));
+        let r_after = process_restrictions(P_VAR08);
+        assert_eq!(r_after & SANDBOX_FULL, 0, "quarantine bit lifted");
+        assert_ne!(r_after & NO_NETWORK, 0, "PLEDGE-01: NO_NETWORK must survive release");
+        assert_ne!(r_after & NO_EXEC, 0, "PLEDGE-01: NO_EXEC must survive release");
+        let ctx_after = context_for_caller(P_VAR08, P_VAR08);
+        assert_eq!(verify_syscall(&ctx_after, numbers::SYS_SOCKET), Err(AccessError::Denied));
+        assert_eq!(verify_syscall(&ctx_after, numbers::SYS_EXECVE), Err(AccessError::Denied));
+        assert!(verify_syscall(&ctx_after, numbers::SYS_MMAP).is_ok());
+
+        reset(&[P_VAR08]);
     }
 }

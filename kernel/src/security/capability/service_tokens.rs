@@ -107,6 +107,7 @@ pub enum KernelCapError {
     PermissionDenied,
     InvalidArg,
     NotSupported,
+    Expired,
 }
 
 impl KernelCapError {
@@ -117,6 +118,7 @@ impl KernelCapError {
             Self::PermissionDenied => -1, // EPERM
             Self::InvalidArg => -22,      // EINVAL
             Self::NotSupported => -38,    // ENOSYS
+            Self::Expired => -110,        // ETIMEDOUT
         }
     }
 }
@@ -290,6 +292,25 @@ pub fn check_token(
     let meta = lookup_service_cap_meta(token.object_id()).ok_or(KernelCapError::NotFound)?;
     if meta.target_pid != expected_target_pid || meta.type_tag != expected_type {
         return Err(KernelCapError::PermissionDenied);
+    }
+
+    // FIX-04: Enforce ExoKairos constant-time temporal TTL on capability checks.
+    if crate::security::exokairos::verify_cap_deadline(meta.object_id).is_err() {
+        crate::security::exoledger::exo_ledger_append(
+            crate::security::exoledger::ActionTag::AccessDenied {
+                oid: meta.object_id.as_u64(),
+                rights: required_rights,
+            },
+        );
+        crate::security::shield_feed::push_event(
+            meta.owner_pid,
+            crate::security::shield_feed::event_type::CAPABILITY,
+            crate::security::shield_feed::severity::HIGH,
+            0x4B41,
+            meta.object_id.as_u64(),
+            expected_target_pid as u64,
+        );
+        return Err(KernelCapError::Expired);
     }
 
     Ok(meta.object_id)

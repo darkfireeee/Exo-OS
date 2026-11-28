@@ -10,26 +10,27 @@ pub enum IpcPolicyResult {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 pub enum ServiceClass {
-    InitServer,
-    IpcBroker,
-    MemoryServer,
-    VfsServer,
-    CryptoServer,
-    DeviceServer,
-    NetworkServer,
-    SchedulerServer,
-    InputServer,
-    TtyServer,
-    FbServer,
-    Ps2Driver,
-    VirtioDriver,
-    ExoShield,
-    Exosh,
-    ExoCompositor,
-    AudioServer,
-    UsbServer,
-    Unknown,
+    InitServer = 0,
+    IpcBroker = 1,
+    MemoryServer = 2,
+    VfsServer = 3,
+    CryptoServer = 4,
+    DeviceServer = 5,
+    NetworkServer = 6,
+    SchedulerServer = 7,
+    InputServer = 8,
+    TtyServer = 9,
+    FbServer = 10,
+    Ps2Driver = 11,
+    VirtioDriver = 12,
+    ExoShield = 13,
+    Exosh = 14,
+    ExoCompositor = 15,
+    AudioServer = 16,
+    UsbServer = 17,
+    Unknown = 255,
 }
 
 #[derive(Clone, Copy)]
@@ -115,19 +116,14 @@ static POLICY: &[(ServiceClass, ServiceClass)] = &[
     (ServiceClass::UsbServer, ServiceClass::VfsServer),
     (ServiceClass::ExoShield, ServiceClass::UsbServer),
     (ServiceClass::UsbServer, ServiceClass::ExoShield),
-    // Exosh <-> core & UI services
+    // Exosh <-> core & UI services (FIX-03: removed direct Exosh <-> MemoryServer,
+    // DeviceServer, SchedulerServer, and Exosh -> InitServer edges)
     (ServiceClass::Exosh, ServiceClass::FbServer),
     (ServiceClass::FbServer, ServiceClass::Exosh),
     (ServiceClass::Exosh, ServiceClass::VfsServer),
     (ServiceClass::VfsServer, ServiceClass::Exosh),
-    (ServiceClass::Exosh, ServiceClass::MemoryServer),
-    (ServiceClass::MemoryServer, ServiceClass::Exosh),
-    (ServiceClass::Exosh, ServiceClass::SchedulerServer),
-    (ServiceClass::SchedulerServer, ServiceClass::Exosh),
     (ServiceClass::Exosh, ServiceClass::NetworkServer),
     (ServiceClass::NetworkServer, ServiceClass::Exosh),
-    (ServiceClass::Exosh, ServiceClass::DeviceServer),
-    (ServiceClass::DeviceServer, ServiceClass::Exosh),
     (ServiceClass::Exosh, ServiceClass::AudioServer),
     (ServiceClass::AudioServer, ServiceClass::Exosh),
     (ServiceClass::Exosh, ServiceClass::UsbServer),
@@ -146,7 +142,6 @@ static POLICY: &[(ServiceClass, ServiceClass)] = &[
     (ServiceClass::InitServer, ServiceClass::VirtioDriver),
     (ServiceClass::VirtioDriver, ServiceClass::InitServer),
     (ServiceClass::InitServer, ServiceClass::Exosh),
-    (ServiceClass::Exosh, ServiceClass::InitServer),
     // ExoShield <-> monitored Ring 1 services
     (ServiceClass::ExoShield, ServiceClass::NetworkServer),
     (ServiceClass::NetworkServer, ServiceClass::ExoShield),
@@ -178,7 +173,7 @@ static POLICY: &[(ServiceClass, ServiceClass)] = &[
 ];
 
 const _: () = assert!(
-    POLICY.len() == 125,
+    POLICY.len() == 118,
     "IPC policy Ring 1 doit rester synchronisée avec Architecture v7"
 );
 
@@ -306,6 +301,17 @@ fn class_of(pid: Pid) -> ServiceClass {
 
 pub fn service_class_of(pid: Pid) -> ServiceClass {
     class_of(pid)
+}
+
+/// Returns `true` if another live PID already holds `class` in `SERVICE_REGISTRY`.
+#[cfg_attr(test, allow(dead_code))]
+pub fn class_has_other_live_owner(class: ServiceClass, caller_pid: u32) -> bool {
+    let reg = SERVICE_REGISTRY.read();
+    reg.iter().flatten().any(|entry| {
+        entry.class == class
+            && entry.pid.0 != caller_pid
+            && crate::process::is_alive(entry.pid.0)
+    })
 }
 
 pub fn can_inject_src_pid(pid: Pid) -> bool {
@@ -474,5 +480,26 @@ mod tests {
             _pad: [0; 2],
         };
         assert!(!register_service(Pid(51), &bad_rights_cap));
+    }
+
+    #[test]
+    fn fix03_exosh_direct_critical_server_edges_are_denied() {
+        let exosh = with_service(61, ServiceClass::Exosh);
+        let mem = with_service(62, ServiceClass::MemoryServer);
+        let dev = with_service(63, ServiceClass::DeviceServer);
+        let sched = with_service(64, ServiceClass::SchedulerServer);
+
+        assert_eq!(check_direct_ipc(exosh, mem), IpcPolicyResult::Denied);
+        assert_eq!(check_direct_ipc(exosh, dev), IpcPolicyResult::Denied);
+        assert_eq!(check_direct_ipc(exosh, sched), IpcPolicyResult::Denied);
+        assert_eq!(
+            check_direct_ipc(exosh, Pid(INIT_SERVER_PID)),
+            IpcPolicyResult::Denied
+        );
+
+        let _ = unregister_service(exosh);
+        let _ = unregister_service(mem);
+        let _ = unregister_service(dev);
+        let _ = unregister_service(sched);
     }
 }

@@ -99,6 +99,11 @@ pub fn security_init(kaslr_entropy: u64, phys_base: u64) {
     probe(b'k');
 
     integrity_init();
+    if let Some((text_hash, rodata_hash)) =
+        integrity_check::runtime_check::reference_hashes()
+    {
+        integrity_check::secure_boot::measure_boot_sections(&text_hash, &rodata_hash);
+    }
     probe(b'l');
 
     capability::init_capability_subsystem();
@@ -162,6 +167,7 @@ pub fn security_init(kaslr_entropy: u64, phys_base: u64) {
     unsafe {
         exoseal::exoseal_boot_complete();
     }
+    warn_if_not_production_hardened();
     probe(b'y');
 }
 

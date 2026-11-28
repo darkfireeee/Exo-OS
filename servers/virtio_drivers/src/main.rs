@@ -165,28 +165,45 @@ pub extern "C" fn _start() -> ! {
             Ok(false) | Err(_) => continue,
         }
 
+        let gpu_privileged = syscall::peer_is_any_service(
+            request.sender_pid,
+            &[
+                syscall::SVC_INIT_SERVER,
+                syscall::SVC_FB_SERVER,
+                syscall::SVC_EXO_COMPOSITOR,
+            ],
+        );
         let reply = match request.msg_type {
             VIRTIO_MSG_HEARTBEAT | VIRTIO_MSG_STATUS => VirtioReply::ok(queue_count, gpu_flags),
             syscall::VIRTIO_GPU_MSG_TRANSFER_FLUSH => {
-                let x = read_u32_le(&request.payload, 0);
-                let y = read_u32_le(&request.payload, 4);
-                let w = read_u32_le(&request.payload, 8);
-                let h = read_u32_le(&request.payload, 12);
-                let rc = gpu.transfer_and_flush(x, y, w, h);
-                if rc == 0 {
-                    VirtioReply::ok(queue_count, gpu_flags)
+                // FIX-15: Restrict GPU DMA flush to fb_server / exo_compositor / init_server.
+                if !gpu_privileged {
+                    VirtioReply::error(syscall::EPERM)
                 } else {
-                    VirtioReply::error(rc)
+                    let x = read_u32_le(&request.payload, 0);
+                    let y = read_u32_le(&request.payload, 4);
+                    let w = read_u32_le(&request.payload, 8);
+                    let h = read_u32_le(&request.payload, 12);
+                    let rc = gpu.transfer_and_flush(x, y, w, h);
+                    if rc == 0 {
+                        VirtioReply::ok(queue_count, gpu_flags)
+                    } else {
+                        VirtioReply::error(rc)
+                    }
                 }
             }
             syscall::VIRTIO_GPU_MSG_MOVE_CURSOR => {
-                let x = read_u32_le(&request.payload, 0);
-                let y = read_u32_le(&request.payload, 4);
-                let rc = gpu.move_cursor(x, y);
-                if rc == 0 {
-                    VirtioReply::ok(queue_count, gpu_flags)
+                if !gpu_privileged {
+                    VirtioReply::error(syscall::EPERM)
                 } else {
-                    VirtioReply::error(rc)
+                    let x = read_u32_le(&request.payload, 0);
+                    let y = read_u32_le(&request.payload, 4);
+                    let rc = gpu.move_cursor(x, y);
+                    if rc == 0 {
+                        VirtioReply::ok(queue_count, gpu_flags)
+                    } else {
+                        VirtioReply::error(rc)
+                    }
                 }
             }
             _ => VirtioReply::error(syscall::EINVAL),

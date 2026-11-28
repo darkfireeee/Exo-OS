@@ -45,13 +45,34 @@ fn caller_can_manage_target_memory(caller_pid: u32) -> bool {
     }
 }
 
+fn caller_can_read_target_memory(caller_pid: u32) -> bool {
+    if caller_pid == 1 {
+        return true;
+    }
+    match PROCESS_REGISTRY.find_by_pid(Pid(caller_pid)) {
+        Some(pcb) => {
+            // T9-003 + FIX-23: Must be direct child of init (PID 1), root (euid 0),
+            // and an authorized Ring 1 service (`ExoShield` gets READ-ONLY inspection).
+            if pcb.ppid().0 != 1 || pcb.creds.lock().euid != 0 {
+                return false;
+            }
+            let class = crate::security::service_class_of(Pid(caller_pid));
+            class == crate::security::ServiceClass::MemoryServer
+                || class == crate::security::ServiceClass::VfsServer
+                || class == crate::security::ServiceClass::FbServer
+                || class == crate::security::ServiceClass::ExoShield
+        }
+        None => false,
+    }
+}
+
 fn caller_can_copy_target_memory(caller_pid: u32) -> bool {
     if caller_pid == 1 {
         return true;
     }
     match PROCESS_REGISTRY.find_by_pid(Pid(caller_pid)) {
         Some(pcb) => {
-            // T9-003 FIX: Must be a direct child of init (PID 1), root (euid 0), and authorized service.
+            // T9-003 FIX: Write-capable remote memory copy NEVER includes ExoShield.
             if pcb.ppid().0 != 1 || pcb.creds.lock().euid != 0 {
                 return false;
             }
@@ -162,13 +183,30 @@ pub fn sys_exo_mem_copy_from_pid(
         return EINVAL;
     }
     let caller_pid = current_pid_u32();
-    if !caller_can_copy_target_memory(caller_pid) {
+    if !caller_can_read_target_memory(caller_pid) {
         return EPERM;
     }
     let target_pid = match checked_u32_sysarg(target_pid) {
         Ok(v) => v,
         Err(e) => return e,
     };
+    // FIX-25: Enforce `PR_SET_DUMPABLE(0)` (`NO_DUMP`) on non-privileged cross-process reads.
+    if caller_pid != 1 && caller_pid != target_pid {
+        if let Some(target_pcb) = PROCESS_REGISTRY.find_by_pid(Pid(target_pid)) {
+            if !target_pcb.is_dumpable() {
+                let caller_class = crate::security::service_class_of(Pid(caller_pid));
+                if caller_class != crate::security::ServiceClass::ExoShield {
+                    return EPERM;
+                }
+                crate::security::exoledger::exo_ledger_append(
+                    crate::security::exoledger::ActionTag::Custom {
+                        tag: 0x5343_414E, // "SCAN"
+                        data: ((caller_pid as u64) << 32) | (target_pid as u64),
+                    },
+                );
+            }
+        }
+    }
     let len = match checked_usize_sysarg(len) {
         Ok(v) => v,
         Err(e) => return e,
@@ -225,6 +263,7 @@ pub fn sys_exo_mem_copy_to_pid(
         return EINVAL;
     }
     let caller_pid = current_pid_u32();
+    // FIX-23: Write access NEVER includes ExoShield (strictly read-only inspection).
     if !caller_can_copy_target_memory(caller_pid) {
         return EPERM;
     }
@@ -469,6 +508,9 @@ pub fn sys_exo_mem_revoke(
     };
     if len == 0 {
         return EINVAL;
+    }
+    if let Err(e) = validate_remote_user_range(addr, len) {
+        return e;
     }
     let user_as = match user_as_for_pid(target_pid) {
         Ok(v) => v,

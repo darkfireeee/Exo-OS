@@ -9,20 +9,19 @@
 use exo_syscall_abi as syscall;
 use crate::registry::PciRegistry;
 
-/// PIDs autorisés à réclamer des périphériques PCI.
-///
-/// FIX-APP-10 : équivalent de CAP_DEVICE_CLAIM (à migrer vers CapToken en v0.3).
-/// En v0.2.0, seuls les serveurs de drivers statiques ont ce droit.
-const DEVICE_CLAIM_ALLOWED_PIDS: &[u32] = &[
-    1,   // init_server — démarre les drivers au boot
-    6,   // device_server lui-même (auto-claim lors de l'enum PCI)
-    8,   // virtio_drivers (block, net, sound)
-    9,   // scheduler_server (clock HPET)
+/// FIX-14: Kernel-attested Ring 1 driver/service classes allowed to claim PCI devices.
+/// Replaces the brittle hardcoded `DEVICE_CLAIM_ALLOWED_PIDS = &[1, 6, 8, 9]` list.
+const DEVICE_CLAIM_ALLOWED_CLASSES: &[u8] = &[
+    syscall::SVC_INIT_SERVER,
+    syscall::SVC_DEVICE_SERVER,
+    syscall::SVC_VIRTIO_DRIVER,
+    syscall::SVC_SCHEDULER_SERVER,
+    syscall::SVC_NETWORK_SERVER,
+    syscall::SVC_FB_SERVER,
+    syscall::SVC_AUDIO_SERVER,
+    syscall::SVC_USB_SERVER,
+    syscall::SVC_PS2_DRIVER,
 ];
-
-/// Classe PCI autorisée pour tous (0x00 = unclassified = pas de restriction)
-#[allow(dead_code)]
-const PCI_CLASS_UNRESTRICTED: u8 = 0xFF;
 
 pub fn validate_claim(
     registry: &PciRegistry,
@@ -36,9 +35,8 @@ pub fn validate_claim(
         return Err(syscall::EINVAL);
     }
 
-    // FIX-APP-10 : vérification de privilege avant tout accès au registre.
-    // Un PID non autorisé reçoit EPERM, pas ENOENT (pas de divulgation d'info).
-    if !DEVICE_CLAIM_ALLOWED_PIDS.contains(&owner_pid) {
+    // FIX-14: Verify kernel-attested ServiceClass before disclosing registry state.
+    if owner_pid != 1 && !syscall::peer_is_any_service(owner_pid, DEVICE_CLAIM_ALLOWED_CLASSES) {
         return Err(syscall::EPERM);
     }
 

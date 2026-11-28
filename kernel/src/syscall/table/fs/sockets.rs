@@ -25,9 +25,40 @@ pub fn sys_socket(domain: u64, ty: u64, protocol: u64, _a4: u64, _a5: u64, _a6: 
     ))
 }
 
+#[inline]
+fn check_no_inet_sockaddr(addr_ptr: u64, addr_len: u64) -> Result<(), i64> {
+    let caller_pid = crate::syscall::fast_path::syscall_current_pid();
+    if caller_pid == 0
+        || (crate::security::zero_trust::process_restrictions(caller_pid)
+            & crate::security::zero_trust::restriction_flags::NO_INET)
+            == 0
+    {
+        return Ok(());
+    }
+    if addr_ptr != 0 && addr_len >= 2 {
+        let mut fam_bytes = [0u8; 2];
+        if crate::syscall::validation::copy_from_user(
+            fam_bytes.as_mut_ptr(),
+            addr_ptr as *const u8,
+            2,
+        )
+        .is_ok()
+        {
+            let family = u16::from_ne_bytes(fam_bytes);
+            if family == 2 || family == 10 {
+                return Err(EACCES);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// `connect(fd, sockaddr*, addrlen)`.
 pub fn sys_connect(fd: u64, addr_ptr: u64, addr_len: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_CONNECT);
+    if let Err(e) = check_no_inet_sockaddr(addr_ptr, addr_len) {
+        return e;
+    }
     use crate::syscall::net_bridge;
     net_bridge::bridge_result(net_bridge::net_connect(fd as i32, addr_ptr, addr_len))
 }
@@ -35,6 +66,9 @@ pub fn sys_connect(fd: u64, addr_ptr: u64, addr_len: u64, _a4: u64, _a5: u64, _a
 /// `bind(fd, sockaddr*, addrlen)`.
 pub fn sys_bind(fd: u64, addr_ptr: u64, addr_len: u64, _a4: u64, _a5: u64, _a6: u64) -> i64 {
     stat_inc(SYS_BIND);
+    if let Err(e) = check_no_inet_sockaddr(addr_ptr, addr_len) {
+        return e;
+    }
     use crate::syscall::net_bridge;
     net_bridge::bridge_result(net_bridge::net_bind(fd as i32, addr_ptr, addr_len))
 }

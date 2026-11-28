@@ -391,9 +391,27 @@ fn dispatch(request: &DeviceRequest) -> DeviceReply {
         DEVICE_MSG_CLAIM => service.handle_claim(request.sender_pid, &request.payload),
         DEVICE_MSG_RELEASE => service.handle_release(request.sender_pid, &request.payload),
         DEVICE_MSG_FAULT => service.handle_fault(request.sender_pid, &request.payload),
-        DEVICE_MSG_EVENT_POLL => service.handle_event_poll(),
+        DEVICE_MSG_EVENT_POLL => {
+            if request.sender_pid != 1
+                && exo_syscall_abi::peer_service_class(request.sender_pid)
+                    == exo_syscall_abi::SVC_UNKNOWN
+            {
+                DeviceReply::error(exo_syscall_abi::EPERM)
+            } else {
+                service.handle_event_poll()
+            }
+        }
         DEVICE_MSG_POWER_SET => service.handle_power_set(request.sender_pid, &request.payload),
-        DEVICE_MSG_QUERY => service.handle_query(&request.payload),
+        DEVICE_MSG_QUERY => {
+            if request.sender_pid != 1
+                && exo_syscall_abi::peer_service_class(request.sender_pid)
+                    == exo_syscall_abi::SVC_UNKNOWN
+            {
+                DeviceReply::error(exo_syscall_abi::EPERM)
+            } else {
+                service.handle_query(&request.payload)
+            }
+        }
         _ => DeviceReply::error(exo_syscall_abi::EINVAL),
     }
 }
