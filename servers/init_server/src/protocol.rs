@@ -16,6 +16,8 @@ pub const INIT_MSG_PREPARE_ISOLATION_ACK: u32 = 7;
 pub const INIT_MSG_RELAUNCH_STRATE2: u32 = 8;
 /// ExoPhoenix destructive cold respawn trigger (`F3` / P6.3): SIGKILL + parallel R0->R1->R2 + PHX-03.
 pub const INIT_MSG_COLD_RESPAWN_PHOENIX: u32 = 9;
+/// Authorized system power request from Strate 2 desktop (`payload[0]`: 1 = Reboot, 2 = PowerOff).
+pub const INIT_MSG_POWER_ACTION: u32 = 10;
 
 #[repr(C)]
 pub struct InitRequest {

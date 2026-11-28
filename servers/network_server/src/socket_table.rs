@@ -38,7 +38,7 @@ impl SocketKind {
             SOCK_STREAM => Ok(Self::Tcp),
             SOCK_DGRAM => Ok(Self::Udp),
             SOCK_RAW if protocol == 0 || protocol == 1 => {
-                if RAW_SOCKET_ALLOWED_PIDS.contains(&sender_pid) || sender_pid >= 19 {
+                if RAW_SOCKET_ALLOWED_PIDS.contains(&sender_pid) || sender_pid >= 18 {
                     Ok(Self::Raw)
                 } else {
                     Err(syscall::EPERM)

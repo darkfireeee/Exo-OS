@@ -89,7 +89,7 @@ pub fn service_id_for_name(name: &[u8]) -> Option<ServiceId> {
         b"exosh" | b"exosh_input_reply" => Some(ServiceId::Exosh),
         b"audio_server" => Some(ServiceId::Audio),
         b"usb_server" => Some(ServiceId::Usb),
-        b"exo_compositor" => Some(ServiceId::ExoCompositor),
+        b"exo_compositor" | b"exo_compositor_input" => Some(ServiceId::ExoCompositor),
         _ => None,
     }
 }

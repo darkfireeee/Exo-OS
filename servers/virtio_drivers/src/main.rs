@@ -101,15 +101,15 @@ fn recv_request(request: &mut VirtioRequest) -> Result<bool, i64> {
     Ok(true)
 }
 
-fn send_reply(destination_pid: u32, reply: &VirtioReply) {
-    if destination_pid == 0 {
+fn send_reply_to(destination_endpoint: u64, reply: &VirtioReply) {
+    if destination_endpoint == 0 {
         return;
     }
 
     let _ = unsafe {
         syscall::syscall6(
             syscall::SYS_IPC_SEND,
-            destination_pid as u64,
+            destination_endpoint,
             reply as *const VirtioReply as u64,
             core::mem::size_of::<VirtioReply>() as u64,
             0,
@@ -117,6 +117,23 @@ fn send_reply(destination_pid: u32, reply: &VirtioReply) {
             0,
         )
     };
+}
+
+#[inline]
+fn read_u64_le(payload: &[u8], offset: usize) -> u64 {
+    if offset + 8 > payload.len() {
+        return 0;
+    }
+    u64::from_le_bytes([
+        payload[offset],
+        payload[offset + 1],
+        payload[offset + 2],
+        payload[offset + 3],
+        payload[offset + 4],
+        payload[offset + 5],
+        payload[offset + 6],
+        payload[offset + 7],
+    ])
 }
 
 #[inline]
@@ -174,7 +191,17 @@ pub extern "C" fn _start() -> ! {
             }
             _ => VirtioReply::error(syscall::EINVAL),
         };
-        send_reply(request.sender_pid, &reply);
+        let reply_ep = if matches!(request.msg_type, VIRTIO_MSG_HEARTBEAT | VIRTIO_MSG_STATUS) {
+            let custom = read_u64_le(&request.payload, 0);
+            if custom != 0 && ((custom >> 32) as u32) == request.sender_pid {
+                custom
+            } else {
+                request.sender_pid as u64
+            }
+        } else {
+            request.sender_pid as u64
+        };
+        send_reply_to(reply_ep, &reply);
     }
 }
 

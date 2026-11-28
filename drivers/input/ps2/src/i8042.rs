@@ -58,6 +58,20 @@ impl<P: PortIo> I8042<P> {
     }
 
     pub fn init(&mut self) -> Result<(), ControllerError> {
+        let _ = self.init_with_wheel()?;
+        Ok(())
+    }
+
+    fn aux_send_ack(&mut self, byte: u8) -> bool {
+        if self.write_aux(byte).is_err() {
+            return false;
+        }
+        matches!(self.read_data(), Ok(0xFA))
+    }
+
+    /// Initialize i8042 keyboard + mouse and negotiate IntelliMouse 4-byte scroll-wheel mode.
+    /// Returns `Ok(true)` if the mouse entered 4-byte wheel mode (device ID 3 or 4).
+    pub fn init_with_wheel(&mut self) -> Result<bool, ControllerError> {
         self.drain_output();
         self.write_command(CMD_DISABLE_KEYBOARD)?;
         self.write_command(CMD_DISABLE_AUX)?;
@@ -70,16 +84,28 @@ impl<P: PortIo> I8042<P> {
         self.write_data(config)?;
         self.write_command(CMD_ENABLE_AUX)?;
 
-        // Activer la transmission de paquets par la souris PS/2 (0xF6 Defaults, 0xF4 Enable)
-        let _ = self.write_aux(0xF6);
-        let _ = self.read_data(); // ACK 0xFA
-        let _ = self.write_aux(0xF4);
-        let _ = self.read_data(); // ACK 0xFA
+        // Reset defaults (0xF6) before negotiating IntelliMouse wheel magic sequence (200, 100, 80)
+        let _ = self.aux_send_ack(0xF6);
+        let mut has_wheel = false;
+        if self.aux_send_ack(0xF3)
+            && self.aux_send_ack(200)
+            && self.aux_send_ack(0xF3)
+            && self.aux_send_ack(100)
+            && self.aux_send_ack(0xF3)
+            && self.aux_send_ack(80)
+            && self.aux_send_ack(0xF2)
+        {
+            if let Ok(dev_id) = self.read_data() {
+                has_wheel = dev_id == 3 || dev_id == 4;
+            }
+        }
+        // Enable data reporting (0xF4)
+        let _ = self.aux_send_ack(0xF4);
         self.drain_output();
 
         self.write_command(CMD_ENABLE_KEYBOARD)?;
         self.drain_output();
-        Ok(())
+        Ok(has_wheel)
     }
 
     pub fn poll_byte(&mut self) -> Option<u8> {

@@ -770,7 +770,13 @@ pub fn sys_dma_alloc_for_pid(
         }
     };
 
-    match IOVA_ALLOCATOR.map(phys, size, direction, flags, domain) {
+    // PCI bus-master devices currently operate with direct physical DMA addressing
+    // (either without an IOMMU or in VT-d hardware passthrough mode via ECAP.PT).
+    // Passing BYPASS_IOMMU keeps full IOVA_ALLOCATOR domain tracking, refcounting,
+    // and IOTLB invalidation on unmap while returning the real guest physical
+    // address of the contiguous DMA frame so hardware DMA rings access valid RAM.
+    let map_flags = flags | DmaMapFlags::BYPASS_IOMMU;
+    match IOVA_ALLOCATOR.map(phys, size, direction, map_flags, domain) {
         Ok(iova) => {
             let record = DmaAllocRecord {
                 pid,

@@ -156,8 +156,8 @@ pub fn install_trampoline() {
         core::ptr::write_volatile((TRAMPOLINE_PHYS + 0x48) as *mut u64, 0x00CF_9A00_0000_FFFF);
         core::ptr::write_volatile((TRAMPOLINE_PHYS + 0x50) as *mut u64, 0x00CF_9200_0000_FFFF);
         core::ptr::write_volatile((TRAMPOLINE_PHYS + 0x58) as *mut u64, 0x00AF_9A00_0000_FFFF);
-        // Temporary GDTR at 0x6060 (limit = 31, base = 0x6040)
+        // Temporary GDTR at 0x6060 (limit = 31, base = 0x6040 — 2-byte aligned u32 at +0x62)
         core::ptr::write_volatile((TRAMPOLINE_PHYS + 0x60) as *mut u16, 31);
-        core::ptr::write_volatile((TRAMPOLINE_PHYS + 0x62) as *mut u32, (TRAMPOLINE_PHYS + 0x40) as u32);
+        core::ptr::write_unaligned((TRAMPOLINE_PHYS + 0x62) as *mut u32, (TRAMPOLINE_PHYS + 0x40) as u32);
     }
 }

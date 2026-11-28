@@ -728,6 +728,16 @@ impl NetworkService {
                 break;
             }
         }
+        if polls > 0 && self.pending_arp.active {
+            let snap = self.pending_arp.snapshot;
+            let plen = self.pending_arp.len;
+            let mut pbuf = [0u8; NET_INLINE_DATA_MAX];
+            pbuf[..plen].copy_from_slice(&self.pending_arp.data[..plen]);
+            self.pending_arp.active = false;
+            let _ = self.iface.send_socket_data(&snap, &pbuf[..plen]);
+            let _ = self.iface.poll_egress(&mut self.device, &self.pool);
+            self.driver.flush_tx(&mut self.device, &self.pool);
+        }
 
         let before = match self.sockets.snapshot_owned(msg.sender_pid, msg.fd) {
             Ok(snapshot) => snapshot,

@@ -498,6 +498,34 @@ fn handle_control_plane(service_watchdog: &mut ServiceWatchdog) {
                 async_strate2_after_reply = true;
                 execute_cold_respawn_phoenix(service_watchdog)
             }
+            protocol::INIT_MSG_POWER_ACTION => {
+                const RB_AUTOBOOT: u64 = 0x0123_4567;
+                const RB_POWER_OFF: u64 = 0x4321_fedc;
+                let cmd = match request.payload[0] {
+                    1 => RB_AUTOBOOT,
+                    2 => RB_POWER_OFF,
+                    _ => 0,
+                };
+                if cmd != 0 {
+                    log::line(if cmd == RB_AUTOBOOT {
+                        b"init_server: reboot requested by desktop"
+                    } else {
+                        b"init_server: poweroff requested by desktop"
+                    });
+                    unsafe {
+                        let _ = syscall::syscall4(
+                            syscall::SYS_REBOOT,
+                            syscall::LINUX_REBOOT_MAGIC1,
+                            syscall::LINUX_REBOOT_MAGIC2,
+                            cmd,
+                            0,
+                        );
+                    }
+                    protocol::InitReply::ok()
+                } else {
+                    protocol::InitReply::error(syscall::EINVAL)
+                }
+            }
             _ => protocol::InitReply::error(syscall::EINVAL),
         },
     };

@@ -32,11 +32,35 @@
 
 ExoOS is a from-scratch Rust microkernel featuring a dual-kernel fault-tolerant architecture (**ExoPhoenix**), hardware-enforced containment and Next-Gen Antivirus (**ExoShield**), a full native port of the official Rust Standard Library (`library/std` for `target_os = "exo"`), and a complete formal verification corpus of 12 TLA+ modules covering 60 safety and liveness properties.
 
-> **Status (v0.2.0 "Strata"):** Full consolidation of the 7 core system organs and native Rust `std` integration (`x86_64-unknown-exo.json`). Verified QEMU boot from Multiboot2 to graphical VGA Framebuffer, coordinated initialization of 19 supervised Ring 1 services, and interactive session on the `exosh:/$` shell and 35 `coreutils` binaries compiled against the real Rust `library/std`.
+> **Status (v0.2.0 "Strata"):** Full consolidation of the 7 core system organs, native Rust `std` integration (`x86_64-unknown-exo.json`), and a **Strate 2 isolated 60 Hz Desktop Environment** (`exo_compositor` + `exo-ui` + VirtIO-GPU 1.2 / double-buffered scanout). Verified QEMU+KVM boot from Multiboot2 through 19 supervised Ring 1 services to the live graphical desktop (English primary / French secondary UI, ExoFS `/home/user` workspace, ExoBench, live ExoNet networking, animated ACPI S5 shutdown/reboot), alongside the `exosh` shell and 35 `std`-powered `coreutils`.
 
 ---
 
-## Boot Gallery & Graphical VGA Framebuffer
+## Desktop Environment & Graphical Interfaces
+
+ExoOS boots into a modern, hardware-segregated **Strate 2 Desktop** (`servers/exo_compositor`, zero direct MMIO, double-buffered synchronized damage commits over `fb_server` + VirtIO-GPU) written 100% in Rust (`exo-ui`). English is the default primary language, with live runtime switching to French in Settings.
+
+<div align="center">
+  <img src="docs/screenshots/desktop_launcher.png" width="48%" alt="ExoOS Desktop & Application Launcher — Silk Harmony wallpaper, centered dock with crystal hexagon Start button, and default user profile">
+  <img src="docs/screenshots/settings_personalization.png" width="48%" alt="ExoOS Settings — Personalization with Dark/Light themes, wallpapers, harmonized accent colors, and visual transitions">
+  <p><em><strong>Desktop &amp; Launcher</strong> (left) with centered dock, crystal hexagon Start emblem, and default <code>user</code> profile &nbsp;·&nbsp; <strong>Settings</strong> (right) with live themes, wallpapers, 6 harmonized accents, display brightness, EN/FR locale, and security controls.</em></p>
+</div>
+
+<div align="center">
+  <img src="docs/screenshots/files_editor.png" width="48%" alt="ExoOS Files Explorer (/home/user with ExoFS BLAKE3 inspector) and Text Editor side-by-side">
+  <img src="docs/screenshots/monitor_exobench.png" width="48%" alt="ExoOS System Monitor & ExoBench — Global Score 90/100 Grade A+ across Kernel, IPC, Memory, ExoFS, and 2D Compositor">
+  <p><em><strong>Files &amp; Text Editor</strong> (left): writable ExoFS <code>/home/user</code> folders, BLAKE3 integrity inspector, universal scrolling, mouse selection, and flicker-free <code>Ctrl+A/C/V/Z</code> &nbsp;·&nbsp; <strong>System Monitor &amp; ExoBench</strong> (right): real-time diagnostics and 5-module performance benchmark (90/100, Grade A+).</em></p>
+</div>
+
+<div align="center">
+  <img src="docs/screenshots/terminal_net.png" width="48%" alt="ExoOS Terminal running live nettest (DNS cloudflare.com & 1.1.1.1 OK) and exo doctor (Health 100/100)">
+  <img src="docs/screenshots/shutdown_animation.png" width="48%" alt="ExoOS 60 Hz Shutdown Animation syncing ExoFS volumes before clean ACPI S5 power-off">
+  <p><em><strong>Terminal &amp; Live Networking</strong> (left): on-demand shell app (<code>user@exo:~ $</code>), external DNS/ICMP <code>nettest</code> (4/4 OK), and <code>exo doctor</code> (100/100) &nbsp;·&nbsp; <strong>Power Sequence</strong> (right): 60 Hz animated shutdown &amp; restart syncing ExoFS before clean ACPI S5 power-off.</em></p>
+</div>
+
+---
+
+## Boot Gallery & Early VGA Framebuffer
 
 ExoOS includes a high-fidelity graphical display manager (`boot_display` & `fb_server`) providing live visual feedback for every kernel initialization stage and userspace service handoff.
 
@@ -242,11 +266,12 @@ Exo-OS/
 │   ├── usb_server/             # PID 16 — xHCI USB host controller server
 │   ├── tty_server/             # PID 17 — TTY server and console emulation
 │   ├── exo_shield/             # PID 19 — NGAV, AI containment, anomaly detection & forensics
-│   └── exosh/                  # PID 20 — Interactive shell compiled with Rust std
-├── drivers/                    # Ring 1 drivers (PS/2, VirtIO-Net, e1000, Loopback, FB, VirtIO-Blk)
-├── libs/                       # Runtime & shared crates (exo_types, exo-syscall, exo-alloc, exo-rt, exo-libc)
+│   ├── exo_compositor/         # PID 20 — Strate 2 isolated 60 Hz Desktop & Wayland compositor (Rust std)
+│   └── exosh/                  # PID 21 — Interactive shell compiled with Rust std
+├── drivers/                    # Ring 1 drivers (PS/2, VirtIO-Net, e1000, Loopback, VirtIO-GPU, VirtIO-Blk)
+├── libs/                       # Runtime & UI crates (exo-ui, exo-abi, exo-wire, exo-srv-rt, wayland-rs...)
 ├── userspace/apps/coreutils/   # 35 standard utilities compiled with Rust std (cat, grep, ls, ps, top, exo...)
-└── docs/                       # Technical documentation, std_integration.md, V5 architecture & TLA+ proofs
+└── docs/                       # Technical documentation, screenshots/, std_integration.md & TLA+ proofs
 ```
 
 ---

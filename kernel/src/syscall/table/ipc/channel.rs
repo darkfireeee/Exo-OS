@@ -63,8 +63,8 @@ pub(super) fn validate_ipc_envelope_auth(
     if caller_can_inject || caller_class == crate::security::ServiceClass::Exosh {
         return Ok(IpcEnvelopeAuth::TrustedCaller);
     }
-    // S5B: Allow isolated Strate 2 `exo_compositor` to send typed SurfaceGrant/DamageRect IPC
-    // strictly to `fb_server`, `input_server`, or `memory_server` (enforced by ExoCordon POLICY).
+    // S5B: Allow isolated Strate 2 `exo_compositor` to send typed SurfaceGrant/DamageRect/Power IPC
+    // strictly to `fb_server`, `input_server`, `memory_server`, or `init_server` (enforced by ExoCordon POLICY).
     if caller_class == crate::security::ServiceClass::ExoCompositor {
         let dst_pid = exo_ipc_endpoint_pid(endpoint);
         let dst_class = crate::security::service_class_of(crate::process::core::pid::Pid(dst_pid));
@@ -73,6 +73,7 @@ pub(super) fn validate_ipc_envelope_auth(
             crate::security::ServiceClass::FbServer
                 | crate::security::ServiceClass::InputServer
                 | crate::security::ServiceClass::MemoryServer
+                | crate::security::ServiceClass::InitServer
         ) {
             return Ok(IpcEnvelopeAuth::TrustedCaller);
         }

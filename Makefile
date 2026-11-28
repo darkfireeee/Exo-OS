@@ -166,11 +166,13 @@ endif
 
 # Paramètres QEMU communs (machine Q35 moderne, 4 GiB, boot ISO)
 QEMU = qemu-system-x86_64
-QEMU_COMMON_FLAGS  = -machine q35
+# Accélération KVM automatique avec IOAPIC split (requis pour IRQ1/IRQ12 PS/2) — override: QEMU_MACHINE_FLAGS="-machine q35"
+QEMU_MACHINE_FLAGS ?= $(shell [ -r /dev/kvm ] && [ -w /dev/kvm ] && echo "-machine q35,accel=kvm,kernel-irqchip=split -cpu host -smp 2" || echo "-machine q35")
+QEMU_COMMON_FLAGS  = $(QEMU_MACHINE_FLAGS)
 QEMU_COMMON_FLAGS += -m 4G
 QEMU_COMMON_FLAGS += -boot d
-QEMU_COMMON_FLAGS += -no-reboot
-QEMU_COMMON_FLAGS += -no-shutdown
+# Note : -no-reboot / -no-shutdown sont réservés aux profils headless/CI (QEMU_HEADLESS_SAFE_FLAGS)
+# afin que Arrêt (ACPI S5) et Redémarrage (0xCF9) fonctionnent réellement dans `make qemu`.
 # FIX-PERF : Ne pas tracer toutes les interruptions (-d int) en continu pour éviter
 # un ralentissement massif de l'émulation CPU QEMU sur disque sous WSL.
 ifneq ($(QEMU_INT_TRACE),)
@@ -183,15 +185,16 @@ QEMU_COMMON_FLAGS += -device isa-debug-exit,iobase=0xf4,iosize=0x04
 # QMP socket pour contrôle interactif et capture d'écran
 QEMU_COMMON_FLAGS += -qmp unix:/tmp/qmp-sock,server,nowait
 
-# Affichage interactif avec curseur hôte visible sous WSLg / X11
+# Affichage interactif GTK (le curseur natif ExoOS est masqué/capturé proprement sans double curseur)
 ifneq ($(DISPLAY),)
-QEMU_DISPLAY_FLAGS ?= -display gtk,show-cursor=on
+QEMU_DISPLAY_FLAGS ?= -display gtk
 else
 QEMU_DISPLAY_FLAGS ?=
 endif
 
-# Variante graphique interactive canonique (VGA standard framebuffer + console)
-QEMU_FLAGS = $(QEMU_COMMON_FLAGS) -vga std $(QEMU_DISPLAY_FLAGS) -serial stdio
+# Variante graphique interactive canonique (VirtIO-GPU PCI 1.2 + framebuffer VBE 1920x1080)
+QEMU_VGA_FLAGS ?= -device virtio-vga,xres=1920,yres=1080
+QEMU_FLAGS = $(QEMU_COMMON_FLAGS) $(QEMU_VGA_FLAGS) $(QEMU_DISPLAY_FLAGS) -serial stdio
 
 # Variante headless terminal (multiplexage automatique console/moniteur sur stdio)
 QEMU_NOGRAPHIC_FLAGS = $(QEMU_COMMON_FLAGS) -nographic
@@ -268,7 +271,9 @@ build-rootfs-binaries:
 		$(CARGO) build --locked -p exo-loader --features dynamic_linking --target $(LOADER_TARGET_JSON) $(CARGO_USERSPACE_FLAGS); \
 	fi
 	@rm -rf "$(ROOTFS_STAGING_DIR)" 2>/dev/null || (sleep 1 && rm -rf "$(ROOTFS_STAGING_DIR)") || true
-	@mkdir -p "$(ROOTFS_STAGING_DIR)/sbin" "$(ROOTFS_STAGING_DIR)/bin" "$(ROOTFS_STAGING_DIR)/lib" "$(ROOTFS_STAGING_DIR)/mnt/usb" "$(ROOTFS_STAGING_DIR)/tmp" "$(ROOTFS_STAGING_DIR)/apps" "$(ROOTFS_STAGING_DIR)/run" "$(ROOTFS_STAGING_DIR)/etc/exo-desktop" "$(ROOTFS_STAGING_DIR)/etc/exoshield" "$(ROOTFS_STAGING_DIR)/usr/share/themes/exo-strata" "$(ROOTFS_STAGING_DIR)/usr/share/icons/exo-strata"
+	@mkdir -p "$(ROOTFS_STAGING_DIR)/sbin" "$(ROOTFS_STAGING_DIR)/bin" "$(ROOTFS_STAGING_DIR)/lib" "$(ROOTFS_STAGING_DIR)/mnt/usb" "$(ROOTFS_STAGING_DIR)/tmp" "$(ROOTFS_STAGING_DIR)/apps" "$(ROOTFS_STAGING_DIR)/run" "$(ROOTFS_STAGING_DIR)/etc/exo-desktop" "$(ROOTFS_STAGING_DIR)/etc/exoshield" "$(ROOTFS_STAGING_DIR)/usr/share/themes/exo-strata" "$(ROOTFS_STAGING_DIR)/usr/share/icons/exo-strata" "$(ROOTFS_STAGING_DIR)/home/user/Desktop" "$(ROOTFS_STAGING_DIR)/home/user/Documents" "$(ROOTFS_STAGING_DIR)/home/user/Notes" "$(ROOTFS_STAGING_DIR)/home/user/Downloads" "$(ROOTFS_STAGING_DIR)/home/user/Pictures" "$(ROOTFS_STAGING_DIR)/home/user/Projects"
+	@printf "# Welcome to ExoOS 0.2.0\n\nYour personal workspace /home/user is fully writable.\nYou can create, edit, and save files in Documents, Notes, Desktop, or Projects.\n" > "$(ROOTFS_STAGING_DIR)/home/user/Documents/Welcome.txt"
+	@printf "// ExoOS Notes\nType your text here and press Ctrl+S to save.\n" > "$(ROOTFS_STAGING_DIR)/home/user/Notes/Notes.txt"
 	@printf "[compositor]\nbackend = \"virtio-gpu+vesa-shadow\"\nsocket = \"/run/wayland-0\"\ntheme = \"exo-strata\"\ncursor_size = 64\n" > "$(ROOTFS_STAGING_DIR)/etc/exo-desktop/wayland.conf"
 	@printf "[theme]\nname = \"Exo-Strata Aurora\"\nwallpaper_top = \"#0d2642\"\nwallpaper_mid = \"#113256\"\nwallpaper_bottom = \"#0a1e36\"\naccent = \"#00c5ff\"\nwindow_border = \"#2e77b0\"\n" > "$(ROOTFS_STAGING_DIR)/usr/share/themes/exo-strata/theme.toml"
 	@printf "cursor_pointer_64x64_argb8888\nicon_terminal_32x32\nicon_exodoctor_32x32\nicon_calendar_32x32\nicon_exofs_32x32\n" > "$(ROOTFS_STAGING_DIR)/usr/share/icons/exo-strata/icons.manifest"

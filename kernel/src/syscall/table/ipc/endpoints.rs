@@ -43,7 +43,9 @@ pub(super) fn service_class_for_endpoint_name(name: &[u8]) -> Option<crate::secu
         b"ipc_router" => Some(crate::security::ServiceClass::IpcBroker),
         b"exo_shield" => Some(crate::security::ServiceClass::ExoShield),
         b"exosh" | b"exosh_input_reply" => Some(crate::security::ServiceClass::Exosh),
-        b"exo_compositor" => Some(crate::security::ServiceClass::ExoCompositor),
+        b"exo_compositor" | b"exo_compositor_input" => {
+            Some(crate::security::ServiceClass::ExoCompositor)
+        }
         b"audio_server" => Some(crate::security::ServiceClass::AudioServer),
         b"usb_server" => Some(crate::security::ServiceClass::UsbServer),
         _ => None,

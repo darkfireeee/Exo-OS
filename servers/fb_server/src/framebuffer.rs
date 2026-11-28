@@ -261,26 +261,48 @@ impl Framebuffer {
         if !self.is_present() || self.shadow_addr == 0 || w == 0 || h == 0 {
             return;
         }
-        let x0 = x.min(self.width) as usize;
+        let bpp = self.bytes_per_pixel() as usize;
+        let mut x0 = x.min(self.width) as usize;
+        let mut x1 = (x.saturating_add(w)).min(self.width) as usize;
+        // Align 32-bit x-bounds to 8-byte (2-pixel) boundaries so every scanline hits fast u64 MMIO writes.
+        if bpp == 4 {
+            x0 &= !1;
+            x1 = (x1 + 1).min(self.width as usize) & !1;
+            if x1 <= x0 {
+                x1 = (x.saturating_add(w)).min(self.width) as usize;
+            }
+        }
         let y0 = y.min(self.height) as usize;
-        let x1 = (x.saturating_add(w)).min(self.width) as usize;
         let y1 = (y.saturating_add(h)).min(self.height) as usize;
         if x0 >= x1 || y0 >= y1 {
             return;
         }
-        let bpp = self.bytes_per_pixel() as usize;
         let stride = (self.stride_pixels as usize).saturating_mul(bpp);
         let copy_bytes = (x1 - x0).saturating_mul(bpp);
         let mut row_y = y0;
         while row_y < y1 {
             let offset = row_y.saturating_mul(stride).saturating_add(x0.saturating_mul(bpp));
             unsafe {
-                let src = (self.shadow_addr as usize + offset) as *const u8;
-                let dst = (self.virt_addr as usize + offset) as *mut u8;
-                let mut b = 0usize;
-                while b < copy_bytes {
-                    core::ptr::write_volatile(dst.add(b), core::ptr::read(src.add(b)));
-                    b += 1;
+                let mut src_addr = self.shadow_addr as usize + offset;
+                let mut dst_addr = self.virt_addr as usize + offset;
+                let mut rem = copy_bytes;
+                while rem >= 8 && (dst_addr & 7) == 0 && (src_addr & 7) == 0 {
+                    core::ptr::write_volatile(dst_addr as *mut u64, core::ptr::read(src_addr as *const u64));
+                    src_addr += 8;
+                    dst_addr += 8;
+                    rem -= 8;
+                }
+                while rem >= 4 && (dst_addr & 3) == 0 && (src_addr & 3) == 0 {
+                    core::ptr::write_volatile(dst_addr as *mut u32, core::ptr::read(src_addr as *const u32));
+                    src_addr += 4;
+                    dst_addr += 4;
+                    rem -= 4;
+                }
+                while rem > 0 {
+                    core::ptr::write_volatile(dst_addr as *mut u8, core::ptr::read(src_addr as *const u8));
+                    src_addr += 1;
+                    dst_addr += 1;
+                    rem -= 1;
                 }
             }
             row_y += 1;
@@ -334,6 +356,79 @@ impl Framebuffer {
             bpp,
             fill,
         );
+    }
+}
+
+use core::sync::atomic::{AtomicBool, Ordering};
+
+static VIRTIO_GPU_HW_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+pub fn virtio_gpu_hw_active() -> bool {
+    VIRTIO_GPU_HW_ACTIVE.load(Ordering::Acquire)
+}
+
+/// Probe `virtio_drivers` (endpoint 13) once to detect active VirtIO-GPU 1.2 PCI hardware.
+pub fn probe_virtio_gpu_status() {
+    #[repr(C)]
+    struct VirtioReq {
+        sender_pid: u32,
+        msg_type: u32,
+        payload: [u8; syscall::IPC_INLINE_PAYLOAD_SIZE],
+    }
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct VirtioReply {
+        status: i64,
+        backend_ready: u32,
+        queue_count: u32,
+        flags: u32,
+        _pad: [u8; 44],
+    }
+    let pid = unsafe { syscall::syscall0(syscall::SYS_GETPID) } as u32;
+    if pid == 0 {
+        return;
+    }
+    let reply_ep = ((pid as u64) << 32) | 2;
+    let mut payload = [0u8; syscall::IPC_INLINE_PAYLOAD_SIZE];
+    payload[0..8].copy_from_slice(&reply_ep.to_le_bytes());
+    let req = VirtioReq {
+        sender_pid: pid,
+        msg_type: 1, // VIRTIO_MSG_STATUS
+        payload,
+    };
+    let send_rc = unsafe {
+        syscall::syscall6(
+            syscall::SYS_IPC_SEND,
+            13,
+            &req as *const VirtioReq as u64,
+            core::mem::size_of::<VirtioReq>() as u64,
+            syscall::IPC_FLAG_TIMEOUT | 40,
+            0,
+            0,
+        )
+    };
+    if send_rc < 0 {
+        return;
+    }
+    let mut rep = VirtioReply {
+        status: -1,
+        backend_ready: 0,
+        queue_count: 0,
+        flags: 0,
+        _pad: [0; 44],
+    };
+    let recv_rc = unsafe {
+        syscall::syscall4(
+            syscall::SYS_IPC_RECV,
+            reply_ep,
+            &mut rep as *mut VirtioReply as u64,
+            core::mem::size_of::<VirtioReply>() as u64,
+            syscall::IPC_FLAG_TIMEOUT | 60,
+        )
+    };
+    if recv_rc >= core::mem::size_of::<VirtioReply>() as i64 && rep.status == 0 && (rep.flags & 1) != 0 {
+        VIRTIO_GPU_HW_ACTIVE.store(true, Ordering::Release);
+        syscall::boot_log(b"fb_server: VirtIO-GPU 1.2 hardware backend detected\n");
     }
 }
 

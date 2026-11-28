@@ -5,6 +5,7 @@ members = [
     "exo-wire",
     "exo-srv-rt",
     "exo-font",
+    "exo-ui",
     "exo-verity",
     "exo-partition",
     "exo-fscrypt",

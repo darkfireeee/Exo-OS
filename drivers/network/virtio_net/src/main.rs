@@ -35,7 +35,8 @@ const NETWORK_ENDPOINT_ID: u64 = 7;
 const RX_QUEUE: u16 = 0;
 const TX_QUEUE: u16 = 1;
 const INVALID_POOL: u16 = u16::MAX;
-const IPC_RECV_TIMEOUT_MS: u64 = 50;
+// Must stay EVEN (bit 0 = IPC_FLAG_TIMEOUT)
+const IPC_RECV_TIMEOUT_MS: u64 = 4;
 
 struct VirtioHardware {
     common_cfg: *mut u8,
@@ -448,6 +449,26 @@ pub extern "C" fn _start() -> ! {
     loop {
         let rc = recv(&mut request);
         unsafe {
+            if rc == 9 {
+                let raw = core::slice::from_raw_parts(
+                    &request as *const DriverRequest as *const u8,
+                    9,
+                );
+                let wave_gen = u64::from_le_bytes([
+                    raw[1], raw[2], raw[3], raw[4], raw[5], raw[6], raw[7], raw[8],
+                ]);
+                VIRTIO_HW.poll(&mut VIRTIO_NET);
+                if VIRTIO_HW.irq_reg_id != 0 {
+                    let _ = interrupt::ack_irq(
+                        VIRTIO_HW.irq_line,
+                        VIRTIO_HW.irq_reg_id,
+                        0,
+                        wave_gen,
+                        true,
+                    );
+                }
+                continue;
+            }
             if rc > 0 {
                 match request.msg_type {
                     net::NET_CTRL_DRIVER_INIT => {

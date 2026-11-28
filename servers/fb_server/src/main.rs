@@ -137,7 +137,9 @@ fn handle_in_batch(req: &syscall::FbRequest) -> syscall::FbReply {
     match req.msg_type {
         syscall::FB_MSG_WRITE => {
             let n = core::cmp::min(req.a as usize, syscall::FB_TEXT_MAX);
-            console_mut().write_all_no_cursor(&req.data[..n]);
+            if !surface_table_mut().has_active_root_compositor() {
+                console_mut().write_all_no_cursor(&req.data[..n]);
+            }
             syscall::FbReply {
                 status: 0,
                 len: n as u32,
@@ -145,37 +147,51 @@ fn handle_in_batch(req: &syscall::FbRequest) -> syscall::FbReply {
             }
         }
         syscall::FB_MSG_CLEAR => {
-            console_mut().clear();
+            if !surface_table_mut().has_active_root_compositor() {
+                console_mut().clear();
+            }
             syscall::FbReply::default()
         }
         syscall::FB_MSG_SCROLL => {
-            console_mut().scroll_lines(req.a as u32);
+            if !surface_table_mut().has_active_root_compositor() {
+                console_mut().scroll_lines(req.a as u32);
+            }
             syscall::FbReply::default()
         }
         syscall::FB_MSG_SET_CURSOR => {
-            let console = console_mut();
-            if console.cursor_drawn {
-                console.draw_cursor(false);
+            if !surface_table_mut().has_active_root_compositor() {
+                let console = console_mut();
+                if console.cursor_drawn {
+                    console.draw_cursor(false);
+                }
+                console.col = (req.a as u32).min(console.cols.saturating_sub(1));
+                console.row = ((req.b & 0xffff_ffff) as u32).min(console.rows.saturating_sub(1));
+                console.cursor_visible = req.b & (1u64 << 63) != 0;
             }
-            console.col = (req.a as u32).min(console.cols.saturating_sub(1));
-            console.row = ((req.b & 0xffff_ffff) as u32).min(console.rows.saturating_sub(1));
-            console.cursor_visible = req.b & (1u64 << 63) != 0;
             syscall::FbReply::default()
         }
         syscall::DISPLAY_OP_GET_INFO => {
+            if !crate::framebuffer::virtio_gpu_hw_active() {
+                crate::framebuffer::probe_virtio_gpu_status();
+            }
             let fb = console_mut().fb;
+            let gpu_flag = if crate::framebuffer::virtio_gpu_hw_active() { 1u32 << 31 } else { 0 };
             syscall::FbReply {
                 status: ((fb.width as i64) << 32) | (fb.height as i64),
                 len: fb.bpp,
-                _pad: fb.format,
+                _pad: (fb.format & 0x7FFF_FFFF) | gpu_flag,
             }
         }
         syscall::DISPLAY_OP_CREATE_SURFACE => {
+            let is_root = (req.a & syscall::DISPLAY_SURFACE_FLAG_ROOT_DESKTOP) != 0;
             let w = (req.a & 0xFFFF_FFFF) as u32;
             let h = (req.b & 0xFFFF_FFFF) as u32;
-            if let Some(idx) =
+            let idx_opt = if is_root {
+                surface_table_mut().alloc_root_surface(req.sender_pid, w.max(64), h.max(64))
+            } else {
                 surface_table_mut().alloc_surface(req.sender_pid, w.max(64), h.max(64))
-            {
+            };
+            if let Some(idx) = idx_opt {
                 let s = surface_table_mut().surfaces[idx];
                 let return_addr = if s.shm_handle != 0 {
                     s.shm_handle
@@ -222,11 +238,26 @@ fn handle_in_batch(req: &syscall::FbRequest) -> syscall::FbReply {
             if let Some((y_min, y_max)) =
                 surface_table_mut().commit_surface_damage(target_surface_id, req.sender_pid, rect, fb)
             {
-                render_band_layers(fb, y_min, y_max);
-                console_mut().mark_dirty_rows(y_min.min(fb.height), y_max.min(fb.height));
-            } else {
+                if surface_table_mut().has_active_root_compositor() {
+                    let x0 = rect.x.min(fb.width);
+                    let x1 = if rect.width == 0 {
+                        fb.width
+                    } else {
+                        rect.x.saturating_add(rect.width).min(fb.width)
+                    };
+                    console_mut().mark_dirty_rect(x0, y_min.min(fb.height), x1, y_max.min(fb.height));
+                } else {
+                    render_band_layers(fb, y_min, y_max);
+                    console_mut().mark_dirty_rows(y_min.min(fb.height), y_max.min(fb.height));
+                }
+            } else if !surface_table_mut().has_active_root_compositor() {
                 console_mut().mark_dirty_rows(0, fb.height);
             }
+            syscall::FbReply::default()
+        }
+        syscall::DISPLAY_OP_MOVE_WINDOW => {
+            // When Strate 2 root compositor owns the seat, DISPLAY_OP_MOVE_WINDOW syncs
+            // the hardware/sprite cursor to the compositor's authoritative (x, y) position.
             syscall::FbReply::default()
         }
         syscall::DISPLAY_OP_WAYLAND_WIRE => {
@@ -444,6 +475,12 @@ fn drain_mouse_events(endpoint: u64, mouse: &mut MouseState, fb: Framebuffer) {
             break;
         }
         if reply.status == 0 && reply.event.device == syscall::INPUT_DEVICE_MOUSE {
+            if surface_table_mut().has_active_root_compositor() {
+                // Strate 2 root compositor is the single authoritative owner of cursor (x, y)
+                // via DISPLAY_OP_MOVE_WINDOW; drain silently to prevent zero-sync drift.
+                drained += 1;
+                continue;
+            }
             match reply.event.code {
                 0x0110 => total_dx = total_dx.saturating_add(reply.event.value),
                 0x0111 => total_dy = total_dy.saturating_add(reply.event.value),
@@ -677,7 +714,10 @@ pub extern "C" fn _start() -> ! {
             drain_mouse_events(ep, &mut mouse, console_mut().fb);
         }
         let now_min = desktop::current_rtc_minute();
-        if now_min != last_clock_min && console_mut().fb.is_present() {
+        if now_min != last_clock_min
+            && console_mut().fb.is_present()
+            && !surface_table_mut().has_active_root_compositor()
+        {
             last_clock_min = now_min;
             let fb = console_mut().fb;
             let dock_y = fb.height.saturating_sub(DOCK_BAR_H);
@@ -707,12 +747,47 @@ pub extern "C" fn _start() -> ! {
             continue;
         }
 
+        let fb = console_mut().fb;
+        let old_cursor = mouse.saved_rect();
         if mouse.drawn {
-            mouse.restore_background(console_mut().fb);
+            // Restore cursor background into RAM shadow ONLY (never erase cursor directly on MMIO -> 0 flicker!)
+            mouse.restore_background_shadow_only(fb);
         }
+        let mut cursor_moved = old_cursor.is_none();
+        let mut commit_replies = [0u64; 16];
+        let mut commit_reply_len = 0usize;
 
         let reply = handle_in_batch(&req);
-        send_fb_reply(req.reply_endpoint, &reply);
+        if fb.is_present() {
+            if req.msg_type == syscall::DISPLAY_OP_CREATE_SURFACE
+                && (req.a & syscall::DISPLAY_SURFACE_FLAG_ROOT_DESKTOP) != 0
+                && reply.status > 0
+            {
+                mouse.x = fb.width / 2;
+                mouse.y = fb.height / 2;
+                cursor_moved = true;
+            } else if req.msg_type == syscall::DISPLAY_OP_MOVE_WINDOW
+                && surface_table_mut().has_active_root_compositor()
+            {
+                let nx = (req.a as u32).min(fb.width.saturating_sub(1));
+                let ny = (req.b as u32).min(fb.height.saturating_sub(1));
+                if nx != mouse.x || ny != mouse.y {
+                    mouse.x = nx;
+                    mouse.y = ny;
+                    cursor_moved = true;
+                }
+            }
+        }
+        let is_commit = req.msg_type == syscall::DISPLAY_OP_COMMIT_DAMAGE
+            || req.msg_type == syscall::DISPLAY_OP_FLIP;
+        if is_commit && req.reply_endpoint != 0 {
+            if commit_reply_len < commit_replies.len() {
+                commit_replies[commit_reply_len] = req.reply_endpoint;
+                commit_reply_len += 1;
+            }
+        } else {
+            send_fb_reply(req.reply_endpoint, &reply);
+        }
 
         let mut batched = 0usize;
         while batched < BATCH_DRAIN_MAX {
@@ -729,15 +804,68 @@ pub extern "C" fn _start() -> ! {
                 break;
             }
             let r = handle_in_batch(&req);
-            send_fb_reply(req.reply_endpoint, &r);
+            if fb.is_present() {
+                if req.msg_type == syscall::DISPLAY_OP_CREATE_SURFACE
+                    && (req.a & syscall::DISPLAY_SURFACE_FLAG_ROOT_DESKTOP) != 0
+                    && r.status > 0
+                {
+                    mouse.x = fb.width / 2;
+                    mouse.y = fb.height / 2;
+                    cursor_moved = true;
+                } else if req.msg_type == syscall::DISPLAY_OP_MOVE_WINDOW
+                    && surface_table_mut().has_active_root_compositor()
+                {
+                    let nx = (req.a as u32).min(fb.width.saturating_sub(1));
+                    let ny = (req.b as u32).min(fb.height.saturating_sub(1));
+                    if nx != mouse.x || ny != mouse.y {
+                        mouse.x = nx;
+                        mouse.y = ny;
+                        cursor_moved = true;
+                    }
+                }
+            }
+            let b_is_commit = req.msg_type == syscall::DISPLAY_OP_COMMIT_DAMAGE
+                || req.msg_type == syscall::DISPLAY_OP_FLIP;
+            if b_is_commit && req.reply_endpoint != 0 {
+                let mut dup = false;
+                let mut ci = 0usize;
+                while ci < commit_reply_len {
+                    if commit_replies[ci] == req.reply_endpoint {
+                        dup = true;
+                        break;
+                    }
+                    ci += 1;
+                }
+                if !dup && commit_reply_len < commit_replies.len() {
+                    commit_replies[commit_reply_len] = req.reply_endpoint;
+                    commit_reply_len += 1;
+                }
+            } else {
+                send_fb_reply(req.reply_endpoint, &r);
+            }
             batched += 1;
         }
 
-        console_mut().draw_cursor(true);
+        if !surface_table_mut().has_active_root_compositor() {
+            console_mut().draw_cursor(true);
+        }
+        // Composite pointer into RAM shadow BEFORE flushing damage -> single atomic MMIO update, zero cursor flicker!
+        let new_cursor = mouse.draw_cursor_shadow_only(fb);
+        if cursor_moved {
+            if let Some((ox, oy, ow, oh)) = old_cursor {
+                console_mut().mark_dirty_rect(ox, oy, ox.saturating_add(ow), oy.saturating_add(oh));
+            }
+            if let Some((nx, ny, nw, nh)) = new_cursor {
+                console_mut().mark_dirty_rect(nx, ny, nx.saturating_add(nw), ny.saturating_add(nh));
+            }
+        }
         console_mut().flush_damage();
-
-        if !mouse.drawn {
-            mouse.draw_cursor(console_mut().fb);
+        // Acknowledge synchronous COMMIT_DAMAGE strictly AFTER shadow copy + MMIO flush -> zero SHM tearing race!
+        let ack = syscall::FbReply::default();
+        let mut ri = 0usize;
+        while ri < commit_reply_len {
+            send_fb_reply(commit_replies[ri], &ack);
+            ri += 1;
         }
     }
 }

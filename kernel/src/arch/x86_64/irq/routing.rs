@@ -346,14 +346,12 @@ pub fn ack_irq_canonical(
         route.masked_since.store(0, Ordering::Release);
 
         if all_not_mine && route.source_kind == IrqSourceKind::IoApicLevel {
-            local_apic::eoi();
             device_server_ipc::notify_unhandled_irq(irq_vector.as_u8());
             route.soft_alarmed.store(false, Ordering::Relaxed);
             return Ok(());
         }
 
         if route.source_kind == IrqSourceKind::IoApicLevel {
-            local_apic::eoi();
             if let Some(gsi) = route.gsi {
                 io_apic::unmask_irq(gsi);
             }
@@ -441,12 +439,18 @@ pub fn dispatch_irq(vector: u8, _error_code: Option<u64>) {
         return;
     }
 
-    // STEP 2: Exact EOI / masking depending on mode
+    // STEP 2: Exact EOI / masking depending on mode.
+    // On x86_64 SMP, LAPIC EOI MUST execute inside the ISR on the exact CPU that
+    // received the interrupt; otherwise LAPIC.ISR[vector] stays set and hardware-blocks
+    // the entire interrupt priority class (e.g. PS/2 keyboard 0x21 & mouse 0x2C on
+    // class 0x2x) until a potentially-different CPU runs SYS_IRQ_ACK. Because the
+    // IOAPIC GSI is masked first, a level-triggered line cannot re-fire until ACK unmasks it.
     match route.source_kind {
         IrqSourceKind::IoApicLevel => {
             if let Some(gsi) = route.gsi {
                 io_apic::mask_irq(gsi);
             }
+            local_apic::eoi();
             let now = clock_ms();
             let _ =
                 route
@@ -489,7 +493,6 @@ pub fn dispatch_irq(vector: u8, _error_code: Option<u64>) {
         device_server_ipc::notify_unhandled_irq(irq_vector.as_u8());
 
         if route.source_kind == IrqSourceKind::IoApicLevel {
-            local_apic::eoi();
             route.masked.store(false, Ordering::Release);
             if let Some(gsi) = route.gsi {
                 io_apic::unmask_irq(gsi);

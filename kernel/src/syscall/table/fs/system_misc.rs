@@ -32,9 +32,8 @@ const QEMU_DEBUG_EXIT_PORT: u16 = 0x00f4;
 const QEMU_DEBUG_EXIT_SUCCESS: u32 = 0x10; // QEMU exit code (0x10 << 1) | 1 = 33
 #[cfg(feature = "qemu-compliance-exit")]
 const QEMU_DEBUG_EXIT_FAILURE: u32 = 0x11; // QEMU exit code (0x11 << 1) | 1 = 35
-const PS2_CONTROLLER_PORT: u16 = 0x0064;
-const PS2_RESET_COMMAND: u8 = 0xfe;
 
+#[cfg(any(feature = "qemu-compliance-exit", not(target_arch = "x86_64")))]
 #[inline(never)]
 fn halt_after_reboot_request() -> ! {
     crate::arch::halt_cpu()
@@ -63,7 +62,11 @@ fn platform_poweroff() -> ! {
     {
         platform_debug_exit(QEMU_DEBUG_EXIT_SUCCESS)
     }
-    #[cfg(not(feature = "qemu-compliance-exit"))]
+    #[cfg(all(target_arch = "x86_64", not(feature = "qemu-compliance-exit")))]
+    {
+        crate::arch::x86_64::power::arch_poweroff()
+    }
+    #[cfg(all(not(target_arch = "x86_64"), not(feature = "qemu-compliance-exit")))]
     {
         halt_after_reboot_request()
     }
@@ -72,12 +75,7 @@ fn platform_poweroff() -> ! {
 #[inline(never)]
 #[cfg(target_arch = "x86_64")]
 fn platform_restart() -> ! {
-    // SAFETY: SYS_REBOOT runs in ring 0. 0x64/0xfe is the legacy PS/2
-    // controller CPU reset command supported by QEMU and many PCs.
-    unsafe {
-        crate::arch::x86_64::outb(PS2_CONTROLLER_PORT, PS2_RESET_COMMAND);
-    }
-    halt_after_reboot_request()
+    crate::arch::x86_64::power::arch_reboot()
 }
 
 #[inline(never)]
@@ -138,9 +136,8 @@ pub fn sys_reboot(magic1: u64, magic2: u64, cmd: u64, arg: u64, _a5: u64, _a6: u
     }
 
     use crate::syscall::fs_bridge;
-    if let Err(err) = fs_bridge::fs_sync(current_pid_u32()) {
-        return err.to_errno();
-    }
+    // Best-effort filesystem sync: never abort a legitimate PID 1 shutdown/reboot on sync failure.
+    let _ = fs_bridge::fs_sync(caller);
 
     match cmd {
         LINUX_REBOOT_CMD_POWER_OFF => platform_poweroff(),

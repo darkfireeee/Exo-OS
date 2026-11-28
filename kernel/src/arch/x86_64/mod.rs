@@ -17,6 +17,7 @@ pub mod ipc_asm;
 pub mod irq;
 pub mod memory_iface;
 pub mod paging;
+pub mod power;
 pub mod sched_iface; // FFI bridge arch → scheduler (C ABI exports)
 pub mod smp;
 pub mod spectre;
@@ -26,7 +27,6 @@ pub mod time;
 pub mod tss;
 pub mod vga_early;
 pub mod virt;
-
 pub use cpu_ops::*;
 
 use core::sync::atomic::{AtomicBool, Ordering};

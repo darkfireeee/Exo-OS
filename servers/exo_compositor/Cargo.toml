@@ -18,3 +18,4 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("exo"))'
 
 [dependencies]
 exo-syscall-abi = { path = "../syscall_abi" }
+exo-ui          = { path = "../../libs/exo-ui" }

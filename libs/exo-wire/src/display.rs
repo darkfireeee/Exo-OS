@@ -15,7 +15,12 @@ pub const DISPLAY_OP_DESTROY_SURFACE: u32 = 0x5003;
 pub const DISPLAY_OP_COMMIT_DAMAGE: u32 = 0x5004;
 pub const DISPLAY_OP_FLIP: u32 = 0x5005;
 pub const DISPLAY_OP_MOVE_WINDOW: u32 = 0x5006;
+pub const DISPLAY_OP_SET_BRIGHTNESS: u32 = 0x5007;
 pub const DISPLAY_OP_WAYLAND_WIRE: u32 = 0x5010;
+
+/// Flag set in bit 63 of `FbRequest::a` on `DISPLAY_OP_CREATE_SURFACE` to request a
+/// fullscreen borderless root desktop compositor surface (`exo_compositor` Strate 2 -> `fb_server`).
+pub const DISPLAY_SURFACE_FLAG_ROOT_DESKTOP: u64 = 1u64 << 63;
 
 pub const VIRTIO_GPU_MSG_TRANSFER_FLUSH: u32 = 2;
 pub const VIRTIO_GPU_MSG_MOVE_CURSOR: u32 = 3;

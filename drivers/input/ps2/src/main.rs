@@ -248,6 +248,25 @@ fn push_input_event(event: InputEvent) {
 }
 
 #[cfg(target_os = "none")]
+fn flush_mouse_delta(acc_dx: &mut i32, acc_dy: &mut i32, acc_dz: &mut i32) {
+    if *acc_dx != 0 {
+        let dx = (*acc_dx).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+        push_input_event(InputEvent::mouse(exo_ps2_input::mouse::MOUSE_DX, dx));
+        *acc_dx = 0;
+    }
+    if *acc_dy != 0 {
+        let dy = (*acc_dy).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+        push_input_event(InputEvent::mouse(exo_ps2_input::mouse::MOUSE_DY, dy));
+        *acc_dy = 0;
+    }
+    if *acc_dz != 0 {
+        let dz = (*acc_dz).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+        push_input_event(InputEvent::mouse(exo_ps2_input::mouse::MOUSE_WHEEL, dz));
+        *acc_dz = 0;
+    }
+}
+
+#[cfg(target_os = "none")]
 fn drain_controller(
     controller: &mut I8042<SyscallPorts>,
     keyboard: &mut Ps2Keyboard,
@@ -256,6 +275,9 @@ fn drain_controller(
     let mut drained_any = false;
     let mut drained = 0usize;
     let mut mouse_events = [None; 5];
+    let mut acc_dx: i32 = 0;
+    let mut acc_dy: i32 = 0;
+    let mut acc_dz: i32 = 0;
     while drained < IRQ_DRAIN_LIMIT {
         let Some((byte, is_aux)) = controller.poll_byte_with_origin() else {
             break;
@@ -265,14 +287,25 @@ fn drain_controller(
             let count = mouse.feed(byte, &mut mouse_events);
             for i in 0..count {
                 if let Some(event) = mouse_events[i].take() {
-                    push_input_event(event);
+                    if event.code == exo_ps2_input::mouse::MOUSE_DX {
+                        acc_dx = acc_dx.saturating_add(event.value as i32);
+                    } else if event.code == exo_ps2_input::mouse::MOUSE_DY {
+                        acc_dy = acc_dy.saturating_add(event.value as i32);
+                    } else if event.code == exo_ps2_input::mouse::MOUSE_WHEEL {
+                        acc_dz = acc_dz.saturating_add(event.value as i32);
+                    } else {
+                        flush_mouse_delta(&mut acc_dx, &mut acc_dy, &mut acc_dz);
+                        push_input_event(event);
+                    }
                 }
             }
         } else if let Some(event) = keyboard.feed(byte) {
+            flush_mouse_delta(&mut acc_dx, &mut acc_dy, &mut acc_dz);
             push_input_event(event);
         }
         drained += 1;
     }
+    flush_mouse_delta(&mut acc_dx, &mut acc_dy, &mut acc_dz);
     drained_any
 }
 
@@ -303,14 +336,21 @@ pub extern "C" fn _start() -> ! {
     }
 
     let mut controller = I8042::new(SyscallPorts);
-    let mut keyboard = if controller.init().is_ok() {
-        boot_log(b"ps2_driver: i8042 set2 ready\n");
-        Ps2Keyboard::new()
-    } else {
-        boot_log(b"ps2_driver: i8042 init timeout, using translated set1\n");
-        Ps2Keyboard::new_set1()
+    let (mut keyboard, has_wheel) = match controller.init_with_wheel() {
+        Ok(wheel) => {
+            if wheel {
+                boot_log(b"ps2_driver: i8042 set2 ready (wheel)\n");
+            } else {
+                boot_log(b"ps2_driver: i8042 set2 ready\n");
+            }
+            (Ps2Keyboard::new(), wheel)
+        }
+        Err(_) => {
+            boot_log(b"ps2_driver: i8042 init timeout, using translated set1\n");
+            (Ps2Keyboard::new_set1(), false)
+        }
     };
-    let mut mouse = exo_ps2_input::mouse::Ps2Mouse::new();
+    let mut mouse = exo_ps2_input::mouse::Ps2Mouse::with_wheel(has_wheel);
 
     let mut irq_buf = [0u8; 9];
     loop {

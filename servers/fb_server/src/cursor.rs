@@ -1,30 +1,35 @@
-//! 12x18 software/hardware cursor sprite and pointer interaction state for `fb_server`.
+//! 16x22 crisp obsidian-and-crystal pointer sprite and interaction state for `fb_server`.
 
 use crate::desktop_mut;
 use crate::framebuffer::{notify_virtio_gpu_move_cursor, Framebuffer};
 
-pub const MOUSE_CURSOR_W: u32 = 12;
-pub const MOUSE_CURSOR_H: u32 = 18;
+pub const MOUSE_CURSOR_W: u32 = 16;
+pub const MOUSE_CURSOR_H: u32 = 22;
 
-static MOUSE_CURSOR_BITMAP: [[u8; 12]; 18] = [
-    [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-    [1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-    [1, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-    [1, 2, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0],
-    [1, 2, 3, 2, 1, 0, 0, 0, 0, 0, 0, 0],
-    [1, 2, 3, 3, 2, 1, 0, 0, 0, 0, 0, 0],
-    [1, 2, 3, 3, 3, 2, 1, 0, 0, 0, 0, 0],
-    [1, 2, 3, 3, 3, 3, 2, 1, 0, 0, 0, 0],
-    [1, 2, 3, 3, 3, 3, 3, 2, 1, 0, 0, 0],
-    [1, 2, 2, 2, 2, 2, 2, 2, 2, 1, 0, 0],
-    [1, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1, 0],
-    [1, 2, 2, 1, 2, 3, 1, 0, 0, 0, 0, 0],
-    [1, 2, 1, 0, 1, 2, 3, 1, 0, 0, 0, 0],
-    [1, 1, 0, 0, 1, 2, 3, 1, 0, 0, 0, 0],
-    [1, 0, 0, 0, 0, 1, 2, 2, 1, 0, 0, 0],
-    [0, 0, 0, 0, 0, 1, 2, 2, 1, 0, 0, 0],
-    [0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0],
-    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+// 0 = transparent, 1 = crisp white outer edge, 2 = deep obsidian core, 3 = luminous ice-cyan crystal highlight
+static MOUSE_CURSOR_BITMAP: [[u8; 16]; 22] = [
+    [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [1, 3, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [1, 2, 3, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [1, 2, 2, 3, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [1, 2, 2, 2, 3, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [1, 2, 2, 2, 2, 3, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [1, 2, 2, 2, 2, 2, 3, 1, 0, 0, 0, 0, 0, 0, 0, 0],
+    [1, 2, 2, 2, 2, 2, 2, 3, 1, 0, 0, 0, 0, 0, 0, 0],
+    [1, 2, 2, 2, 2, 2, 2, 2, 3, 1, 0, 0, 0, 0, 0, 0],
+    [1, 2, 2, 2, 2, 2, 2, 2, 2, 3, 1, 0, 0, 0, 0, 0],
+    [1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 1, 0, 0, 0, 0],
+    [1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 1, 0, 0, 0],
+    [1, 2, 2, 2, 2, 2, 3, 3, 1, 1, 1, 1, 1, 1, 0, 0],
+    [1, 2, 2, 2, 3, 2, 2, 1, 0, 0, 0, 0, 0, 0, 0, 0],
+    [1, 2, 2, 1, 1, 3, 2, 2, 1, 0, 0, 0, 0, 0, 0, 0],
+    [1, 2, 1, 0, 0, 1, 2, 2, 1, 0, 0, 0, 0, 0, 0, 0],
+    [1, 1, 0, 0, 0, 1, 3, 2, 2, 1, 0, 0, 0, 0, 0, 0],
+    [1, 0, 0, 0, 0, 0, 1, 2, 2, 1, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 1, 3, 2, 2, 1, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
 ];
 
 pub struct MouseState {
@@ -32,7 +37,7 @@ pub struct MouseState {
     pub y: u32,
     pub visible: bool,
     pub drawn: bool,
-    saved_pixels: [u32; 16 * 20],
+    saved_pixels: [u32; 16 * 22],
     saved_x: u32,
     saved_y: u32,
     saved_w: u32,
@@ -54,7 +59,7 @@ impl MouseState {
             y: 384,
             visible: true,
             drawn: false,
-            saved_pixels: [0; 16 * 20],
+            saved_pixels: [0; 16 * 22],
             saved_x: 0,
             saved_y: 0,
             saved_w: 0,
@@ -77,7 +82,17 @@ impl MouseState {
         desktop_mut().set_clipboard_count(n);
     }
 
-    pub fn restore_background(&mut self, fb: Framebuffer) {
+    #[inline]
+    pub fn saved_rect(&self) -> Option<(u32, u32, u32, u32)> {
+        if self.drawn && self.saved_w > 0 && self.saved_h > 0 {
+            Some((self.saved_x, self.saved_y, self.saved_w, self.saved_h))
+        } else {
+            None
+        }
+    }
+
+    /// Restore underlying cursor pixels into RAM shadow buffer ONLY (zero MMIO write -> zero flicker).
+    pub fn restore_background_shadow_only(&mut self, fb: Framebuffer) {
         if !self.drawn || !fb.is_present() {
             return;
         }
@@ -111,16 +126,25 @@ impl MouseState {
             }
             cy += 1;
         }
-        fb.flush_rect(self.saved_x, self.saved_y, self.saved_w, self.saved_h);
         self.drawn = false;
     }
 
-    pub fn draw_cursor(&mut self, fb: Framebuffer) {
-        if !self.visible || !fb.is_present() {
+    pub fn restore_background(&mut self, fb: Framebuffer) {
+        if !self.drawn || !fb.is_present() {
             return;
         }
+        let (sx, sy, sw, sh) = (self.saved_x, self.saved_y, self.saved_w, self.saved_h);
+        self.restore_background_shadow_only(fb);
+        fb.flush_rect(sx, sy, sw, sh);
+    }
+
+    /// Composite pointer sprite into RAM shadow buffer ONLY (returns drawn rect for atomic flush).
+    pub fn draw_cursor_shadow_only(&mut self, fb: Framebuffer) -> Option<(u32, u32, u32, u32)> {
+        if !self.visible || !fb.is_present() {
+            return None;
+        }
         if self.drawn {
-            self.restore_background(fb);
+            self.restore_background_shadow_only(fb);
         }
         let x = self.x.min(fb.width.saturating_sub(1));
         let y = self.y.min(fb.height.saturating_sub(1));
@@ -142,17 +166,17 @@ impl MouseState {
         self.saved_y = y;
         self.saved_w = w;
         self.saved_h = h;
-        let black = fb.encode(0, 0, 0);
-        let white = fb.encode(255, 255, 255);
-        let cyan = fb.encode(0x00, 0xc5, 0xff);
+        let white = fb.encode(0xF8, 0xFC, 0xFF);
+        let obsidian = fb.encode(0x09, 0x13, 0x28);
+        let cyan = fb.encode(0x38, 0xBD, 0xF8);
         cy = 0;
         while cy < h {
             let row_offset = ((y + cy) as usize).saturating_mul(row_stride);
             let mut cx = 0u32;
             while cx < w {
                 let pixel = match MOUSE_CURSOR_BITMAP[cy as usize][cx as usize] {
-                    1 => Some(black),
-                    2 => Some(white),
+                    1 => Some(white),
+                    2 => Some(obsidian),
                     3 => Some(cyan),
                     _ => None,
                 };
@@ -177,9 +201,30 @@ impl MouseState {
             }
             cy += 1;
         }
-        fb.flush_rect(x, y, w, h);
-        notify_virtio_gpu_move_cursor(x, y);
         self.drawn = true;
+        Some((x, y, w, h))
+    }
+
+    pub fn draw_cursor(&mut self, fb: Framebuffer) {
+        if let Some((x, y, w, h)) = self.draw_cursor_shadow_only(fb) {
+            fb.flush_rect(x, y, w, h);
+            notify_virtio_gpu_move_cursor(x, y);
+        }
+    }
+
+    pub fn set_position(&mut self, x: u32, y: u32, fb: Framebuffer) {
+        if !fb.is_present() {
+            return;
+        }
+        let nx = x.min(fb.width.saturating_sub(1));
+        let ny = y.min(fb.height.saturating_sub(1));
+        if nx == self.x && ny == self.y && self.drawn {
+            return;
+        }
+        self.restore_background(fb);
+        self.x = nx;
+        self.y = ny;
+        self.draw_cursor(fb);
     }
 
     pub fn update_position(&mut self, dx: i16, dy: i16, fb: Framebuffer) {

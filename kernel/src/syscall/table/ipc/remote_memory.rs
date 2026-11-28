@@ -185,7 +185,7 @@ pub fn sys_exo_mem_copy_from_pid(
     };
 
     let mut copied = 0usize;
-    let mut scratch = [0u8; 256];
+    let mut scratch = [0u8; 2048];
     while copied < len {
         let src = remote_src + copied as u64;
         let n = {
@@ -248,7 +248,7 @@ pub fn sys_exo_mem_copy_to_pid(
     };
 
     let mut copied = 0usize;
-    let mut scratch = [0u8; 256];
+    let mut scratch = [0u8; 2048];
     while copied < len {
         let dst = remote_dst + copied as u64;
         let max_chunk = (len - copied).min(scratch.len()).min(

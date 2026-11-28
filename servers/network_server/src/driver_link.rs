@@ -49,20 +49,16 @@ impl DriverLink {
         hardware_wait_ms: u64,
         log_timeout: bool,
     ) -> Self {
-        let (primary_hw, secondary_hw) = if hardware_wait_ms == 0 {
+        let (primary_hw, _secondary_hw) = if hardware_wait_ms == 0 {
             lookup_hardware_endpoints()
         } else {
             wait_hardware_endpoints(hardware_wait_ms)
         };
+        // Bind exclusively to ONE active hardware NIC per NetBufPool to avoid dual-NIC
+        // concurrent RX DMA writes into the same pages, TX pool_idx double-free, and MAC clobber.
+        // Prefers virtio_net (QEMU/KVM) and falls back automatically to e1000_net (VirtualBox/Intel).
         if let Some(endpoint) = primary_hw {
-            let mut link = Self::connect_endpoint(endpoint, pool, true);
-            if let Some(sec_ep) = secondary_hw {
-                if sec_ep != endpoint {
-                    init_single_endpoint(sec_ep, pool);
-                    link.secondary_endpoint = sec_ep;
-                }
-            }
-            return link;
+            return Self::connect_endpoint(endpoint, pool, true);
         }
         if let Some(endpoint) = lookup_fallback_endpoint() {
             return Self::connect_endpoint(endpoint, pool, false);
@@ -143,15 +139,9 @@ impl DriverLink {
             return;
         }
         if !self.hardware {
-            let (primary, secondary) = lookup_hardware_endpoints();
+            let (primary, _secondary) = lookup_hardware_endpoints();
             if let Some(endpoint) = primary {
                 *self = Self::connect_endpoint(endpoint, pool, true);
-                if let Some(sec) = secondary {
-                    if sec != endpoint {
-                        init_single_endpoint(sec, pool);
-                        self.secondary_endpoint = sec;
-                    }
-                }
                 return;
             }
         }
@@ -163,15 +153,9 @@ impl DriverLink {
 
     pub fn probe_hardware_now(&mut self, pool: &NetBufPool) -> bool {
         if !self.hardware {
-            let (primary, secondary) = lookup_hardware_endpoints();
+            let (primary, _secondary) = lookup_hardware_endpoints();
             if let Some(endpoint) = primary {
                 *self = Self::connect_endpoint(endpoint, pool, true);
-                if let Some(sec) = secondary {
-                    if sec != endpoint {
-                        init_single_endpoint(sec, pool);
-                        self.secondary_endpoint = sec;
-                    }
-                }
             } else if !self.ready {
                 if let Some(endpoint) = lookup_fallback_endpoint() {
                     *self = Self::connect_endpoint(endpoint, pool, false);

@@ -1,8 +1,9 @@
 # Exo-OS v0.2.0 ("Strata") — Real-Code Segregation of Responsibilities & Unified Adaptation Plan
 
 > **Document ID**: `EXO-ARCH-SEGREGATION-2026-11`  
+> **Status**: **EXECUTED & QUALIFIED** — Waves `W0` → `W5` completed (`200f513f`), 8/8 CI guards + Semgrep (0 findings) + `cargo-deny` + 13/13 `--locked` multi-target builds + **QEMU KVM+VT-d Palier 2 (`make qemu-phoenix-kvm`, `PASS=9/9`, 71 cycles)**  
 > **Scope**: Full multi-workspace Exo-OS v0.2.0 repository (`exo-boot`, `kernel`, `libs`, `library/std`, `loader`, `drivers`, `servers`, `userspace`, `tests`, `tools`, CI/Semgrep/TLA+ gates)  
-> **Inputs Compared**: Real repository source tree (`1,287` first-party `.rs` files, `423,491` LOC) vs. 5 pre-research PDF studies
+> **Inputs Compared**: Real repository source tree (`1,287` first-party `.rs` files, `423,491` LOC pre-refactoring) vs. 5 pre-research PDF studies
 
 ---
 
@@ -489,3 +490,47 @@ Add the following lightweight Python checks to `tools/` and wire them into [`.gi
    - Any cross-crate `#[path = "..."]` attribute crossing a `Cargo.toml` boundary.
 3. **`tools/check_arch_asm_border.py`**: Scans `kernel/src/` outside `kernel/src/arch/` for `asm!`, `global_asm!`, and `naked_asm!`, ratcheting the count from `67 -> 0` across Wave W2 so ISA instructions can never leak back into `memory/`, `scheduler/`, `syscall/`, `security/`, or `fs/`.
 4. **`tools/check_module_hygiene.py`**: Fails CI if any non-vendored `mod.rs` exceeds `150` lines, if any `use super::*;` glob import is added to `kernel/src/syscall/` or `kernel/src/fs/`, or if any binary blob (`.bin`, `.img`, `.weights`) is committed under `**/src/**`.
+
+---
+
+## 8. Post-Execution Verification & Empirical Delta (`W0` → `W5`, Commit `200f513f`)
+
+All six waves (`W0` → `W5`) were executed and landed in commit `200f513f` (`417` files changed, `+32,528 / -40,407` lines, **`-7,879` net LOC**), verified against all 8 Python CI guards, Semgrep (`0` findings across `1,205` files), `cargo deny check` (`advisories/bans/licenses/sources ok`), all 13 `--locked` multi-target `cargo check` jobs, and full bare-metal **Palier 2 QEMU KVM + Intel VT-d (`make qemu-phoenix-kvm`, `-smp 4`, `--release` 2-pass ISO)** qualification.
+
+### 8.1 Static Segregation Metrics (Before vs. After `W0` → `W5`)
+
+| Architectural Indicator | Pre-Segregation Baseline (`c4b399c4`) | Post-Segregation (`200f513f`) | Status |
+| :--- | ---: | ---: | :--- |
+| First-party `.rs` LOC (excl. `library/std` & `vendors`) | `~415,000` LOC (`1,262` files) | **`409,840` LOC (`1,377` focused files)** | **−7,879 net LOC** |
+| `servers/` first-party LOC | `66,624` LOC (`174` files) | **`60,944` LOC (`199` files)** | **−5,680 LOC** (S5B `fb_server/wayland.rs` deleted, `phase5-tests` retired, ML weights binary, `exo-srv-rt`) |
+| `drivers/` first-party LOC | `14,903` LOC (`91` files) | **`11,673` LOC (`68` files)** | **−3,230 LOC** (4 pure format/crypto crates relocated to `libs/`) |
+| `libs/` first-party LOC | `7,418` LOC (`71` files) | **`12,713` LOC (`105` files)** | Canonical leaf contracts (`exo-abi`, `exo-wire`, `exo-srv-rt`, `exo-font`, `exo-verity`, `exo-partition`, `exo-fscrypt`, `exo-fs-formats`, `exo-service-catalog`) |
+| `userspace/` first-party LOC | `3,515` LOC (`50` files) | **`3,214` LOC (`47` files)** | Orphaned `apps/exosh` & `libexo` deleted; `coreutils/bare/util` split |
+| Oversized files `> 800` lines / `> 500` lines | `77` / `328` | **`59` / `307`** | **−18 god-files > 800L** |
+| Non-`arch/` inline `asm!` files in `kernel/src/` | `67` | **`0`** (`808` files scanned) | Enforced by [`check_arch_asm_border.py`](../tools/check_arch_asm_border.py) |
+| Crate DAG inversions & cross-crate `#[path]` | `19+` | **`0`** (`66` manifests scanned) | Enforced by [`check_crate_dag.py`](../tools/check_crate_dag.py) |
+| Duplicate literal `SYS_*` tables outside `libs/exo-abi` | `7` independent copies | **`0`** (`322` canonical `SYS_*`) | Enforced by [`check_abi_sync.py`](../tools/check_abi_sync.py) |
+| Binary blobs committed under `**/src/**` | `2` (`wallpaper.bin`, ML weights) | **`0`** (`171` `mod.rs` audited) | Enforced by [`check_module_hygiene.py`](../tools/check_module_hygiene.py) |
+| Ring 0 ↔ Ring 1 ExoCordon IPC policy parity | `67` / drifted | **`125 == 125`** exact mirror | Enforced by [`check_ipc_policy_mirror.py`](../tools/check_ipc_policy_mirror.py) |
+
+### 8.2 Live Runtime Qualification (`make qemu-phoenix-kvm`, Palier 2 KVM + Intel VT-d, `-smp 4`, 71 Cycles)
+
+Full 2-pass `--release` ISO (`target/qemu/exo-os-fault-test.iso`, `88M`, signed Ed25519 kernel `29,539,176 B + 256 B footer`, ExoFS rootfs `81 blobs / 21,889,864 B`) executed under KVM + hardware Intel VT-d (`VTD_UNITS=1`, `SMAP=1`, `SMEP=1`, `-smp 4`), logged in [`docs/BENCHMARK-EXOPHOENIX-KVM.md`](BENCHMARK-EXOPHOENIX-KVM.md):
+
+| Palier 2 Metric (`make qemu-phoenix-kvm`) | Pre-Segregation (`c4b399c4`) | Post-Segregation (`200f513f`) | Delta |
+| :--- | ---: | ---: | :--- |
+| **Qualification Verdict (`F0`..`F9`, RC QEMU `33`)** | `PASS=9 FAIL=0 TOTAL=9` | **`PASS=9 FAIL=0 TOTAL=9`** | **Zero regression** |
+| **Golden RAM Mirror (`MIRROR_BYTES` nominal / `HEALED=1`)** | `4,331,502 B` / `5,792,003 B` | **`4,300,654 B` / `5,758,019 B`** | **−30.1 KiB nominal (−33.2 KiB healed)** |
+| **60× `SOFT_FORCE` `S0_FREEZE_US`** (min / med / p95) | `394 µs` / `954 µs` / `4,051 µs` | **`314 µs` / `438 µs` / `557 µs`** | **2.2× faster median / 7.3× p95** |
+| **60× `SOFT_FORCE` `S0_FORGE_US`** (~4.10 MiB BLAKE3, min / med / p95) | `13.2 ms` / `23.3 ms` / `44.2 ms` | **`7.6 ms` / `10.0 ms` / `12.4 ms`** | **2.3× faster median / 3.6× p95** |
+| **60× `SOFT_FORCE` `S0_TOTAL_US`** (min / med / p95) | `14.0 ms` / `25.2 ms` / `47.3 ms` | **`8.2 ms` / `10.6 ms` / `13.3 ms`** | **2.4× faster median / 3.6× p95** |
+| **60× `SOFT_FORCE` `S1_TOTAL_US`** (min / med / p95) | `20.1 ms` / `34.5 ms` / `288.7 ms` | **`8.6 ms` / `12.2 ms` / `34.1 ms`** | **2.8× faster median / 8.5× p95** |
+| **`CRASH_NMI` `CYCLE=1` (`#UD`) / `CYCLE=2` (`#NMI`) / `CYCLE=3` (`HEALED=1`)** (`S1_TOTAL`) | `30.3 ms` / `23.1 ms` / `27.6 ms` | **`11.7 ms` / `8.3 ms` / `12.0 ms`** | **2.3× – 2.8× faster** |
+| **`CORR-33` `CYCLE=5` (`DEGRADED=1` stalled AP timeout)** (`S0_FREEZE` / `S1_TOTAL`) | `100.7 ms` / `132.1 ms` | **`100.4 ms` / `117.2 ms`** | Bounded `100 ms` timeout intact |
+| **`COLD_RESPAWN` `CYCLE=7` (`F3`) `S1_TOTAL` / S2 wall** | `193.6 ms` / `447 ms` | **`169.0 ms` / `354 ms`** | **`5.9×` under 1s SLA (−21% S2 wall)** |
+| **`COLD_RESPAWN` `CYCLE=18` (`F5`, VFS cold + 2 MiB file)** (`S1_TOTAL`) | `160.9 ms` | **`73.7 ms`** | **2.2× faster (`13.6×` under 1s SLA)** |
+| **`COLD_RESPAWN` `CYCLE=46` (`F9`, 50-cycle soak)** (`S1_TOTAL`) | `391.3 ms` | **`86.8 ms`** | **4.5× faster (`11.5×` under 1s SLA)** |
+| **`F4` FPU/SSE2/XMM integrity** (`10` SMP switches) | `117.7M` checks, `0` corrupt (`1,393 ms`) | **`111.7M` checks, `0` corrupt (`1,028 ms`)** | **Zero corrupted bits (−26% duration)** |
+| **`F7` Real Intel VT-d HW DMAR fault** (`-device edu`, `sid=0x0010`) | Trapped + `SIGKILL` (`162 ms`) | **Trapped + `SIGKILL` (`145 ms`)** | **Hardware VT-d isolation intact** |
+| **`F8` 10 s IRQ anti-storm soak** (`soak_ops`) | `94` ops (`heartbeat=898`) | **`156` ops (`heartbeat=953`)** | **+66% soak throughput** |
+| **`F9` 50-cycle soak duration & leak check** | `6,734 ms` (`pid_delta=0`, `frame_delta=49`) | **`2,068 ms` (`pid_delta=0`, `frame_delta=54`)** | **3.3× faster, 0 PID leak, 112/112 ledger** |

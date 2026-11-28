@@ -125,6 +125,32 @@ impl SubscriberTable {
             queue_depth,
             _pad: [0; 4],
         };
+        if event.device == syscall::INPUT_DEVICE_KEYBOARD {
+            let focus = KBD_FOCUS_ENDPOINT.load(Ordering::Acquire);
+            if focus != 0 {
+                let rc = unsafe {
+                    syscall::syscall6(
+                        syscall::SYS_IPC_SEND,
+                        focus,
+                        &reply as *const syscall::InputReply as u64,
+                        core::mem::size_of::<syscall::InputReply>() as u64,
+                        syscall::IPC_FLAG_TIMEOUT,
+                        0,
+                        0,
+                    )
+                };
+                if rc >= 0 {
+                    return true;
+                } else if rc == syscall::ESRCH || rc == syscall::ENOENT || rc == syscall::EBADF {
+                    let _ = KBD_FOCUS_ENDPOINT.compare_exchange(
+                        focus,
+                        0,
+                        Ordering::AcqRel,
+                        Ordering::Acquire,
+                    );
+                }
+            }
+        }
         for slot in &self.endpoints {
             let ep = slot.load(Ordering::Acquire);
             if ep == 0 {
@@ -156,12 +182,15 @@ impl SubscriberTable {
                 // Détacher UNIQUEMENT si l'endpoint est mort (ESRCH / ENOENT / EBADF)
                 // Ne JAMAIS détacher sur tampon plein ou indisponibilité temporaire (EAGAIN, ENOBUFS)
                 let _ = slot.compare_exchange(ep, 0, Ordering::AcqRel, Ordering::Acquire);
+                let _ = KBD_FOCUS_ENDPOINT.compare_exchange(ep, 0, Ordering::AcqRel, Ordering::Acquire);
             }
         }
         delivered
     }
 }
 static SUBSCRIBERS: SubscriberTable = SubscriberTable::new();
+/// Exclusive keyboard seat focus endpoint (0 = broadcast to all keyboard subscribers).
+static KBD_FOCUS_ENDPOINT: AtomicU64 = AtomicU64::new(0);
 
 #[inline]
 fn boot_log(bytes: &[u8]) {
@@ -239,6 +268,25 @@ fn handle(req: &syscall::InputRequest) -> syscall::InputReply {
         syscall::INPUT_MSG_DETACH => {
             // FIX-INPUT-MULTI: support du détachement (nouveau type de message).
             SUBSCRIBERS.detach(req.reply_endpoint);
+            let _ = KBD_FOCUS_ENDPOINT.compare_exchange(
+                req.reply_endpoint,
+                0,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            );
+            syscall::InputReply {
+                status: 0,
+                event: syscall::InputEventWire::default(),
+                queue_depth: queue_mut().len as u32,
+                _pad: [0; 4],
+            }
+        }
+        syscall::INPUT_MSG_GRAB_KBD => {
+            if req.event.value != 0 && req.reply_endpoint != 0 {
+                KBD_FOCUS_ENDPOINT.store(req.reply_endpoint, Ordering::Release);
+            } else {
+                KBD_FOCUS_ENDPOINT.store(0, Ordering::Release);
+            }
             syscall::InputReply {
                 status: 0,
                 event: syscall::InputEventWire::default(),
@@ -292,7 +340,9 @@ pub extern "C" fn _start() -> ! {
             continue;
         }
         let reply = handle(&req);
-        let reply_endpoint = if req.msg_type == syscall::INPUT_MSG_ATTACH {
+        let reply_endpoint = if req.msg_type == syscall::INPUT_MSG_ATTACH
+            || req.msg_type == syscall::INPUT_MSG_GRAB_KBD
+        {
             0
         } else if req.reply_endpoint != 0 {
             req.reply_endpoint

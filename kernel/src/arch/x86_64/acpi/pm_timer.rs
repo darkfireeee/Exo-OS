@@ -19,6 +19,7 @@ const PM_TMR_MASK_32: u32 = 0xFFFF_FFFF;
 
 static PM_TMR_PORT: AtomicU32 = AtomicU32::new(0);
 static PM_TMR_32BIT: AtomicBool = AtomicBool::new(false);
+static PM1A_CTL_PORT: AtomicU32 = AtomicU32::new(0);
 
 // ── FADT Structure (minimal) ──────────────────────────────────────────────────
 
@@ -69,13 +70,14 @@ struct FadtMinimal {
 }
 
 const FADT_HEADER_SIZE: usize = 36;
+const FADT_PM1A_CTL_BLK_OFF: usize = FADT_HEADER_SIZE + 28; // offset 64 from start of FADT
 const FADT_PM_TMR_BLK_OFF: usize = FADT_HEADER_SIZE + 40; // offset 76 from start of FADT
 const FADT_FLAGS_OFF: usize = FADT_HEADER_SIZE + 76; // offset 112
 const FADT_TMR_VAL_EXT: u32 = 1 << 8;
 
 // ── Initialization ───────────────────────────────────────────────────────────
 
-/// Initializes the PM Timer from the FADT table
+/// Initializes the PM Timer (and records FADT PM1a_CNT_BLK for ACPI S5 power-off).
 ///
 /// Called by `init_acpi()` after locating the FACP/FADT table.
 pub fn init_pm_timer(fadt_phys: u64) -> bool {
@@ -83,6 +85,12 @@ pub fn init_pm_timer(fadt_phys: u64) -> bool {
     if fadt_phys == 0 {
         return false;
     };
+    if let Some(pm1a_ctl_blk) = acpi_read_unaligned::<u32>(fadt_phys + FADT_PM1A_CTL_BLK_OFF as u64)
+    {
+        if pm1a_ctl_blk != 0 && pm1a_ctl_blk <= u16::MAX as u32 {
+            PM1A_CTL_PORT.store(pm1a_ctl_blk, Ordering::Release);
+        }
+    }
     let Some(pm_tmr_blk) = acpi_read_unaligned::<u32>(fadt_phys + FADT_PM_TMR_BLK_OFF as u64)
     else {
         return false;
@@ -98,6 +106,12 @@ pub fn init_pm_timer(fadt_phys: u64) -> bool {
     PM_TMR_PORT.store(pm_tmr_blk, Ordering::Release);
     PM_TMR_32BIT.store((fadt_flags & FADT_TMR_VAL_EXT) != 0, Ordering::Release);
     true
+}
+
+/// Returns the FADT `PM1a_CNT_BLK` I/O port (0 if ACPI/FADT did not publish one).
+#[inline]
+pub fn acpi_pm1a_ctl_port() -> u16 {
+    PM1A_CTL_PORT.load(Ordering::Acquire) as u16
 }
 
 // ── Timer Read ────────────────────────────────────────────────────────────────

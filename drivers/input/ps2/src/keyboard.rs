@@ -9,6 +9,9 @@ pub const KEY_LEFT_SHIFT: u16 = 0x00e1;
 pub const KEY_RIGHT_SHIFT: u16 = 0x00e5;
 pub const KEY_LEFT_CTRL: u16 = 0x00e0;
 pub const KEY_LEFT_ALT: u16 = 0x00e2;
+pub const KEY_LEFT_META: u16 = 0x00e3;
+pub const KEY_F2: u16 = 0x003b;
+pub const KEY_F5: u16 = 0x003e;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 enum ScancodeSet {
@@ -100,6 +103,7 @@ impl Ps2Keyboard {
             KEY_LEFT_SHIFT | KEY_RIGHT_SHIFT => self.modifiers.shift = pressed,
             KEY_LEFT_CTRL => self.modifiers.ctrl = pressed,
             KEY_LEFT_ALT => self.modifiers.alt = pressed,
+            KEY_LEFT_META => self.modifiers.meta = pressed,
             _ => {}
         }
     }
@@ -111,6 +115,7 @@ pub fn map_set1_to_hid(scancode: u8, extended: bool) -> Option<u16> {
             0x1c => Some(KEY_ENTER),
             0x1d => Some(KEY_LEFT_CTRL),
             0x38 => Some(KEY_LEFT_ALT),
+            0x5b | 0x5c => Some(KEY_LEFT_META),
             0x48 => Some(0x0052), // up
             0x50 => Some(0x0051), // down
             0x4b => Some(0x0050), // left
@@ -167,6 +172,8 @@ pub fn map_set1_to_hid(scancode: u8, extended: bool) -> Option<u16> {
         0x0e => Some(KEY_BACKSPACE),
         0x0f => Some(KEY_TAB),
         0x39 => Some(KEY_SPACE),
+        0x3c => Some(KEY_F2),
+        0x3f => Some(KEY_F5),
         0x0c => Some(0x002d),
         0x0d => Some(0x002e),
         0x1a => Some(0x002f),
@@ -192,6 +199,7 @@ pub fn map_set2_to_hid(scancode: u8, extended: bool) -> Option<u16> {
             0x5a => Some(KEY_ENTER),
             0x14 => Some(KEY_LEFT_CTRL),
             0x11 => Some(KEY_LEFT_ALT),
+            0x1f | 0x27 => Some(KEY_LEFT_META),
             0x75 => Some(0x0052), // up
             0x72 => Some(0x0051), // down
             0x6b => Some(0x0050), // left
@@ -248,6 +256,8 @@ pub fn map_set2_to_hid(scancode: u8, extended: bool) -> Option<u16> {
         0x66 => Some(KEY_BACKSPACE),
         0x0d => Some(KEY_TAB),
         0x29 => Some(KEY_SPACE),
+        0x06 => Some(KEY_F2),
+        0x03 => Some(KEY_F5),
         0x4e => Some(0x002d),
         0x55 => Some(0x002e),
         0x54 => Some(0x002f),

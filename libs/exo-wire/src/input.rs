@@ -7,6 +7,9 @@ pub const INPUT_MSG_POLL: u32 = 0x121;
 pub const INPUT_MSG_HEARTBEAT: u32 = 0x122;
 pub const INPUT_MSG_ATTACH: u32 = 0x123;
 pub const INPUT_MSG_DETACH: u32 = 0x124;
+/// Claim (`event.value != 0`) or release (`event.value == 0`) exclusive keyboard seat focus
+/// on `reply_endpoint` so focused GUI apps do not double-type into background TTY/shell.
+pub const INPUT_MSG_GRAB_KBD: u32 = 0x125;
 
 pub const INPUT_DEVICE_KEYBOARD: u8 = 1;
 pub const INPUT_DEVICE_MOUSE: u8 = 2;

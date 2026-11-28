@@ -53,6 +53,8 @@ pub struct Console {
     ansi_state: u8,
     params: [u16; 4],
     param_count: usize,
+    dirty_x_min: u32,
+    dirty_x_max: u32,
     dirty_y_min: u32,
     dirty_y_max: u32,
     pub sel_start: Option<(u32, u32)>,
@@ -79,6 +81,8 @@ impl Console {
             ansi_state: ANSI_GROUND,
             params: [0; 4],
             param_count: 0,
+            dirty_x_min: u32::MAX,
+            dirty_x_max: 0,
             dirty_y_min: u32::MAX,
             dirty_y_max: 0,
             sel_start: None,
@@ -89,22 +93,49 @@ impl Console {
 
     #[inline]
     pub fn mark_dirty_rows(&mut self, y_start: u32, y_end: u32) {
-        if y_start < self.dirty_y_min {
-            self.dirty_y_min = y_start;
+        self.mark_dirty_rect(0, y_start, self.fb.width, y_end);
+    }
+
+    #[inline]
+    pub fn mark_dirty_rect(&mut self, x_start: u32, y_start: u32, x_end: u32, y_end: u32) {
+        let x0 = x_start.min(self.fb.width);
+        let x1 = x_end.min(self.fb.width);
+        let y0 = y_start.min(self.fb.height);
+        let y1 = y_end.min(self.fb.height);
+        if x0 >= x1 || y0 >= y1 {
+            return;
         }
-        if y_end > self.dirty_y_max {
-            self.dirty_y_max = y_end.min(self.fb.height);
+        if x0 < self.dirty_x_min {
+            self.dirty_x_min = x0;
+        }
+        if x1 > self.dirty_x_max {
+            self.dirty_x_max = x1;
+        }
+        if y0 < self.dirty_y_min {
+            self.dirty_y_min = y0;
+        }
+        if y1 > self.dirty_y_max {
+            self.dirty_y_max = y1;
         }
     }
 
     #[inline]
     pub fn flush_damage(&mut self) {
-        if self.dirty_y_min < self.dirty_y_max {
+        if self.dirty_y_min < self.dirty_y_max && self.dirty_x_min < self.dirty_x_max {
+            let x_min = self.dirty_x_min;
+            let x_max = self.dirty_x_max;
             let y_min = self.dirty_y_min;
             let y_max = self.dirty_y_max;
+            let w = x_max.saturating_sub(x_min);
             let h = y_max.saturating_sub(y_min);
-            notify_virtio_gpu_flush(0, y_min, self.fb.width, h);
-            self.fb.flush_rows(y_min, y_max);
+            notify_virtio_gpu_flush(x_min, y_min, w, h);
+            if x_min == 0 && x_max >= self.fb.width {
+                self.fb.flush_rows(y_min, y_max);
+            } else {
+                self.fb.flush_rect(x_min, y_min, w, h);
+            }
+            self.dirty_x_min = u32::MAX;
+            self.dirty_x_max = 0;
             self.dirty_y_min = u32::MAX;
             self.dirty_y_max = 0;
         }

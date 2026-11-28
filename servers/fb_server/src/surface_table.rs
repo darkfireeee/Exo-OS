@@ -129,6 +129,7 @@ pub struct CompositorSurface {
     pub maximized: bool,
     pub focused: bool,
     pub is_terminal: bool,
+    pub is_root_compositor: bool,
     pub committed: bool,
 }
 
@@ -163,6 +164,7 @@ impl CompositorSurface {
             maximized: false,
             focused: false,
             is_terminal: false,
+            is_root_compositor: false,
             committed: false,
         }
     }
@@ -210,7 +212,9 @@ impl SurfaceTable {
         term.y = desktop::WIN_TOP_Y as i32;
         term.z_order = 2;
         term.toplevel = true;
-        term.focused = true;
+        // Terminal does NOT auto-open on boot — user launches it as a normal app.
+        term.minimized = true;
+        term.focused = false;
         term.is_terminal = true;
         term.committed = true;
         term.title = init_bytes_32(b"ExoTerm - exosh (Wayland)");
@@ -223,11 +227,25 @@ impl SurfaceTable {
             next_surface_id: 2,
             next_z: 3,
             wire_messages_processed: 0,
-            kickoff_open: true,
+            kickoff_open: false,
             selected_category: 0,
             selected_app: 0,
             focused_surface_idx: 0,
         }
+    }
+
+    /// Returns true while Strate 2 `exo_compositor` owns a committed fullscreen root surface.
+    #[inline]
+    pub fn has_active_root_compositor(&self) -> bool {
+        let mut i = 1usize;
+        while i < MAX_SHM_SURFACES {
+            let s = &self.surfaces[i];
+            if s.active && s.is_root_compositor && s.committed {
+                return true;
+            }
+            i += 1;
+        }
+        false
     }
 
     pub fn ensure_terminal_bounds(&mut self, fb: Framebuffer) {
@@ -343,6 +361,27 @@ impl SurfaceTable {
         self.surfaces[idx].height = new_h.clamp(180, max_h);
     }
 
+    pub fn alloc_root_surface(&mut self, owner_pid: u32, width: u32, height: u32) -> Option<usize> {
+        // Reclaim any stale root compositor surface from a previous Strate 2 respawn.
+        let mut r = 1usize;
+        while r < MAX_SHM_SURFACES {
+            if self.surfaces[r].active && self.surfaces[r].is_root_compositor {
+                self.surfaces[r] = CompositorSurface::empty();
+            }
+            r += 1;
+        }
+        let idx = self.alloc_surface(owner_pid, width, height)?;
+        let s = &mut self.surfaces[idx];
+        s.is_root_compositor = true;
+        s.x = 0;
+        s.y = 0;
+        s.toplevel = false;
+        s.title = init_bytes_32(b"Exo-OS Strata Desktop");
+        s.title_len = 21;
+        syscall::boot_log(b"fb_server: root compositor surface granted\n");
+        Some(idx)
+    }
+
     pub fn alloc_surface(&mut self, owner_pid: u32, width: u32, height: u32) -> Option<usize> {
         let mut i = 1usize;
         while i < MAX_SHM_SURFACES {
@@ -363,6 +402,9 @@ impl SurfaceTable {
                     )
                 };
                 let virt_addr = if virt_rc > 0 { virt_rc as u64 } else { 0 };
+                if virt_addr == 0 {
+                    return None;
+                }
                 let mut client_handle = 0u64;
                 if owner_pid > 1 {
                     let client_virt = unsafe {
@@ -377,6 +419,11 @@ impl SurfaceTable {
                     };
                     if client_virt > 0 {
                         client_handle = client_virt as u64;
+                    } else {
+                        let _ = unsafe {
+                            syscall::syscall2(syscall::SYS_MUNMAP, virt_addr, size_bytes)
+                        };
+                        return None;
                     }
                 }
                 let mut s = CompositorSurface::empty();
@@ -455,37 +502,48 @@ impl SurfaceTable {
                 }
 
                 let s = &self.surfaces[i];
-                if !s.is_terminal && s.shm_handle != 0 && s.virt_addr != 0 && s.owner_pid > 1 {
-                    let dmg_y = rect.y.min(s.height);
-                    let dmg_h = if rect.height == 0 {
-                        s.height
-                    } else {
-                        rect.height
-                    }
-                    .min(s.height.saturating_sub(dmg_y));
+                let is_root = s.is_root_compositor;
+                let dmg_x = rect.x.min(s.width);
+                let dmg_y = rect.y.min(s.height);
+                let dmg_w = if rect.width == 0 {
+                    s.width.saturating_sub(dmg_x)
+                } else {
+                    rect.width.min(s.width.saturating_sub(dmg_x))
+                };
+                let dmg_h = if rect.height == 0 {
+                    s.height.saturating_sub(dmg_y)
+                } else {
+                    rect.height.min(s.height.saturating_sub(dmg_y))
+                };
+                if !s.is_terminal && s.shm_handle != 0 && s.virt_addr != 0 && s.owner_pid > 1 && dmg_h > 0 {
                     let stride = s.stride_bytes as u64;
-                    let base_off = s.buffer_offset as u64;
-                    let mut r = 0u32;
-                    while r < dmg_h {
-                        let row_offset =
-                            base_off.saturating_add(((dmg_y + r) as u64).saturating_mul(stride));
-                        if row_offset.saturating_add(stride) <= s.buf_size_bytes {
-                            let remote_src = s.shm_handle.saturating_add(row_offset);
-                            let local_dst = s.virt_addr.saturating_add(row_offset);
-                            unsafe {
-                                let _ = syscall::syscall6(
-                                    syscall::SYS_EXO_MEM_COPY_FROM_PID,
-                                    s.owner_pid as u64,
-                                    remote_src,
-                                    local_dst,
-                                    stride,
-                                    0,
-                                    0,
-                                );
-                            }
+                    let base_off = (s.buffer_offset as u64)
+                        .saturating_add((dmg_y as u64).saturating_mul(stride));
+                    let band_bytes = (dmg_h as u64).saturating_mul(stride);
+                    if base_off.saturating_add(band_bytes) <= s.buf_size_bytes {
+                        let remote_src = s.shm_handle.saturating_add(base_off);
+                        let local_dst = s.virt_addr.saturating_add(base_off);
+                        let copy_rc = unsafe {
+                            syscall::syscall6(
+                                syscall::SYS_EXO_MEM_COPY_FROM_PID,
+                                s.owner_pid as u64,
+                                remote_src,
+                                local_dst,
+                                band_bytes,
+                                0,
+                                0,
+                            )
+                        };
+                        if copy_rc == syscall::ENOENT || copy_rc == syscall::ESRCH {
+                            self.surfaces[i] = CompositorSurface::empty();
+                            return None;
                         }
-                        r += 1;
                     }
+                }
+
+                if is_root {
+                    self.blit_root_compositor_rect(i, fb, dmg_x, dmg_y, dmg_w, dmg_h);
+                    return Some((dmg_y.min(fb.height), dmg_y.saturating_add(dmg_h).min(fb.height)));
                 }
 
                 self.composite_surface(i, fb);
@@ -498,6 +556,96 @@ impl SurfaceTable {
             i += 1;
         }
         None
+    }
+
+    /// Ultra-fast borderless scanout of the Strate 2 root desktop compositor surface (`0xAARRGGBB`).
+    fn blit_root_compositor_rect(
+        &self,
+        s_idx: usize,
+        fb: Framebuffer,
+        dmg_x: u32,
+        dmg_y: u32,
+        dmg_w: u32,
+        dmg_h: u32,
+    ) {
+        if !fb.is_present() || s_idx >= MAX_SHM_SURFACES {
+            return;
+        }
+        let s = &self.surfaces[s_idx];
+        if !s.active || s.virt_addr == 0 || dmg_w == 0 || dmg_h == 0 {
+            return;
+        }
+        let base = fb.draw_target_base();
+        if base == 0 {
+            return;
+        }
+        let bpp = fb.bytes_per_pixel() as usize;
+        let dst_stride = (fb.stride_pixels as usize).saturating_mul(bpp);
+        let src_stride = s.stride_bytes as usize;
+        let x0 = dmg_x.min(fb.width).min(s.width) as usize;
+        let y0 = dmg_y.min(fb.height).min(s.height) as usize;
+        let x1 = dmg_x.saturating_add(dmg_w).min(fb.width).min(s.width) as usize;
+        let y1 = dmg_y.saturating_add(dmg_h).min(fb.height).min(s.height) as usize;
+        if x0 >= x1 || y0 >= y1 {
+            return;
+        }
+        let is_bgr = fb.format == 1;
+        let copy_px = x1 - x0;
+
+        let mut row = y0;
+        while row < y1 {
+            let src_off = (row as u64).saturating_mul(src_stride as u64)
+                .saturating_add((x0 as u64).saturating_mul(4));
+            if src_off.saturating_add((copy_px as u64).saturating_mul(4)) > s.buf_size_bytes {
+                break;
+            }
+            let src_ptr = (s.virt_addr.saturating_add(src_off)) as *const u32;
+            let dst_row_addr = base
+                .saturating_add(row.saturating_mul(dst_stride))
+                .saturating_add(x0.saturating_mul(bpp));
+
+            if bpp == 4 && !is_bgr {
+                unsafe {
+                    core::ptr::copy_nonoverlapping(src_ptr, dst_row_addr as *mut u32, copy_px);
+                }
+            } else if bpp == 4 {
+                let dst_ptr = dst_row_addr as *mut u32;
+                let mut col = 0usize;
+                while col < copy_px {
+                    unsafe {
+                        let p = core::ptr::read(src_ptr.add(col));
+                        let r = (p >> 16) & 0xFF;
+                        let g = (p >> 8) & 0xFF;
+                        let b = p & 0xFF;
+                        core::ptr::write(dst_ptr.add(col), (b << 16) | (g << 8) | r);
+                    }
+                    col += 1;
+                }
+            } else if bpp == 3 {
+                let dst_ptr = dst_row_addr as *mut u8;
+                let mut col = 0usize;
+                while col < copy_px {
+                    unsafe {
+                        let p = core::ptr::read(src_ptr.add(col));
+                        let r = ((p >> 16) & 0xFF) as u8;
+                        let g = ((p >> 8) & 0xFF) as u8;
+                        let b = (p & 0xFF) as u8;
+                        let o = col * 3;
+                        if is_bgr {
+                            core::ptr::write(dst_ptr.add(o), r);
+                            core::ptr::write(dst_ptr.add(o + 1), g);
+                            core::ptr::write(dst_ptr.add(o + 2), b);
+                        } else {
+                            core::ptr::write(dst_ptr.add(o), b);
+                            core::ptr::write(dst_ptr.add(o + 1), g);
+                            core::ptr::write(dst_ptr.add(o + 2), r);
+                        }
+                    }
+                    col += 1;
+                }
+            }
+            row += 1;
+        }
     }
 
     /// Lightweight compatibility handler for `exosh` boot registration over `DISPLAY_OP_WAYLAND_WIRE`.

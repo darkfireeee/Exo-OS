@@ -557,7 +557,7 @@ pub fn dispatch_client_messages(
                                 } else {
                                     damage
                                 };
-                                submit_damage_to_fb_server(pid, grant, eff);
+                                submit_damage_to_fb_server(pid, 0, grant, eff);
                             }
                         }
                     }
