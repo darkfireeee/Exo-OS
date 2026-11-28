@@ -11,9 +11,36 @@ use crate::assets::FontSet;
 use crate::bench::BenchSuite;
 use crate::desktop::dialogs::ActiveDialog;
 use crate::desktop::window::{AppInstance, Window};
+use crate::i18n::Lang;
 use crate::telemetry::TelemetryState;
 use exo_ui::color::lerp_f32;
-use exo_ui::{AnimationMode, Clipboard, ContextMenu, Rect, TextField, Theme};
+use exo_ui::{AccentPreset, AnimationMode, Clipboard, ContextMenu, Rect, TextField, Theme, ThemeMode};
+
+type VisualStamp = (ThemeMode, AccentPreset, u16, u8, u8, bool, bool, bool, Lang);
+
+#[inline]
+fn union_rects(rects: &[Rect]) -> Option<Rect> {
+    if rects.is_empty() {
+        return None;
+    }
+    let mut x0 = i32::MAX;
+    let mut y0 = i32::MAX;
+    let mut x1 = i32::MIN;
+    let mut y1 = i32::MIN;
+    for r in rects {
+        if !r.is_empty() {
+            x0 = x0.min(r.x);
+            y0 = y0.min(r.y);
+            x1 = x1.max(r.right());
+            y1 = y1.max(r.bottom());
+        }
+    }
+    if x0 < x1 && y0 < y1 {
+        Some(Rect::new(x0, y0, x1 - x0, y1 - y0))
+    } else {
+        None
+    }
+}
 
 pub const TOP_BAR_H: i32 = 34;
 pub const DOCK_H: i32 = 62;
@@ -93,10 +120,11 @@ pub struct DesktopShell {
     pub(crate) backbuf: Vec<u32>,
     pub(crate) dirty: bool,
     pub(crate) top_bar_dirty: bool,
-    pub(crate) dirty_x0: i32,
-    pub(crate) dirty_y0: i32,
-    pub(crate) dirty_x1: i32,
-    pub(crate) dirty_y1: i32,
+    pub(crate) dirty_rects: Vec<Rect>,
+    pub(crate) last_game_tick_ns: u64,
+    pub(crate) last_fps_hud_ns: u64,
+    pub(crate) last_visual_stamp: VisualStamp,
+    pub(crate) last_show_fps: bool,
 }
 
 impl DesktopShell {
@@ -104,12 +132,28 @@ impl DesktopShell {
         let _ = crate::apps::files::ensure_user_home_dirs();
         let w = width.max(640);
         let h = height.max(480);
+        let theme = Theme::new();
+        let mut cfg = SystemConfig::default();
+        cfg.screen_w = w;
+        cfg.screen_h = h;
+        let stamp = (
+            theme.mode,
+            theme.accent,
+            theme.brightness_pct,
+            theme.surface_alpha,
+            theme.wallpaper_idx,
+            theme.blur_enabled,
+            theme.high_contrast,
+            theme.night_light,
+            cfg.lang,
+        );
+        let now_ns = crate::bench::now_ns();
         Self {
             width: w,
             height: h,
             fonts: FontSet::load(),
-            theme: Theme::new(),
-            cfg: SystemConfig::default(),
+            theme,
+            cfg,
             telemetry: TelemetryState::new(),
             bench: BenchSuite::new(),
             clipboard: Clipboard::new(),
@@ -154,16 +198,32 @@ impl DesktopShell {
             backbuf: Vec::new(),
             dirty: true,
             top_bar_dirty: false,
-            dirty_x0: i32::MAX,
-            dirty_y0: i32::MAX,
-            dirty_x1: 0,
-            dirty_y1: 0,
+            dirty_rects: Vec::with_capacity(8),
+            last_game_tick_ns: now_ns,
+            last_fps_hud_ns: now_ns,
+            last_visual_stamp: stamp,
+            last_show_fps: false,
         }
     }
 
     #[inline]
+    fn current_visual_stamp(&self) -> VisualStamp {
+        (
+            self.theme.mode,
+            self.theme.accent,
+            self.theme.brightness_pct,
+            self.theme.surface_alpha,
+            self.theme.wallpaper_idx,
+            self.theme.blur_enabled,
+            self.theme.high_contrast,
+            self.theme.night_light,
+            self.cfg.lang,
+        )
+    }
+
+    #[inline]
     pub fn has_damage(&self) -> bool {
-        self.dirty || self.top_bar_dirty || (self.dirty_x0 < self.dirty_x1 && self.dirty_y0 < self.dirty_y1)
+        self.dirty || self.top_bar_dirty || !self.dirty_rects.is_empty()
     }
 
     #[inline]
@@ -227,17 +287,59 @@ impl DesktopShell {
         }
     }
 
-    #[inline]
+    /// Multi-rect damage accumulator: keeps disjoint windows/HUDs separate instead of merging
+    /// opposite corners of the screen into a giant 1920x1080 full-screen bounding box.
     pub fn mark_dirty_rect(&mut self, r: Rect) {
+        if self.dirty {
+            return;
+        }
         let x0 = r.x.clamp(0, self.width as i32);
         let y0 = r.y.clamp(0, self.height as i32);
         let x1 = r.right().clamp(0, self.width as i32);
         let y1 = r.bottom().clamp(0, self.height as i32);
-        if x0 < x1 && y0 < y1 {
-            if x0 < self.dirty_x0 { self.dirty_x0 = x0; }
-            if y0 < self.dirty_y0 { self.dirty_y0 = y0; }
-            if x1 > self.dirty_x1 { self.dirty_x1 = x1; }
-            if y1 > self.dirty_y1 { self.dirty_y1 = y1; }
+        if x0 >= x1 || y0 >= y1 {
+            return;
+        }
+        let nr = Rect::new(x0, y0, x1 - x0, y1 - y0);
+        for existing in &mut self.dirty_rects {
+            // Merge if overlapping or touching within 8px and union does not bloat area excessively
+            let touch = !existing.inset(-8, -8).intersect(nr).is_empty();
+            if touch {
+                let ux0 = existing.x.min(nr.x);
+                let uy0 = existing.y.min(nr.y);
+                let ux1 = existing.right().max(nr.right());
+                let uy1 = existing.bottom().max(nr.bottom());
+                let u_area = (ux1 - ux0) as i64 * (uy1 - uy0) as i64;
+                let sum_area = existing.w as i64 * existing.h as i64 + nr.w as i64 * nr.h as i64;
+                if u_area <= sum_area + 40_000 {
+                    *existing = Rect::new(ux0, uy0, ux1 - ux0, uy1 - uy0);
+                    return;
+                }
+            }
+        }
+        if self.dirty_rects.len() < 8 {
+            self.dirty_rects.push(nr);
+        } else {
+            // Coalesce into the rect with smallest area increase
+            let mut best_i = 0usize;
+            let mut best_cost = i64::MAX;
+            for (i, ex) in self.dirty_rects.iter().enumerate() {
+                let ux0 = ex.x.min(nr.x);
+                let uy0 = ex.y.min(nr.y);
+                let ux1 = ex.right().max(nr.right());
+                let uy1 = ex.bottom().max(nr.bottom());
+                let cost = (ux1 - ux0) as i64 * (uy1 - uy0) as i64 - (ex.w as i64 * ex.h as i64);
+                if cost < best_cost {
+                    best_cost = cost;
+                    best_i = i;
+                }
+            }
+            let ex = &mut self.dirty_rects[best_i];
+            let ux0 = ex.x.min(nr.x);
+            let uy0 = ex.y.min(nr.y);
+            let ux1 = ex.right().max(nr.right());
+            let uy1 = ex.bottom().max(nr.bottom());
+            *ex = Rect::new(ux0, uy0, ux1 - ux0, uy1 - uy0);
         }
     }
 
@@ -246,37 +348,39 @@ impl DesktopShell {
         self.mark_dirty_rect(Rect::new(0, y0, self.width as i32, y1 - y0));
     }
 
-    #[inline]
-    pub fn take_dirty_rect(&mut self) -> Option<Rect> {
+    /// Take all disjoint dirty rectangles for this frame (1–8 tight rects, or fullscreen on global change).
+    pub fn take_dirty_rects(&mut self) -> Vec<Rect> {
         if self.dirty {
             self.dirty = false;
             self.top_bar_dirty = false;
-            self.dirty_x0 = i32::MAX;
-            self.dirty_y0 = i32::MAX;
-            self.dirty_x1 = 0;
-            self.dirty_y1 = 0;
-            return Some(Rect::new(0, 0, self.width as i32, self.height as i32));
+            self.dirty_rects.clear();
+            return vec![Rect::new(0, 0, self.width as i32, self.height as i32)];
         }
-        let mut x0 = self.dirty_x0;
-        let mut y0 = self.dirty_y0;
-        let mut x1 = self.dirty_x1;
-        let mut y1 = self.dirty_y1;
         if self.top_bar_dirty {
-            x0 = 0;
-            y0 = 0;
-            x1 = self.width as i32;
-            y1 = y1.max(TOP_BAR_H.min(self.height as i32));
+            self.top_bar_dirty = false;
+            self.mark_dirty_rect(Rect::new(0, 0, self.width as i32, TOP_BAR_H.min(self.height as i32)));
         }
-        self.top_bar_dirty = false;
-        self.dirty_x0 = i32::MAX;
-        self.dirty_y0 = i32::MAX;
-        self.dirty_x1 = 0;
-        self.dirty_y1 = 0;
-        if x0 < x1 && y0 < y1 {
-            Some(Rect::new(x0, y0, x1 - x0, y1 - y0))
-        } else {
-            None
+        core::mem::take(&mut self.dirty_rects)
+    }
+
+    #[cfg(test)]
+    #[inline]
+    pub fn take_dirty_rect(&mut self) -> Option<Rect> {
+        let rects = self.take_dirty_rects();
+        if rects.is_empty() {
+            return None;
         }
+        let mut x0 = i32::MAX;
+        let mut y0 = i32::MAX;
+        let mut x1 = 0;
+        let mut y1 = 0;
+        for r in rects {
+            x0 = x0.min(r.x);
+            y0 = y0.min(r.y);
+            x1 = x1.max(r.right());
+            y1 = y1.max(r.bottom());
+        }
+        Some(Rect::new(x0, y0, x1 - x0, y1 - y0))
     }
 
     #[inline]
@@ -290,10 +394,11 @@ impl DesktopShell {
         }
         self.toast_text = msg.into();
         self.toast_ttl = 8;
-        self.dirty = true;
+        self.mark_dirty_band(TOP_BAR_H, TOP_BAR_H + 64);
     }
 
-    /// Periodic ~500 ms telemetry & clock tick (partial band damage when idle or showing Monitor/Settings).
+    /// Periodic ~500 ms telemetry & clock tick: skips static windows (ExoBench, Display/Personalization)
+    /// and 100%-occluded background windows so 6+ open windows stay effortlessly smooth.
     pub fn tick_periodic(&mut self) {
         if self.power_transition.is_some()
             || self.drag_win.is_some()
@@ -304,7 +409,24 @@ impl DesktopShell {
         }
         let prev_min = self.telemetry.clock.minute;
         let prev_hr = self.telemetry.clock.hour;
-        self.telemetry.poll();
+        let needs_full_telemetry = self.calendar_open
+            || self.quick_settings_open
+            || self.windows.iter().any(|w| {
+                !w.minimized
+                    && match &w.app {
+                        AppInstance::Monitor(m) => m.tab != MonitorTab::Bench,
+                        AppInstance::Settings(s) => matches!(
+                            s.category,
+                            SettingsCategory::About | SettingsCategory::SecurityStorage | SettingsCategory::Network
+                        ),
+                        _ => false,
+                    }
+            });
+        if needs_full_telemetry {
+            self.telemetry.poll();
+        } else {
+            self.telemetry.poll_clock_only();
+        }
         let clock_changed =
             self.telemetry.clock.minute != prev_min || self.telemetry.clock.hour != prev_hr;
         if self.toast_ttl > 0 {
@@ -321,23 +443,53 @@ impl DesktopShell {
         if clock_changed && !self.locked {
             self.top_bar_dirty = true;
         }
-        let mut rects: Vec<Rect> = Vec::new();
-        for w in &mut self.windows {
-            if !w.minimized && matches!(w.app, AppInstance::Monitor(_) | AppInstance::Settings(_)) {
-                w.invalidate_cache();
-                rects.push(Rect::new(w.rect.x - 4, w.rect.y - 4, w.rect.w + 8, w.rect.h + 8));
+        let mut updates: Vec<(u32, Vec<Rect>)> = Vec::new();
+        for w in &self.windows {
+            if w.minimized {
+                continue;
+            }
+            let live_update = match &w.app {
+                AppInstance::Monitor(m) => m.tab != MonitorTab::Bench,
+                AppInstance::Settings(s) => {
+                    matches!(
+                        s.category,
+                        SettingsCategory::About | SettingsCategory::SecurityStorage | SettingsCategory::Network
+                    ) || (s.category == SettingsCategory::Locale && clock_changed)
+                }
+                _ => false,
+            };
+            if live_update {
+                let vis = self.visible_window_rects(w.id, w.body_rect());
+                if !vis.is_empty() {
+                    updates.push((w.id, vis));
+                }
             }
         }
-        for r in rects {
-            self.mark_dirty_rect(r);
+        for (wid, vis) in updates {
+            if let Some(w) = self.windows.iter_mut().find(|w| w.id == wid) {
+                w.invalidate_cache();
+            }
+            // Collapse fragmented L-shape visible pieces of ONE window into its tight visible bbox
+            // so fb_server copies its scanline band ONCE (render_rect still occlusion-culls exact sub-rects!).
+            if let Some(bbox) = union_rects(&vis) {
+                self.mark_dirty_rect(bbox);
+            }
+        }
+        if self.theme.show_fps || self.cfg.dev_mode {
+            let now_ns = crate::bench::now_ns();
+            if now_ns.saturating_sub(self.last_fps_hud_ns) >= 450_000_000 {
+                self.last_fps_hud_ns = now_ns;
+                self.mark_dirty_rect(self.fps_hud_rect());
+            }
         }
     }
 
-    /// Smooth ~60 Hz transition step for dock hover magnification, power animation & Snake movement.
+    /// Smooth ~60 Hz transition step for dock hover magnification, power animation & real-time Snake movement.
     pub fn tick_frame(&mut self) {
         self.tick = self.tick.wrapping_add(1);
+        let now_ns = crate::bench::now_ns();
         if self.power_transition.is_some() {
-            self.advance_power_transition(crate::bench::now_ns());
+            self.advance_power_transition(now_ns);
             return;
         }
         let speed = match self.theme.animations {
@@ -361,23 +513,36 @@ impl DesktopShell {
             }
         }
         if dock_moved {
-            let dr = self.dock_rect();
-            self.mark_dirty_band(dr.y - 44, self.height as i32);
+            let dr = self.dock_rect().inset(-18, -42);
+            self.mark_dirty_rect(dr);
         }
-        if self.tick % 9 == 0 {
-            let mut game_band = None;
-            for w in &mut self.windows {
-                if !w.minimized {
-                    if let AppInstance::Games(ref mut g) = w.app {
-                        if g.tick() {
-                            w.invalidate_cache();
-                            game_band = Some(w.rect);
-                        }
+        // Real monotonic 160 ms Snake cadence (independent of mouse/keyboard event rate) + occlusion check
+        if now_ns.saturating_sub(self.last_game_tick_ns) >= 160_000_000 {
+            self.last_game_tick_ns = now_ns;
+            let mut game_vis: Vec<(u32, Vec<Rect>)> = Vec::new();
+            for w in &self.windows {
+                if !w.minimized && matches!(w.app, AppInstance::Games(_)) {
+                    let vis = self.visible_window_rects(w.id, w.body_rect());
+                    if !vis.is_empty() {
+                        game_vis.push((w.id, vis));
                     }
                 }
             }
-            if let Some(gr) = game_band {
-                self.mark_dirty_rect(gr);
+            for (wid, vis) in game_vis {
+                let mut ticked = false;
+                if let Some(w) = self.windows.iter_mut().find(|w| w.id == wid) {
+                    if let AppInstance::Games(ref mut g) = w.app {
+                        if g.tick() {
+                            w.invalidate_cache();
+                            ticked = true;
+                        }
+                    }
+                }
+                if ticked {
+                    if let Some(bbox) = union_rects(&vis) {
+                        self.mark_dirty_rect(bbox);
+                    }
+                }
             }
         }
     }
@@ -425,8 +590,10 @@ impl DesktopShell {
         };
 
         for w in &mut self.windows {
-            w.focused = false;
-            w.invalidate_cache();
+            if w.focused {
+                w.focused = false;
+                w.invalidate_cache();
+            }
         }
         let title = if kind == AppKind::Editor {
             if let Some(p) = param { format!("{} — {}", kind.title(self.cfg.lang), p) }
@@ -434,29 +601,43 @@ impl DesktopShell {
         } else {
             String::from(kind.title(self.cfg.lang))
         };
-        self.windows.push(Window::new(id, kind, title, rect, z, app));
+        let win = Window::new(id, kind, title, rect, z, app);
+        let padded = Rect::new(win.rect.x - 10, win.rect.y - 6, win.rect.w + 20, win.rect.h + 18);
+        self.windows.push(win);
         self.close_popovers();
-        self.dirty = true;
+        self.mark_dirty_rect(padded);
+        self.top_bar_dirty = true;
+        self.mark_dirty_rect(self.dock_rect().inset(-18, -42));
         id
     }
 
     pub fn focus_window(&mut self, win_id: u32) {
+        // Fast no-op when clicking inside an ALREADY topmost focused window (avoids full-screen repaint!)
+        let top_z = self.windows.iter().filter(|w| !w.minimized).map(|w| w.z_order).max().unwrap_or(0);
+        if self.windows.iter().any(|w| w.id == win_id && w.focused && !w.minimized && w.z_order == top_z) {
+            return;
+        }
         let z = self.next_z;
         self.next_z += 1;
+        let mut dirty_rects = Vec::new();
         for w in &mut self.windows {
             if w.id == win_id {
                 w.focused = true;
                 w.minimized = false;
                 w.z_order = z;
                 w.invalidate_cache();
-            } else {
-                if w.focused {
-                    w.invalidate_cache();
-                }
+                dirty_rects.push(Rect::new(w.rect.x - 10, w.rect.y - 6, w.rect.w + 20, w.rect.h + 18));
+            } else if w.focused {
                 w.focused = false;
+                w.invalidate_cache();
+                dirty_rects.push(Rect::new(w.rect.x - 2, w.rect.y - 2, w.rect.w + 4, w.rect.h + 4));
             }
         }
-        self.dirty = true;
+        for r in dirty_rects {
+            self.mark_dirty_rect(r);
+        }
+        self.top_bar_dirty = true;
+        self.mark_dirty_rect(self.dock_rect().inset(-18, -42));
     }
 
     pub fn close_window(&mut self, win_id: u32) {
@@ -493,47 +674,71 @@ impl DesktopShell {
         self.windows.iter().filter(|w| !w.minimized && w.focused).max_by_key(|w| w.z_order).map(|w| w.id)
     }
 
+    fn sync_visual_changes(&mut self, source_win: Option<u32>) {
+        let new_stamp = self.current_visual_stamp();
+        let global_changed = new_stamp != self.last_visual_stamp;
+        let fps_toggled = (self.theme.show_fps || self.cfg.dev_mode) != self.last_show_fps;
+        self.last_visual_stamp = new_stamp;
+        self.last_show_fps = self.theme.show_fps || self.cfg.dev_mode;
+
+        if global_changed {
+            self.invalidate_all_window_caches();
+            self.dirty = true;
+            return;
+        }
+        if let Some(wid) = source_win {
+            let mut wr_opt = None;
+            if let Some(w) = self.windows.iter_mut().find(|w| w.id == wid) {
+                w.invalidate_cache();
+                wr_opt = Some(w.body_rect());
+            }
+            if let Some(wr) = wr_opt {
+                self.mark_dirty_rect(wr);
+            } else {
+                self.dirty = true;
+            }
+        } else {
+            self.dirty = true;
+        }
+        if fps_toggled {
+            self.mark_dirty_rect(self.fps_hud_rect());
+        }
+    }
+
     pub(crate) fn process_action(&mut self, action: AppAction, source_win: Option<u32>) {
         match action {
             AppAction::None => {}
             AppAction::Redraw => {
-                if let Some(wid) = source_win {
-                    let mut is_settings = false;
-                    let mut wr_opt = None;
-                    if let Some(w) = self.windows.iter_mut().find(|w| w.id == wid) {
-                        w.invalidate_cache();
-                        is_settings = matches!(w.app, AppInstance::Settings(_));
-                        wr_opt = Some(w.body_rect());
-                    }
-                    if is_settings {
-                        self.invalidate_all_window_caches();
-                        self.dirty = true;
-                    } else if let Some(wr) = wr_opt {
-                        self.mark_dirty_rect(wr);
-                    } else {
-                        self.dirty = true;
-                    }
-                } else {
-                    self.dirty = true;
-                }
+                self.sync_visual_changes(source_win);
             }
             AppAction::OpenTerminalAt(dir) => { self.spawn_app(AppKind::Terminal, Some(&dir)); }
             AppAction::OpenFileInEditor(path) => { self.spawn_app(AppKind::Editor, Some(&path)); }
             AppAction::OpenApp(kind) => { self.open_or_focus_app(kind); }
             AppAction::OpenFilesAt(dir) => {
                 let id = self.open_or_focus_app(AppKind::Files);
+                let mut wr = None;
                 if let Some(w) = self.windows.iter_mut().find(|w| w.id == id) {
                     if let AppInstance::Files(ref mut f) = w.app { f.navigate(&dir); }
+                    w.invalidate_cache();
+                    wr = Some(w.body_rect());
                 }
+                if let Some(r) = wr { self.mark_dirty_rect(r); }
             }
             AppAction::OpenFilesNewWindow(dir) => {
                 self.spawn_app(AppKind::Files, Some(&dir));
             }
             AppAction::OpenSettingsCategory(idx) => {
                 let id = self.open_or_focus_app(AppKind::Settings);
+                let mut wr = None;
                 if let Some(w) = self.windows.iter_mut().find(|w| w.id == id) {
-                    if let AppInstance::Settings(ref mut s) = w.app { s.category = SettingsCategory::from_index(idx); }
+                    if let AppInstance::Settings(ref mut s) = w.app {
+                        s.category = SettingsCategory::from_index(idx);
+                        s.scroll_y = 0;
+                    }
+                    w.invalidate_cache();
+                    wr = Some(w.body_rect());
                 }
+                if let Some(r) = wr { self.mark_dirty_rect(r); }
             }
             AppAction::RequestFilePicker { app_name } => {
                 if let Some(wid) = source_win {
@@ -553,23 +758,48 @@ impl DesktopShell {
             AppAction::TriggerPhoenixSwitch => {
                 let _ = self.telemetry.trigger_phoenix_switch();
                 let msg = self.telemetry.last_phoenix_msg.clone();
+                self.sync_visual_changes(source_win);
                 self.show_toast(msg);
             }
             AppAction::CreateSnapshot(tag) => {
                 let snap = self.telemetry.create_exofs_snapshot(&tag);
+                self.sync_visual_changes(source_win);
                 self.show_toast(format!("Instantané créé : {}", snap));
             }
             AppAction::RunBenchAll => {
                 self.bench.run_all(&self.fonts);
+                let mut rects = Vec::new();
+                for w in &mut self.windows {
+                    if matches!(w.app, AppInstance::Monitor(_)) {
+                        w.invalidate_cache();
+                        rects.push(w.body_rect());
+                    }
+                }
+                for r in rects { self.mark_dirty_rect(r); }
                 let msg = format!("ExoBench terminé : {}/100 (Note {})", self.bench.global_score, self.bench.grade());
                 self.show_toast(msg);
             }
             AppAction::RunBenchModule(cat) => {
                 self.bench.run_module(cat, &self.fonts);
-                self.dirty = true;
+                let mut rects = Vec::new();
+                for w in &mut self.windows {
+                    if matches!(w.app, AppInstance::Monitor(_)) {
+                        w.invalidate_cache();
+                        rects.push(w.body_rect());
+                    }
+                }
+                for r in rects { self.mark_dirty_rect(r); }
             }
             AppAction::ExportBenchReport => {
                 if self.bench.reports.is_empty() { self.bench.run_all(&self.fonts); }
+                let mut rects = Vec::new();
+                for w in &mut self.windows {
+                    if matches!(w.app, AppInstance::Monitor(_)) {
+                        w.invalidate_cache();
+                        rects.push(w.body_rect());
+                    }
+                }
+                for r in rects { self.mark_dirty_rect(r); }
                 match self.bench.export_report(&self.cfg.hostname) {
                     Ok(p) => self.show_toast(format!("Rapport exporté : {}", p)),
                     Err(e) => self.show_toast(e),
@@ -580,7 +810,10 @@ impl DesktopShell {
                 self.show_toast(self.cfg.lang.pick("Copié dans le presse-papiers", "Copied to clipboard"));
             }
             AppAction::TerminatePid(pid) => match self.telemetry.terminate_process(pid) {
-                Ok(()) => self.show_toast(format!("Processus #{} arrêté", pid)),
+                Ok(()) => {
+                    self.sync_visual_changes(source_win);
+                    self.show_toast(format!("Processus #{} arrêté", pid));
+                }
                 Err(e) => self.show_toast(e),
             },
             AppAction::LockScreen => {
@@ -588,7 +821,10 @@ impl DesktopShell {
                 self.locked = true;
                 self.dirty = true;
             }
-            AppAction::StatusToast(m) => self.show_toast(m),
+            AppAction::StatusToast(m) => {
+                self.sync_visual_changes(source_win);
+                self.show_toast(m);
+            }
             AppAction::Reboot => self.begin_power_transition(PowerRequest::Reboot),
             AppAction::Shutdown => self.begin_power_transition(PowerRequest::Shutdown),
         }

@@ -21,7 +21,94 @@ pub(crate) const DESKTOP_SHORTCUTS: [DeskShortcut; 4] = [
     DeskShortcut { kind: AppKind::Games, icon: IconId::Games, label_fr: "Jeux", label_en: "Games", dir_override: None },
 ];
 
+/// Exact non-overlapping rectangle subtraction for front-to-back occlusion culling.
+pub(crate) fn subtract_rect(region: &mut Vec<Rect>, cut: Rect) {
+    if cut.is_empty() || region.is_empty() {
+        return;
+    }
+    let mut out = Vec::with_capacity(region.len() + 4);
+    for &r in region.iter() {
+        let inter = r.intersect(cut);
+        if inter.is_empty() {
+            out.push(r);
+            continue;
+        }
+        if inter.y > r.y {
+            out.push(Rect::new(r.x, r.y, r.w, inter.y - r.y));
+        }
+        if inter.bottom() < r.bottom() {
+            out.push(Rect::new(r.x, inter.bottom(), r.w, r.bottom() - inter.bottom()));
+        }
+        if inter.x > r.x {
+            out.push(Rect::new(r.x, inter.y, inter.x - r.x, inter.h));
+        }
+        if inter.right() < r.right() {
+            out.push(Rect::new(inter.right(), inter.y, r.right() - inter.right(), inter.h));
+        }
+    }
+    *region = out;
+}
+
+#[inline]
+fn blit_wallpaper_rect(dst: &mut [u32], wallpaper: &[u32], row_px: usize, r: Rect) {
+    if r.is_empty() {
+        return;
+    }
+    let x0 = r.x as usize;
+    let x1 = r.right() as usize;
+    let y0 = r.y as usize;
+    let y1 = r.bottom() as usize;
+    if x0 == 0 && x1 == row_px {
+        let s = y0.saturating_mul(row_px).min(dst.len()).min(wallpaper.len());
+        let e = y1.saturating_mul(row_px).min(dst.len()).min(wallpaper.len());
+        if s < e {
+            dst[s..e].copy_from_slice(&wallpaper[s..e]);
+        }
+    } else {
+        let len = dst.len().min(wallpaper.len());
+        for y in y0..y1 {
+            let row_off = y * row_px;
+            let s = row_off + x0;
+            let e = row_off + x1;
+            if e <= len {
+                dst[s..e].copy_from_slice(&wallpaper[s..e]);
+            }
+        }
+    }
+}
+
 impl DesktopShell {
+    #[inline]
+    pub fn fps_hud_rect(&self) -> Rect {
+        let w = 276.min(self.width as i32 - 16);
+        Rect::new(self.width as i32 - w - 10, TOP_BAR_H + 8, w, 28)
+    }
+
+    /// Computes exact visible (unoccluded) sub-rectangles of `target` for `win_id`.
+    /// Returns empty when `win_id` is completely buried behind higher opaque windows.
+    pub(crate) fn visible_window_rects(&self, win_id: u32, target: Rect) -> Vec<Rect> {
+        let screen = Rect::new(0, 0, self.width as i32, self.height as i32);
+        let clipped = target.intersect(screen);
+        if clipped.is_empty() {
+            return Vec::new();
+        }
+        let Some(target_z) = self.windows.iter().find(|w| w.id == win_id && !w.minimized).map(|w| w.z_order) else {
+            return Vec::new();
+        };
+        let mut vis = vec![clipped];
+        if self.theme.surface_alpha >= 235 {
+            for w in &self.windows {
+                if !w.minimized && w.id != win_id && w.z_order > target_z {
+                    subtract_rect(&mut vis, w.opaque_rect());
+                    if vis.is_empty() {
+                        break;
+                    }
+                }
+            }
+        }
+        vis
+    }
+
     pub(crate) fn desktop_icon_rect(idx: usize) -> Rect {
         Rect::new(20, TOP_BAR_H + 20 + (idx as i32) * 92, 84, 80)
     }
@@ -98,6 +185,8 @@ impl DesktopShell {
 
         // Opaque focused-window fast-path: when typing/pasting/scrolling strictly inside the topmost
         // opaque window body, skip wallpaper wipe, drop shadow, dock, and all lower windows!
+        let fps_active = self.theme.show_fps || self.cfg.dev_mode;
+        let fps_overlap = fps_active && !band.intersect(self.fps_hud_rect()).is_empty();
         let no_overlays = !self.locked
             && self.power_transition.is_none()
             && !self.launcher_open
@@ -110,7 +199,8 @@ impl DesktopShell {
             && self.resize_win.is_none()
             && self.theme.surface_alpha >= 235
             && (self.toast_text.is_empty() || self.toast_ttl == 0)
-            && (!(self.theme.show_fps || self.cfg.dev_mode) || band.y > TOP_BAR_H + 44);
+            && !fps_overlap
+            && band.intersect(self.dock_rect().inset(-18, -42)).is_empty();
         if no_overlays {
             if let Some((top_idx, _)) = self
                 .windows
@@ -123,8 +213,7 @@ impl DesktopShell {
                 if band.x >= wb.x && band.y >= wb.y && band.right() <= wb.right() && band.bottom() <= wb.bottom() {
                     let mut cv = Canvas::new(pixels, self.width, self.height, row_px);
                     cv.clip = band;
-                    self.windows[top_idx].draw_cached(
-                        &mut cv,
+                    self.windows[top_idx].ensure_cache(
                         self.mouse_x,
                         self.mouse_y,
                         &self.theme,
@@ -132,44 +221,112 @@ impl DesktopShell {
                         &self.fonts,
                         &self.telemetry,
                         &self.bench,
-                        false,
                     );
+                    self.windows[top_idx].blit_cached_clipped(&mut cv, &self.theme, false);
                     cv.apply_brightness(band, &self.theme);
                     return;
                 }
             }
         }
 
-        let x0 = band.x as usize;
-        let x1 = band.right() as usize;
-        let y0 = band.y as u32;
-        let y1 = band.bottom() as u32;
-        if x0 == 0 && x1 == row_px {
-            let start_px = (y0 as usize).saturating_mul(row_px).min(pixels.len()).min(self.wallpaper_cache.len());
-            let end_px = (y1 as usize).saturating_mul(row_px).min(pixels.len()).min(self.wallpaper_cache.len());
-            if start_px < end_px {
-                pixels[start_px..end_px].copy_from_slice(&self.wallpaper_cache[start_px..end_px]);
-            }
-        } else {
-            for y in y0 as usize..y1 as usize {
-                let row_off = y * row_px;
-                let s = row_off + x0;
-                let e = row_off + x1;
-                if e <= pixels.len() && e <= self.wallpaper_cache.len() {
-                    pixels[s..e].copy_from_slice(&self.wallpaper_cache[s..e]);
-                }
-            }
-        }
-        let mut cv = Canvas::new(pixels, self.width, self.height, row_px);
-        cv.clip = band;
-
         if self.locked {
+            blit_wallpaper_rect(pixels, &self.wallpaper_cache, row_px, band);
+            let mut cv = Canvas::new(pixels, self.width, self.height, row_px);
+            cv.clip = band;
             self.draw_lock_screen(&mut cv);
             cv.apply_brightness(band, &self.theme);
             return;
         }
 
-        // 2. Desktop shortcuts & blue marquee selection box
+        // Open windows sorted by z-order (back-to-front)
+        let drag_id = self.drag_win.map(|(id, _, _)| id);
+        let mut order: Vec<usize> = self.windows.iter().enumerate().filter(|(_, w)| !w.minimized).map(|(i, _)| i).collect();
+        order.sort_by_key(|&i| self.windows[i].z_order);
+
+        let use_occlusion = self.theme.surface_alpha >= 235;
+        if use_occlusion {
+            // Front-to-back exact occlusion culling: O(1) pixel overdraw regardless of how many windows are open!
+            let mut uncovered: Vec<Rect> = vec![band];
+            let mut visible_layers: Vec<(usize, Vec<Rect>)> = Vec::with_capacity(order.len());
+            for &idx in order.iter().rev() {
+                if uncovered.is_empty() {
+                    break;
+                }
+                let wr = self.windows[idx].rect;
+                let padded = Rect::new(wr.x - 10, wr.y - 6, wr.w + 20, wr.h + 18);
+                let mut vis: Vec<Rect> = Vec::new();
+                for &u in &uncovered {
+                    let inter = u.intersect(padded);
+                    if !inter.is_empty() {
+                        vis.push(inter);
+                    }
+                }
+                if !vis.is_empty() {
+                    visible_layers.push((idx, vis));
+                    if uncovered.len() <= 24 {
+                        subtract_rect(&mut uncovered, self.windows[idx].opaque_rect());
+                    }
+                }
+            }
+
+            // 1. Copy wallpaper strictly into uncovered background slivers (0 bytes copied when covered by windows!)
+            for &ur in &uncovered {
+                blit_wallpaper_rect(pixels, &self.wallpaper_cache, row_px, ur);
+            }
+
+            let mut cv = Canvas::new(pixels, self.width, self.height, row_px);
+
+            // 2. Desktop shortcuts strictly where uncovered
+            let icon_col = Rect::new(0, TOP_BAR_H, 120, 420);
+            for &ur in &uncovered {
+                let ir = ur.intersect(icon_col);
+                if !ir.is_empty() {
+                    cv.clip = ir;
+                    self.draw_desktop_icons(&mut cv);
+                }
+            }
+            cv.clip = band;
+            if self.desk_marquee_active {
+                let mr = Rect::from_points(self.desk_marquee_start.0, self.desk_marquee_start.1, self.desk_marquee_cur.0, self.desk_marquee_cur.1);
+                if mr.w >= 2 || mr.h >= 2 {
+                    let draw_r = Rect::new(mr.x, mr.y, mr.w.max(2), mr.h.max(2));
+                    cv.fill_rounded_rect(draw_r, 4, Color::rgba(0x3B, 0x82, 0xF6, 0x44));
+                    cv.stroke_rounded_rect(draw_r, 4, Color::rgb(0x60, 0xA5, 0xFA));
+                }
+            }
+
+            // 3. Top bar
+            if band.y < TOP_BAR_H {
+                self.draw_top_bar(&mut cv);
+            }
+
+            // 4. Composite ONLY visible window sub-rects (back-to-front); hidden windows do 0 work!
+            for (idx, vis) in visible_layers.into_iter().rev() {
+                self.windows[idx].ensure_cache(
+                    self.mouse_x,
+                    self.mouse_y,
+                    &self.theme,
+                    &self.cfg,
+                    &self.fonts,
+                    &self.telemetry,
+                    &self.bench,
+                );
+                for vr in vis {
+                    cv.clip = vr;
+                    self.windows[idx].blit_cached_clipped(&mut cv, &self.theme, true);
+                }
+            }
+            cv.clip = band;
+
+            // 5. Overlays, HUD, brightness & power transition
+            self.draw_post_window_overlays(&mut cv, band);
+            return;
+        }
+
+        // Translucent frosted-glass fallback (when user lowered window opacity < 92%)
+        blit_wallpaper_rect(pixels, &self.wallpaper_cache, row_px, band);
+        let mut cv = Canvas::new(pixels, self.width, self.height, row_px);
+        cv.clip = band;
         if !Rect::new(0, TOP_BAR_H, 120, 420).intersect(band).is_empty() {
             self.draw_desktop_icons(&mut cv);
         }
@@ -181,19 +338,12 @@ impl DesktopShell {
                 cv.stroke_rounded_rect(draw_r, 4, Color::rgb(0x60, 0xA5, 0xFA));
             }
         }
-
-        // 3. Top bar
         if band.y < TOP_BAR_H {
             self.draw_top_bar(&mut cv);
         }
-
-        // 4. Open windows sorted by z-order (per-window cached blit on drag & background windows!)
-        let drag_id = self.drag_win.map(|(id, _, _)| id);
-        let mut order: Vec<usize> = self.windows.iter().enumerate().filter(|(_, w)| !w.minimized).map(|(i, _)| i).collect();
-        order.sort_by_key(|&i| self.windows[i].z_order);
         for idx in order {
             let wr = self.windows[idx].rect;
-            let padded = Rect::new(wr.x - 14, wr.y - 10, wr.w + 28, wr.h + 26);
+            let padded = Rect::new(wr.x - 10, wr.y - 6, wr.w + 20, wr.h + 18);
             if !padded.intersect(band).is_empty() {
                 let dragging_this = drag_id == Some(self.windows[idx].id);
                 self.windows[idx].draw_cached(
@@ -209,29 +359,32 @@ impl DesktopShell {
                 );
             }
         }
+        self.draw_post_window_overlays(&mut cv, band);
+    }
 
+    fn draw_post_window_overlays(&self, cv: &mut Canvas<'_>, band: Rect) {
         // 5. Overlays: Launcher, Calendar, Quick Settings, Dock
-        if self.launcher_open { self.draw_launcher(&mut cv); }
-        if self.calendar_open { self.draw_calendar_popover(&mut cv); }
-        if self.quick_settings_open { self.draw_quick_settings(&mut cv); }
+        if self.launcher_open { self.draw_launcher(cv); }
+        if self.calendar_open { self.draw_calendar_popover(cv); }
+        if self.quick_settings_open { self.draw_quick_settings(cv); }
         if !self.dock_rect().inset(-18, -42).intersect(band).is_empty() {
-            self.draw_dock(&mut cv);
+            self.draw_dock(cv);
         }
 
         // 6. Floating context menu, system dialogs, toast
         let pal = self.theme.palette();
         if self.context_menu.open {
-            self.context_menu.draw(&mut cv, self.mouse_x, self.mouse_y, &pal, self.theme.blur_enabled, &self.fonts.sm, &self.fonts.md);
+            self.context_menu.draw(cv, self.mouse_x, self.mouse_y, &pal, self.theme.blur_enabled, &self.fonts.sm, &self.fonts.md);
         }
         if self.dialog.is_some() {
-            self.draw_active_dialog(&mut cv);
+            self.draw_active_dialog(cv);
         }
         if !self.toast_text.is_empty() && self.toast_ttl > 0 && band.y <= TOP_BAR_H + 64 {
-            self.draw_toast(&mut cv);
+            self.draw_toast(cv);
         }
 
         // 7. Optional Developer FPS / GPU / render-time HUD (Spec §1.3 & §1.19)
-        if (self.theme.show_fps || self.cfg.dev_mode) && band.y <= TOP_BAR_H + 44 {
+        if (self.theme.show_fps || self.cfg.dev_mode) && !band.intersect(self.fps_hud_rect()).is_empty() {
             let gpu_tag = if self.gpu_hw_active { "VirtIO-GPU 2D" } else { "VBE-2D" };
             let txt = format!(
                 "{} Hz • {}.{} ms • {}",
@@ -252,7 +405,7 @@ impl DesktopShell {
 
         // 9. Smooth 60 Hz Shutdown / Reboot full-screen transition overlay
         if self.power_transition.is_some() {
-            self.draw_power_transition(&mut cv);
+            self.draw_power_transition(cv);
         }
     }
 
@@ -579,6 +732,71 @@ mod tests {
         assert_eq!(fb[10 * 1280 + 10] & 0x00FF_FFFF, 0x0000_0000); // Final frame faded to pure black
         desk.on_frame_presented();
         assert_eq!(desk.take_power_request(), Some(crate::desktop::PowerRequest::Shutdown));
+    }
+
+    #[test]
+    fn occlusion_culling_multi_rect_damage_and_six_window_60hz_budget() {
+        let mut desk = DesktopShell::new(1920, 1080);
+        let mut shm = vec![0xFF00_0000u32; 1920 * 1080];
+
+        // Open 6 simultaneous apps just like a heavy real desktop session
+        let fid = desk.open_or_focus_app(AppKind::Files);
+        let gid = desk.open_or_focus_app(AppKind::Games);
+        let eid = desk.open_or_focus_app(AppKind::Editor);
+        let mid = desk.open_or_focus_app(AppKind::Monitor);
+        let bid = desk.open_or_focus_app(AppKind::Bench);
+        let sid = desk.open_or_focus_app(AppKind::Settings);
+        desk.process_action(AppAction::RunBenchAll, Some(bid));
+        desk.process_action(AppAction::OpenSettingsCategory(1), Some(sid)); // Display
+
+        // Place Games completely buried underneath Settings (to verify 100% occlusion skip)
+        let s_rect = desk.windows.iter().find(|w| w.id == sid).unwrap().rect;
+        if let Some(g) = desk.windows.iter_mut().find(|w| w.id == gid) {
+            g.rect = Rect::new(s_rect.x + 20, s_rect.y + 40, 500, 400);
+        }
+        // Place Monitor at bottom-left, ExoBench at bottom-right, Editor at top-left, Files top-center
+        if let Some(m) = desk.windows.iter_mut().find(|w| w.id == mid) {
+            m.rect = Rect::new(20, 380, 820, 560);
+        }
+        if let Some(b) = desk.windows.iter_mut().find(|w| w.id == bid) {
+            b.rect = Rect::new(1020, 360, 860, 560);
+        }
+        if let Some(e) = desk.windows.iter_mut().find(|w| w.id == eid) {
+            e.rect = Rect::new(50, 80, 740, 480);
+        }
+        if let Some(f) = desk.windows.iter_mut().find(|w| w.id == fid) {
+            f.rect = Rect::new(420, 60, 780, 480);
+        }
+
+        // Initial warm-up render
+        desk.dirty = true;
+        for r in desk.take_dirty_rects() {
+            desk.render_rect_to_shm(&mut shm, r);
+        }
+
+        // 1. Buried Games window must have ZERO visible unoccluded rects!
+        let g_rect = desk.windows.iter().find(|w| w.id == gid).unwrap().body_rect();
+        assert!(desk.visible_window_rects(gid, g_rect).is_empty(), "buried window must be 100% occluded");
+
+        // 2. Clicking inside ALREADY-focused Settings must NOT trigger a full-screen repaint!
+        desk.focus_window(sid);
+        assert!(desk.take_dirty_rects().is_empty(), "refocusing already topmost window must be a no-op");
+
+        // 3. Periodic telemetry tick with 6 windows open must NOT invalidate Settings(Display) or ExoBench!
+        desk.tick_periodic();
+        assert!(!desk.windows.iter().find(|w| w.id == sid).unwrap().cache_dirty, "Settings Display must stay cached");
+        assert!(!desk.windows.iter().find(|w| w.id == bid).unwrap().cache_dirty, "Static ExoBench must stay cached");
+        let periodic_rects = desk.take_dirty_rects();
+        assert!(!periodic_rects.is_empty(), "Partially visible Monitor must emit tight dirty rects");
+        let total_px: i64 = periodic_rects.iter().map(|r| r.w as i64 * r.h as i64).sum();
+        assert!(total_px < 1920 * 1080 / 2, "Periodic 6-window dirty area must stay small (got {} px)", total_px);
+
+        // 4. Compositing those dirty rects must keep Settings cache clean & render cleanly!
+        for r in periodic_rects {
+            desk.render_rect_to_shm(&mut shm, r);
+        }
+        assert!(!desk.windows.iter().find(|w| w.id == sid).unwrap().cache_dirty);
+        assert_ne!(shm[500 * 1920 + 900], 0xFF00_0000);
     }
 
     #[test]

@@ -15,16 +15,24 @@ pub(crate) fn isqrt_u64(n: u64) -> u64 {
     }
 }
 
-#[inline]
+#[inline(always)]
 pub fn sqrt_f32(x: f32) -> f32 {
     if x <= 0.0 {
         return 0.0;
     }
-    let mut g = f32::from_bits((x.to_bits() >> 1) + 0x1fc0_0000);
-    g = 0.5 * (g + x / g);
-    g = 0.5 * (g + x / g);
-    g = 0.5 * (g + x / g);
-    g
+    #[cfg(all(target_arch = "x86_64", target_feature = "sse"))]
+    unsafe {
+        use core::arch::x86_64::{_mm_cvtss_f32, _mm_set_ss, _mm_sqrt_ss};
+        _mm_cvtss_f32(_mm_sqrt_ss(_mm_set_ss(x)))
+    }
+    #[cfg(not(all(target_arch = "x86_64", target_feature = "sse")))]
+    {
+        let mut g = f32::from_bits((x.to_bits() >> 1) + 0x1fc0_0000);
+        g = 0.5 * (g + x / g);
+        g = 0.5 * (g + x / g);
+        g = 0.5 * (g + x / g);
+        g
+    }
 }
 
 #[inline]

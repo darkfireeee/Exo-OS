@@ -196,6 +196,11 @@ impl TelemetryState {
         ]
     }
 
+    /// Lightweight clock-only poll (2 syscalls) used when no live telemetry view is visible.
+    pub fn poll_clock_only(&mut self) {
+        self.poll_clock();
+    }
+
     pub fn poll(&mut self) {
         self.sample_tick += 1;
         self.poll_clock();

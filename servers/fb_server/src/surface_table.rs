@@ -515,6 +515,15 @@ impl SurfaceTable {
                 } else {
                     rect.height.min(s.height.saturating_sub(dmg_y))
                 };
+                let direct_shadow_copy = is_root
+                    && fb.is_present()
+                    && fb.shadow_addr != 0
+                    && fb.bytes_per_pixel() == 4
+                    && fb.format != 1
+                    && fb.stride_pixels == s.width
+                    && dmg_x == 0
+                    && dmg_w == s.width
+                    && s.buffer_offset == 0;
                 if !s.is_terminal && s.shm_handle != 0 && s.virt_addr != 0 && s.owner_pid > 1 && dmg_h > 0 {
                     let stride = s.stride_bytes as u64;
                     let base_off = (s.buffer_offset as u64)
@@ -522,7 +531,11 @@ impl SurfaceTable {
                     let band_bytes = (dmg_h as u64).saturating_mul(stride);
                     if base_off.saturating_add(band_bytes) <= s.buf_size_bytes {
                         let remote_src = s.shm_handle.saturating_add(base_off);
-                        let local_dst = s.virt_addr.saturating_add(base_off);
+                        let local_dst = if direct_shadow_copy {
+                            fb.shadow_addr.saturating_add(base_off)
+                        } else {
+                            s.virt_addr.saturating_add(base_off)
+                        };
                         let copy_rc = unsafe {
                             syscall::syscall6(
                                 syscall::SYS_EXO_MEM_COPY_FROM_PID,
@@ -542,7 +555,9 @@ impl SurfaceTable {
                 }
 
                 if is_root {
-                    self.blit_root_compositor_rect(i, fb, dmg_x, dmg_y, dmg_w, dmg_h);
+                    if !direct_shadow_copy {
+                        self.blit_root_compositor_rect(i, fb, dmg_x, dmg_y, dmg_w, dmg_h);
+                    }
                     return Some((dmg_y.min(fb.height), dmg_y.saturating_add(dmg_h).min(fb.height)));
                 }
 

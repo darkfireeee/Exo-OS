@@ -24,6 +24,8 @@ pub struct SystemConfig {
     pub admin_unlocked: bool,
     pub dnd_enabled: bool,
     pub net_policies: [u8; 3],
+    pub screen_w: u32,
+    pub screen_h: u32,
 }
 
 impl Default for SystemConfig {
@@ -41,6 +43,8 @@ impl Default for SystemConfig {
             admin_unlocked: false,
             dnd_enabled: false,
             net_policies: [1, 0, 2],
+            screen_w: 1920,
+            screen_h: 1080,
         }
     }
 }

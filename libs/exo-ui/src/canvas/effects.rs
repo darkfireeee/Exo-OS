@@ -183,21 +183,24 @@ impl<'a> Canvas<'a> {
         let r = rect.intersect(self.clip);
         let pct = theme.brightness_pct.clamp(30, 135) as u32;
         let (rp, gp, bp) = if theme.night_light {
-            (pct, (pct * 91) / 100, (pct * 74) / 100)
+            ((pct * 256) / 100, (pct * 233) / 100, (pct * 189) / 100)
         } else {
-            (pct, pct, pct)
+            let s = (pct * 256) / 100;
+            (s, s, s)
         };
+        let px_len = self.pixels.len();
         for y in r.y..r.bottom() {
-            let row = (y as usize) * self.stride;
-            for x in r.x..r.right() {
-                let idx = row + (x as usize);
-                if idx < self.pixels.len() {
-                    let p = self.pixels[idx];
-                    let cr = (((p >> 16) & 0xFF) * rp / 100).min(255);
-                    let cg = (((p >> 8) & 0xFF) * gp / 100).min(255);
-                    let cb = ((p & 0xFF) * bp / 100).min(255);
-                    self.pixels[idx] = 0xFF00_0000 | (cr << 16) | (cg << 8) | cb;
-                }
+            let start = (y as usize) * self.stride + (r.x as usize);
+            let end = (start + (r.w as usize)).min(px_len);
+            if start >= end {
+                continue;
+            }
+            for p in &mut self.pixels[start..end] {
+                let v = *p;
+                let cr = ((((v >> 16) & 0xFF) * rp) >> 8).min(255);
+                let cg = ((((v >> 8) & 0xFF) * gp) >> 8).min(255);
+                let cb = (((v & 0xFF) * bp) >> 8).min(255);
+                *p = 0xFF00_0000 | (cr << 16) | (cg << 8) | cb;
             }
         }
     }

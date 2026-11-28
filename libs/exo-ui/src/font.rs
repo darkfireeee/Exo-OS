@@ -17,7 +17,7 @@ pub struct Glyph<'a> {
     pub alpha: &'a [u8],
 }
 
-/// Zero-copy view over a `.exofont` pre-baked anti-aliased font binary.
+/// Zero-copy view over a `.exofont` pre-baked anti-aliased font binary with O(1) ASCII lookup.
 #[derive(Clone, Copy)]
 pub struct ExoFont<'a> {
     data: &'a [u8],
@@ -25,6 +25,9 @@ pub struct ExoFont<'a> {
     pub ascent: i32,
     glyph_count: usize,
     bitmap_base: usize,
+    /// Direct O(1) index table for ASCII codepoints `0..128` (`idx + 1`, `0` = absent).
+    ascii_lut: [u16; 128],
+    fallback_idx: u16,
 }
 
 impl<'a> ExoFont<'a> {
@@ -43,16 +46,33 @@ impl<'a> ExoFont<'a> {
         if bitmap_base.checked_add(bitmap_bytes)? > data.len() || line_height <= 0 {
             return None;
         }
+        let mut ascii_lut = [0u16; 128];
+        let mut fallback_idx = 0u16;
+        for idx in 0..glyph_count {
+            let off = Self::HEADER_SIZE + idx * Self::ENTRY_SIZE;
+            let cp = u32::from_le_bytes([data[off], data[off + 1], data[off + 2], data[off + 3]]);
+            if cp < 128 && idx < u16::MAX as usize {
+                ascii_lut[cp as usize] = (idx + 1) as u16;
+                if cp == b'?' as u32 {
+                    fallback_idx = (idx + 1) as u16;
+                }
+            }
+        }
+        if fallback_idx == 0 && glyph_count > 0 {
+            fallback_idx = 1;
+        }
         Some(Self {
             data,
             line_height,
             ascent,
             glyph_count,
             bitmap_base,
+            ascii_lut,
+            fallback_idx,
         })
     }
 
-    #[inline]
+    #[inline(always)]
     fn entry_at(&self, idx: usize) -> Option<(u32, Glyph<'a>)> {
         if idx >= self.glyph_count {
             return None;
@@ -92,9 +112,21 @@ impl<'a> ExoFont<'a> {
         ))
     }
 
-    /// Binary-search lookup by Unicode scalar value, falling back to `'?'`.
+    /// O(1) ASCII LUT lookup with binary-search fallback for non-ASCII UTF-8 scalars.
+    #[inline]
     pub fn glyph(&self, ch: char) -> Option<Glyph<'a>> {
         let target = ch as u32;
+        if target < 128 {
+            let slot = self.ascii_lut[target as usize];
+            if slot != 0 {
+                return self.entry_at((slot - 1) as usize).map(|(_, g)| g);
+            }
+            return if self.fallback_idx != 0 {
+                self.entry_at((self.fallback_idx - 1) as usize).map(|(_, g)| g)
+            } else {
+                None
+            };
+        }
         let mut lo = 0usize;
         let mut hi = self.glyph_count;
         while lo < hi {
@@ -108,11 +140,10 @@ impl<'a> ExoFont<'a> {
                 hi = mid;
             }
         }
-        // Fallback to '?'
-        if ch != '?' {
-            self.glyph('?')
+        if self.fallback_idx != 0 {
+            self.entry_at((self.fallback_idx - 1) as usize).map(|(_, g)| g)
         } else {
-            self.entry_at(0).map(|(_, g)| g)
+            None
         }
     }
 

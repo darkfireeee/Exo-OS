@@ -184,6 +184,7 @@ impl DesktopShell {
             self.show_toast(format!("Clavier : {}", self.cfg.keymap.code()));
         } else if self.topbar_theme_rect().contains(mx, my) {
             self.theme.mode = if self.theme.mode == ThemeMode::Dark { ThemeMode::Light } else { ThemeMode::Dark };
+            self.invalidate_all_window_caches();
         } else if self.topbar_quick_rect().contains(mx, my) {
             self.quick_settings_open = !self.quick_settings_open;
             self.calendar_open = false;
@@ -213,8 +214,10 @@ impl DesktopShell {
         let t4 = Rect::new(t3.right() + 8, r.y + 146, bw, 34);
         if t1.contains(mx, my) {
             self.theme.mode = if self.theme.mode == ThemeMode::Dark { ThemeMode::Light } else { ThemeMode::Dark };
+            self.invalidate_all_window_caches();
         } else if t2.contains(mx, my) {
             self.cfg.lang = if self.cfg.lang.is_en() { crate::i18n::Lang::Fr } else { crate::i18n::Lang::En };
+            self.invalidate_all_window_caches();
         } else if t3.contains(mx, my) {
             self.cfg.keymap = self.cfg.keymap.next();
         } else if t4.contains(mx, my) {

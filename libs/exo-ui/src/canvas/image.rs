@@ -1,51 +1,82 @@
 //! Anti-aliased text rendering, straight-RGBA icon blitting, and harmonious wallpapers.
 
 use crate::canvas::Canvas;
-use crate::color::{blend_over, blend_over_cov, Color};
+use crate::color::{blend_over, blend_over_cov, blend_over_pre, Color};
 use crate::font::ExoFont;
 use crate::widgets::Rect;
 
 impl<'a> Canvas<'a> {
     /// Render anti-aliased UTF-8 text with an [`ExoFont`], returning final pen X.
+    /// Pre-clips every glyph once and uses division-free SWAR alpha blending.
     pub fn draw_text(&mut self, font: &ExoFont<'_>, x: i32, y: i32, text: &str, color: Color) -> i32 {
-        if color.a() == 0 {
+        let sa = color.a() as u32;
+        if sa == 0 || text.is_empty() {
             return x;
         }
+        let clip_x0 = self.clip.x;
+        let clip_y0 = self.clip.y;
+        let clip_x1 = self.clip.right();
+        let clip_y1 = self.clip.bottom();
+        if clip_x0 >= clip_x1 || clip_y0 >= clip_y1 || y >= clip_y1 || y + font.line_height + 6 <= clip_y0 || x >= clip_x1 {
+            return x + font.measure_width(text);
+        }
+        let opaque_px = 0xFF00_0000 | (color.0 & 0x00FF_FFFF);
+        let s_rb = color.0 & 0x00FF_00FF;
+        let s_g = (color.0 >> 8) & 0xFF;
+        let px_len = self.pixels.len();
+        let stride = self.stride;
         let mut pen_x = x;
+
         for ch in text.chars() {
             if let Some(g) = font.glyph(ch) {
+                let gx0 = pen_x;
                 let gy0 = y + g.bearing_y;
-                if g.width > 0 && g.height > 0 {
-                    let gx0 = pen_x;
-                    if gx0 + g.width > self.clip.x
-                        && gx0 < self.clip.right()
-                        && gy0 + g.height > self.clip.y
-                        && gy0 < self.clip.bottom()
-                    {
-                        for row_i in 0..g.height {
-                            let py = gy0 + row_i;
-                            if py < self.clip.y || py >= self.clip.bottom() {
-                                continue;
+                pen_x += g.advance;
+                if gx0 >= clip_x1 {
+                    // Remaining characters will all be clipped to the right; fast-advance width if caller needs it.
+                    continue;
+                }
+                if g.width <= 0 || g.height <= 0 {
+                    continue;
+                }
+                let r0 = (clip_y0 - gy0).max(0);
+                let r1 = (clip_y1 - gy0).min(g.height);
+                let c0 = (clip_x0 - gx0).max(0);
+                let c1 = (clip_x1 - gx0).min(g.width);
+                if r0 >= r1 || c0 >= c1 {
+                    continue;
+                }
+                let gw = g.width as usize;
+                let c0u = c0 as usize;
+                let c1u = c1 as usize;
+                let gx_base = (gx0 + c0) as usize;
+                let span = c1u - c0u;
+                for row_i in r0..r1 {
+                    let dst_start = ((gy0 + row_i) as usize) * stride + gx_base;
+                    if dst_start + span > px_len {
+                        break;
+                    }
+                    let src_start = (row_i as usize) * gw + c0u;
+                    let src_row = &g.alpha[src_start..src_start + span];
+                    let dst_row = &mut self.pixels[dst_start..dst_start + span];
+                    if sa == 255 {
+                        for i in 0..span {
+                            let cov = src_row[i] as u32;
+                            if cov == 255 {
+                                dst_row[i] = opaque_px;
+                            } else if cov != 0 {
+                                dst_row[i] = blend_over_pre(dst_row[i], s_rb, s_g, cov, 255 - cov);
                             }
-                            let dst_row = (py as usize) * self.stride;
-                            let src_row = (row_i as usize) * (g.width as usize);
-                            for col_i in 0..g.width {
-                                let px = gx0 + col_i;
-                                if px < self.clip.x || px >= self.clip.right() {
-                                    continue;
-                                }
-                                let cov = g.alpha[src_row + (col_i as usize)];
-                                if cov != 0 {
-                                    let idx = dst_row + (px as usize);
-                                    if idx < self.pixels.len() {
-                                        self.pixels[idx] = blend_over_cov(self.pixels[idx], color, cov);
-                                    }
-                                }
+                        }
+                    } else {
+                        for i in 0..span {
+                            let cov = src_row[i];
+                            if cov != 0 {
+                                dst_row[i] = blend_over_cov(dst_row[i], color, cov);
                             }
                         }
                     }
                 }
-                pen_x += g.advance;
             }
         }
         pen_x
@@ -103,6 +134,33 @@ impl<'a> Canvas<'a> {
         if dst_rect.is_empty() {
             return;
         }
+        let px_len = self.pixels.len();
+        if dst_w == src_w as i32 && dst_h == src_h as i32 && opacity == 255 {
+            let sw = src_w as usize;
+            for py in dst_rect.y..dst_rect.bottom() {
+                let sy = (py - dy) as usize;
+                let dst_row = (py as usize) * self.stride;
+                let src_row = sy * sw;
+                for px in dst_rect.x..dst_rect.right() {
+                    let sx = (px - dx) as usize;
+                    let off = (src_row + sx) * 4;
+                    let a = src[off + 3];
+                    if a == 0 {
+                        continue;
+                    }
+                    let idx = dst_row + (px as usize);
+                    if idx < px_len {
+                        let c = Color::rgba(src[off], src[off + 1], src[off + 2], a);
+                        self.pixels[idx] = if a == 255 {
+                            0xFF00_0000 | (c.0 & 0x00FF_FFFF)
+                        } else {
+                            blend_over(self.pixels[idx], c)
+                        };
+                    }
+                }
+            }
+            return;
+        }
         let step_x = ((src_w as u64) << 16) / (dst_w as u64);
         let step_y = ((src_h as u64) << 16) / (dst_h as u64);
 
@@ -120,11 +178,11 @@ impl<'a> Canvas<'a> {
                 let eff_a = if opacity == 255 {
                     a
                 } else {
-                    ((a as u32 * opacity as u32 + 127) / 255) as u8
+                    (((a as u32 * opacity as u32 + 128) * 257) >> 16) as u8
                 };
                 let c = Color::rgba(src[off], src[off + 1], src[off + 2], eff_a);
                 let idx = dst_row + (px as usize);
-                if idx < self.pixels.len() {
+                if idx < px_len {
                     self.pixels[idx] = blend_over(self.pixels[idx], c);
                 }
             }

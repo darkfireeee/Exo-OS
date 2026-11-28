@@ -227,10 +227,10 @@ impl DesktopShell {
             let qr = self.quick_settings_rect();
             if qr.contains(mx, my) { self.mark_dirty_band(qr.y - 8, qr.bottom() + 12); }
         } else if self.dock_rect().inset(-12, -26).contains(mx, my) {
-            let dr = self.dock_rect();
-            self.mark_dirty_band(dr.y - 44, self.height as i32);
+            let dr = self.dock_rect().inset(-18, -42);
+            self.mark_dirty_rect(dr);
         } else if my <= TOP_BAR_H + 4 {
-            self.mark_dirty_band(0, TOP_BAR_H);
+            self.top_bar_dirty = true;
         }
     }
 
@@ -282,7 +282,17 @@ impl DesktopShell {
             return;
         }
 
-        for w in &mut self.windows { w.focused = false; }
+        let mut unfocused_rects = Vec::new();
+        for w in &mut self.windows {
+            if w.focused {
+                w.focused = false;
+                w.invalidate_cache();
+                unfocused_rects.push(w.rect);
+            }
+        }
+        for r in unfocused_rects {
+            self.mark_dirty_rect(r);
+        }
         if right_button {
             let lang = self.cfg.lang;
             let items = vec![
@@ -380,25 +390,40 @@ impl DesktopShell {
     }
 
     pub(crate) fn handle_pointer_release(&mut self) {
-        let mut changed = self.drag_win.take().is_some()
+        let ended_geom = self.drag_win.take().is_some()
             || self.drag_max_win.take().is_some()
             || self.resize_win.take().is_some();
         if self.desk_marquee_active {
             let mr = Rect::from_points(self.desk_marquee_start.0, self.desk_marquee_start.1, self.desk_marquee_cur.0, self.desk_marquee_cur.1);
             self.desk_marquee_active = false;
-            self.mark_dirty_band(mr.y - 6, mr.bottom() + 6);
+            self.mark_dirty_rect(Rect::new(mr.x - 6, mr.y - 6, mr.w + 12, mr.h + 12));
         }
+        let mut dirty_bodies = Vec::new();
         for w in &mut self.windows {
-            match &mut w.app {
-                AppInstance::Files(a) => changed |= a.handle_mouse_release(),
-                AppInstance::Terminal(a) => changed |= a.handle_mouse_release(&mut self.clipboard),
-                AppInstance::Settings(a) => a.handle_mouse_release(),
-                AppInstance::Editor(a) => a.handle_mouse_release(),
-                AppInstance::Monitor(a) => a.handle_mouse_release(),
-                _ => {}
+            let changed = match &mut w.app {
+                AppInstance::Files(a) => a.handle_mouse_release(),
+                AppInstance::Terminal(a) => a.handle_mouse_release(&mut self.clipboard),
+                AppInstance::Settings(a) => { a.handle_mouse_release(); false }
+                AppInstance::Editor(a) => { a.handle_mouse_release(); false }
+                AppInstance::Monitor(a) => { a.handle_mouse_release(); false }
+                _ => false,
+            };
+            if changed {
+                w.invalidate_cache();
+                dirty_bodies.push(w.body_rect());
             }
         }
-        if changed { self.dirty = true; }
+        if ended_geom {
+            if let Some(fid) = self.focused_window_id() {
+                if let Some(w) = self.windows.iter().find(|w| w.id == fid) {
+                    let wr = Rect::new(w.rect.x - 12, w.rect.y - 8, w.rect.w + 24, w.rect.h + 22);
+                    self.mark_dirty_rect(wr);
+                }
+            }
+        }
+        for r in dirty_bodies {
+            self.mark_dirty_rect(r);
+        }
     }
 
     fn dispatch_context_cmd(&mut self, target_win: Option<u32>, cmd: u32) {

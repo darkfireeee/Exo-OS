@@ -220,6 +220,7 @@ impl DesktopShell {
                 } else if Rect::new(r.right() - 134, r.bottom() - 48, 114, 32).contains(mx, my) {
                     self.cfg.admin_unlocked = true;
                     self.dialog = None;
+                    self.invalidate_all_window_caches();
                     self.show_toast("Session administrateur autorisée (ExoAuth)");
                 }
                 self.dirty = true;
@@ -258,6 +259,7 @@ impl DesktopShell {
                                 if let AppInstance::Editor(ref mut ed) = w.app {
                                     ed.load_file(path);
                                     w.title = format!("{} — {}", w.kind.title(self.cfg.lang), path);
+                                    w.invalidate_cache();
                                 }
                             }
                             self.dialog = None;

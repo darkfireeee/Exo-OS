@@ -106,7 +106,7 @@ impl SettingsApp {
         }
 
         // Resolution & Backend rows + live Night Light toggle
-        let res_str = format!("{} × {} px • 60 Hz (32-bit ARGB)", cv.width, cv.height);
+        let res_str = format!("{} × {} px • 60 Hz (32-bit ARGB)", cfg.screen_w, cfg.screen_h);
         let rows = [
             (lang.pick("Résolution & Fréquence", "Resolution & Refresh"), res_str.as_str(), OptionState::Applied),
             (lang.pick("Accélération GPU & Compositeur", "GPU & Compositor Engine"), lang.pick("VirtIO-GPU 1.2 / Cache 2D 60 Hz", "VirtIO-GPU 1.2 / 60 Hz 2D Cache"), OptionState::Applied),

@@ -296,16 +296,18 @@ pub fn sync_cursor_to_fb_server(pid: u32, x: i32, y: i32) {
 /// Lockstep double-buffering guarantees `exo_compositor` never mutates SHM while `fb_server`
 /// executes `SYS_EXO_MEM_COPY_FROM_PID` + MMIO scanout (zero tearing, zero wallpaper flash).
 pub fn submit_damage_to_fb_server(pid: u32, reply_ep: u64, grant: &FbSurfaceGrant, dmg: syscall::DamageRect) {
-    let mut stale = syscall::FbReply::default();
-    let _ = unsafe {
-        syscall::syscall4(
-            syscall::SYS_EXO_IPC_RECV_NB,
-            reply_ep,
-            &mut stale as *mut syscall::FbReply as u64,
-            core::mem::size_of::<syscall::FbReply>() as u64,
-            0,
-        )
-    };
+    if reply_ep != 0 {
+        let mut stale = syscall::FbReply::default();
+        let _ = unsafe {
+            syscall::syscall4(
+                syscall::SYS_EXO_IPC_RECV_NB,
+                reply_ep,
+                &mut stale as *mut syscall::FbReply as u64,
+                core::mem::size_of::<syscall::FbReply>() as u64,
+                0,
+            )
+        };
+    }
     let mut req = syscall::FbRequest::zeroed();
     req.sender_pid = pid;
     req.msg_type = syscall::DISPLAY_OP_COMMIT_DAMAGE;

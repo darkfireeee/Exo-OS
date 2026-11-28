@@ -82,6 +82,22 @@ impl Window {
         )
     }
 
+    /// Exact guaranteed-opaque interior rectangle used for front-to-back occlusion culling.
+    /// Excludes the 12px rounded corner arcs and 1px hairline border on non-maximized windows.
+    #[inline]
+    pub fn opaque_rect(&self) -> Rect {
+        if self.maximized {
+            self.rect
+        } else {
+            Rect::new(
+                self.rect.x + 1,
+                self.rect.y + 12,
+                (self.rect.w - 2).max(0),
+                (self.rect.h - 24).max(0),
+            )
+        }
+    }
+
     #[inline]
     pub fn close_btn(&self) -> Rect {
         Rect::new(self.rect.right() - 34, self.rect.y + 8, 24, 22)
@@ -133,8 +149,137 @@ impl Window {
         self.cache_dirty = true;
     }
 
-    /// Cached 60 Hz compositor path: blits backing surface via scanline memcpy during window
-    /// dragging and for unfocused background windows (sub-2 ms at 1080p!).
+    /// Re-rasterizes this window's private backing surface ONLY when invalidated or resized.
+    /// Never wastes CPU re-rendering unchanged focused or background windows!
+    #[allow(clippy::too_many_arguments)]
+    pub fn ensure_cache(
+        &mut self,
+        mx: i32,
+        my: i32,
+        theme: &Theme,
+        cfg: &SystemConfig,
+        fonts: &FontSet,
+        telemetry: &TelemetryState,
+        bench: &BenchSuite,
+    ) {
+        let w = self.rect.w.max(1);
+        let h = self.rect.h.max(1);
+        let need_len = (w as usize).saturating_mul(h as usize);
+        let cache_valid = !self.cache_dirty
+            && self.cache_w == w
+            && self.cache_h == h
+            && self.cache_pixels.len() == need_len;
+        if cache_valid {
+            return;
+        }
+        let mut buf = core::mem::take(&mut self.cache_pixels);
+        if buf.len() != need_len {
+            buf.resize(need_len, 0xFF18_1A20);
+        }
+        self.cache_w = w;
+        self.cache_h = h;
+        let orig_rect = self.rect;
+        self.rect = Rect::new(0, 0, w, h);
+        {
+            let mut lcv = Canvas::new(&mut buf, w as u32, h as u32, w as usize);
+            let pal = theme.palette();
+            lcv.fill_rect(Rect::new(0, 0, w, h), pal.window_bg.with_alpha(255));
+            self.draw_inner(&mut lcv, mx - orig_rect.x, my - orig_rect.y, theme, cfg, fonts, telemetry, bench, false);
+        }
+        self.rect = orig_rect;
+        self.cache_pixels = buf;
+        self.cache_dirty = false;
+    }
+
+    /// Ultra-fast clipped scanline blit from this window's cached backing surface (zero overdraw shadow).
+    pub fn blit_cached_clipped(&self, cv: &mut Canvas<'_>, theme: &Theme, draw_shadow: bool) {
+        if self.minimized || self.cache_pixels.is_empty() {
+            return;
+        }
+        let w = self.cache_w;
+        let h = self.cache_h;
+        let clip = cv.clip;
+        let clip_inside_rect = clip.x >= self.rect.x
+            && clip.y >= self.rect.y
+            && clip.right() <= self.rect.right()
+            && clip.bottom() <= self.rect.bottom();
+
+        // Non-overlapping 2-ring outer drop shadow (zero double-blending, skipped when clip is interior)
+        if draw_shadow && !self.maximized && !clip_inside_rect {
+            let r = self.rect;
+            // Ring 1 (inner 4px): strictly outside r, shifted +3px down
+            let c1 = Color::rgba(0, 0, 0, 26);
+            let i_x0 = r.x - 4;
+            let i_x1 = r.right() + 4;
+            let i_y0 = r.y - 1;
+            let i_y1 = r.bottom() + 7;
+            cv.fill_rect(Rect::new(i_x0, i_y0, i_x1 - i_x0, (r.y - i_y0).max(0)), c1);
+            cv.fill_rect(Rect::new(i_x0, r.bottom(), i_x1 - i_x0, i_y1 - r.bottom()), c1);
+            cv.fill_rect(Rect::new(i_x0, r.y, 4, r.h), c1);
+            cv.fill_rect(Rect::new(r.right(), r.y, 4, r.h), c1);
+
+            // Ring 2 (outer 4px): strictly outside Ring 1 (zero overlap!)
+            let c2 = Color::rgba(0, 0, 0, 11);
+            let o_x0 = i_x0 - 4;
+            let o_x1 = i_x1 + 4;
+            let o_y0 = i_y0 - 3;
+            let o_y1 = i_y1 + 5;
+            cv.fill_rect(Rect::new(o_x0, o_y0, o_x1 - o_x0, (i_y0 - o_y0).max(0)), c2);
+            cv.fill_rect(Rect::new(o_x0, i_y1, o_x1 - o_x0, o_y1 - i_y1), c2);
+            cv.fill_rect(Rect::new(o_x0, i_y0, 4, i_y1 - i_y0), c2);
+            cv.fill_rect(Rect::new(i_x1, i_y0, 4, i_y1 - i_y0), c2);
+        }
+
+        // Fast clipped scanline memcpy from cached window backing surface
+        let rad = if self.maximized { 0 } else { 12 };
+        let vis = self.rect.intersect(clip);
+        if vis.is_empty() {
+            return;
+        }
+        const CORNER_INSET_12: [i32; 12] = [7, 5, 4, 3, 2, 2, 1, 1, 1, 0, 0, 0];
+        let stride_dst = cv.stride;
+        let stride_src = w as usize;
+        let src_len = self.cache_pixels.len();
+        let dst_len = cv.pixels.len();
+        for gy in vis.y..vis.bottom() {
+            let ly = gy - self.rect.y;
+            let inset = if rad == 12 {
+                if ly < 12 {
+                    CORNER_INSET_12[ly as usize]
+                } else if ly >= h - 12 {
+                    CORNER_INSET_12[(h - 1 - ly) as usize]
+                } else {
+                    0
+                }
+            } else {
+                0
+            };
+            let gx0 = vis.x.max(self.rect.x + inset);
+            let gx1 = vis.right().min(self.rect.right() - inset);
+            if gx0 < gx1 {
+                let lx0 = (gx0 - self.rect.x) as usize;
+                let count = (gx1 - gx0) as usize;
+                let src_off = (ly as usize) * stride_src + lx0;
+                let dst_off = (gy as usize) * stride_dst + (gx0 as usize);
+                if src_off + count <= src_len && dst_off + count <= dst_len {
+                    cv.pixels[dst_off..dst_off + count]
+                        .copy_from_slice(&self.cache_pixels[src_off..src_off + count]);
+                }
+            }
+        }
+        // Only stroke rounded border if clip actually touches the window perimeter
+        let touches_border = clip.x <= self.rect.x + rad
+            || clip.y <= self.rect.y + rad
+            || clip.right() >= self.rect.right() - rad
+            || clip.bottom() >= self.rect.bottom() - rad;
+        if touches_border {
+            let pal = theme.palette();
+            let border = if self.focused { pal.border_strong } else { pal.border_subtle };
+            cv.stroke_rounded_rect(self.rect, rad, border);
+        }
+    }
+
+    /// Cached 60 Hz compositor path: blits backing surface via scanline memcpy.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_cached(
         &mut self,
@@ -156,102 +301,8 @@ impl Window {
             self.draw(cv, mx, my, theme, cfg, fonts, telemetry, bench);
             return;
         }
-        let w = self.rect.w.max(1);
-        let h = self.rect.h.max(1);
-        let need_len = (w as usize).saturating_mul(h as usize);
-        let cache_valid = !self.cache_dirty
-            && self.cache_w == w
-            && self.cache_h == h
-            && self.cache_pixels.len() == need_len;
-
-        if !cache_valid || (self.focused && !dragging_this) {
-            let mut buf = core::mem::take(&mut self.cache_pixels);
-            if buf.len() != need_len {
-                buf.resize(need_len, 0xFF18_1A20);
-            }
-            self.cache_w = w;
-            self.cache_h = h;
-            let orig_rect = self.rect;
-            self.rect = Rect::new(0, 0, w, h);
-            {
-                let mut lcv = Canvas::new(&mut buf, w as u32, h as u32, w as usize);
-                let pal = theme.palette();
-                lcv.fill_rect(Rect::new(0, 0, w, h), pal.window_bg.with_alpha(255));
-                self.draw_inner(&mut lcv, mx - orig_rect.x, my - orig_rect.y, theme, cfg, fonts, telemetry, bench, false);
-            }
-            self.rect = orig_rect;
-            self.cache_pixels = buf;
-            self.cache_dirty = false;
-        }
-
-        // Lightweight outer shadow (strictly outside rect)
-        if !self.maximized {
-            let rect = self.rect;
-            for step in (1..=3).rev() {
-                let pad = step * 3;
-                let a = (22 - step * 5).max(4) as u8;
-                let col = Color::rgba(0, 0, 0, a);
-                let sx0 = rect.x - pad;
-                let sy0 = rect.y - pad + 5;
-                let sx1 = rect.right() + pad;
-                let sy1 = rect.bottom() + pad + 5;
-                if sy0 < rect.y {
-                    cv.fill_rect(Rect::new(sx0, sy0, sx1 - sx0, rect.y - sy0), col);
-                }
-                if sy1 > rect.bottom() {
-                    cv.fill_rect(Rect::new(sx0, rect.bottom(), sx1 - sx0, sy1 - rect.bottom()), col);
-                }
-                let my0 = sy0.max(rect.y);
-                let my1 = sy1.min(rect.bottom());
-                if my1 > my0 {
-                    if sx0 < rect.x {
-                        cv.fill_rect(Rect::new(sx0, my0, rect.x - sx0, my1 - my0), col);
-                    }
-                    if sx1 > rect.right() {
-                        cv.fill_rect(Rect::new(rect.right(), my0, sx1 - rect.right(), my1 - my0), col);
-                    }
-                }
-            }
-        }
-
-        // Fast clipped scanline blit from cached window backing surface
-        let rad = if self.maximized { 0 } else { 12 };
-        let vis = self.rect.intersect(cv.clip);
-        if vis.is_empty() {
-            return;
-        }
-        const CORNER_INSET_12: [i32; 12] = [7, 5, 4, 3, 2, 2, 1, 1, 1, 0, 0, 0];
-        let stride_dst = cv.stride;
-        let stride_src = w as usize;
-        for gy in vis.y..vis.bottom() {
-            let ly = gy - self.rect.y;
-            let inset = if rad == 12 {
-                if ly < 12 {
-                    CORNER_INSET_12[ly as usize]
-                } else if ly >= h - 12 {
-                    CORNER_INSET_12[(h - 1 - ly) as usize]
-                } else {
-                    0
-                }
-            } else {
-                0
-            };
-            let gx0 = vis.x.max(self.rect.x + inset);
-            let gx1 = vis.right().min(self.rect.right() - inset);
-            if gx0 < gx1 {
-                let lx0 = (gx0 - self.rect.x) as usize;
-                let count = (gx1 - gx0) as usize;
-                let src_off = (ly as usize) * stride_src + lx0;
-                let dst_off = (gy as usize) * stride_dst + (gx0 as usize);
-                if src_off + count <= self.cache_pixels.len() && dst_off + count <= cv.pixels.len() {
-                    cv.pixels[dst_off..dst_off + count]
-                        .copy_from_slice(&self.cache_pixels[src_off..src_off + count]);
-                }
-            }
-        }
-        let pal = theme.palette();
-        let border = if self.focused { pal.border_strong } else { pal.border_subtle };
-        cv.stroke_rounded_rect(self.rect, rad, border);
+        self.ensure_cache(mx, my, theme, cfg, fonts, telemetry, bench);
+        self.blit_cached_clipped(cv, theme, true);
     }
 
     pub fn draw(

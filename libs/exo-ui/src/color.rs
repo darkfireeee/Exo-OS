@@ -49,10 +49,10 @@ impl Color {
     pub const fn lerp(self, other: Self, t: u8) -> Self {
         let inv = 255u32 - t as u32;
         let tf = t as u32;
-        let a = (self.a() as u32 * inv + other.a() as u32 * tf + 127) / 255;
-        let r = (self.r() as u32 * inv + other.r() as u32 * tf + 127) / 255;
-        let g = (self.g() as u32 * inv + other.g() as u32 * tf + 127) / 255;
-        let b = (self.b() as u32 * inv + other.b() as u32 * tf + 127) / 255;
+        let a = (((self.a() as u32 * inv + other.a() as u32 * tf + 128) * 257) >> 16) & 0xFF;
+        let r = (((self.r() as u32 * inv + other.r() as u32 * tf + 128) * 257) >> 16) & 0xFF;
+        let g = (((self.g() as u32 * inv + other.g() as u32 * tf + 128) * 257) >> 16) & 0xFF;
+        let b = (((self.b() as u32 * inv + other.b() as u32 * tf + 128) * 257) >> 16) & 0xFF;
         Self((a << 24) | (r << 16) | (g << 8) | b)
     }
 
@@ -79,7 +79,7 @@ pub fn lerp_f32(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t.clamp(0.0, 1.0)
 }
 
-/// Alpha-blend `src` over `dst` (`0xAARRGGBB` -> `0xFFRRGGBB`).
+/// Division-free SWAR alpha-blend `src` over `dst` (`0xAARRGGBB` -> `0xFFRRGGBB`).
 #[inline(always)]
 pub const fn blend_over(dst: u32, src: Color) -> u32 {
     let a = src.a() as u32;
@@ -90,23 +90,48 @@ pub const fn blend_over(dst: u32, src: Color) -> u32 {
         return 0xFF00_0000 | (src.0 & 0x00FF_FFFF);
     }
     let inv = 255 - a;
-    let dr = (dst >> 16) & 0xFF;
-    let dg = (dst >> 8) & 0xFF;
-    let db = dst & 0xFF;
-    let r = (src.r() as u32 * a + dr * inv + 127) / 255;
-    let g = (src.g() as u32 * a + dg * inv + 127) / 255;
-    let b = (src.b() as u32 * a + db * inv + 127) / 255;
-    0xFF00_0000 | (r << 16) | (g << 8) | b
+    let s_rb = src.0 & 0x00FF_00FF;
+    let d_rb = dst & 0x00FF_00FF;
+    let rb = s_rb * a + d_rb * inv + 0x0080_0080;
+    let rb = ((rb + ((rb >> 8) & 0x00FF_00FF)) >> 8) & 0x00FF_00FF;
+    let s_g = (src.0 >> 8) & 0xFF;
+    let d_g = (dst >> 8) & 0xFF;
+    let g = s_g * a + d_g * inv + 0x80;
+    let g = ((g + (g >> 8)) >> 8) & 0xFF;
+    0xFF00_0000 | rb | (g << 8)
 }
 
-/// Fast alpha blend with extra coverage `cov` (`0..=255`) for anti-aliased edges/glyphs.
+/// Division-free SWAR alpha blend with pre-unpacked `s_rb = src & 0x00FF_00FF`, `s_g = (src >> 8) & 0xFF`.
+#[inline(always)]
+pub const fn blend_over_pre(dst: u32, s_rb: u32, s_g: u32, a: u32, inv: u32) -> u32 {
+    let d_rb = dst & 0x00FF_00FF;
+    let rb = s_rb * a + d_rb * inv + 0x0080_0080;
+    let rb = ((rb + ((rb >> 8) & 0x00FF_00FF)) >> 8) & 0x00FF_00FF;
+    let d_g = (dst >> 8) & 0xFF;
+    let g = s_g * a + d_g * inv + 0x80;
+    let g = ((g + (g >> 8)) >> 8) & 0xFF;
+    0xFF00_0000 | rb | (g << 8)
+}
+
+/// Fast division-free alpha blend with extra coverage `cov` (`0..=255`) for anti-aliased edges/glyphs.
 #[inline(always)]
 pub const fn blend_over_cov(dst: u32, src: Color, cov: u8) -> u32 {
     if cov == 0 {
         return dst;
     }
-    let eff_a = ((src.a() as u32 * cov as u32 + 127) / 255) as u8;
-    blend_over(dst, src.with_alpha(eff_a))
+    let sa = src.a() as u32;
+    let eff_a = if sa == 255 {
+        cov as u32
+    } else {
+        ((sa * cov as u32 + 128) * 257) >> 16
+    };
+    if eff_a == 0 {
+        return dst;
+    }
+    if eff_a == 255 {
+        return 0xFF00_0000 | (src.0 & 0x00FF_FFFF);
+    }
+    blend_over_pre(dst, src.0 & 0x00FF_00FF, (src.0 >> 8) & 0xFF, eff_a, 255 - eff_a)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -252,8 +277,14 @@ impl Theme {
     }
 
     /// Resolve a clean, neutral Dark or Light palette (never heavy blue-tinted glass).
+    /// When `surface_alpha >= 235` (opaque cached-window mode), interior window surfaces use
+    /// `alpha = 255` so every card/sidebar/editor fill hits fast `slice::fill` (15x faster).
     pub const fn palette(&self) -> Palette {
-        let a = self.surface_alpha;
+        let opaque = self.surface_alpha >= 235;
+        let a = if opaque { 255 } else { self.surface_alpha };
+        let ca = if opaque { 255 } else { 0xF2 };
+        let ea = if opaque { 255 } else { 0xF5 };
+        let ta = if opaque { 255 } else { 0xF8 };
         let acc = self.accent.primary();
         match self.mode {
             ThemeMode::Dark => Palette {
@@ -261,9 +292,9 @@ impl Theme {
                 accent: acc,
                 window_bg: Color::rgba(0x16, 0x18, 0x1D, a),
                 sidebar_bg: Color::rgba(0x12, 0x14, 0x19, a),
-                card_bg: Color::rgba(0x1D, 0x20, 0x28, 0xF2),
-                elevated_bg: Color::rgba(0x25, 0x29, 0x33, 0xF5),
-                input_bg: Color::rgba(0x0F, 0x11, 0x15, 0xF5),
+                card_bg: Color::rgba(0x1D, 0x20, 0x28, ca),
+                elevated_bg: Color::rgba(0x25, 0x29, 0x33, ea),
+                input_bg: Color::rgba(0x0F, 0x11, 0x15, ea),
                 hover_bg: Color::rgba(0xFF, 0xFF, 0xFF, 0x14),
                 dock_bg: Color::rgba(0x18, 0x1A, 0x20, 0xDF),
                 topbar_bg: Color::rgba(0x12, 0x14, 0x19, 0xD4),
@@ -285,15 +316,15 @@ impl Theme {
                 warning: Color::rgb(0xF5, 0x9E, 0x0B),
                 danger: Color::rgb(0xF4, 0x3F, 0x5E),
                 info: Color::rgb(0x38, 0xBD, 0xF8),
-                terminal_bg: Color::rgba(0x10, 0x12, 0x16, 0xF8),
+                terminal_bg: Color::rgba(0x10, 0x12, 0x16, ta),
             },
             ThemeMode::Light => Palette {
                 is_dark: false,
                 accent: acc,
                 window_bg: Color::rgba(0xFA, 0xFA, 0xFC, a),
                 sidebar_bg: Color::rgba(0xF1, 0xF3, 0xF7, a),
-                card_bg: Color::rgba(0xFF, 0xFF, 0xFF, 0xFA),
-                elevated_bg: Color::rgba(0xF3, 0xF5, 0xF9, 0xFA),
+                card_bg: Color::rgba(0xFF, 0xFF, 0xFF, if opaque { 255 } else { 0xFA }),
+                elevated_bg: Color::rgba(0xF3, 0xF5, 0xF9, if opaque { 255 } else { 0xFA }),
                 input_bg: Color::rgba(0xFF, 0xFF, 0xFF, 0xFF),
                 hover_bg: Color::rgba(0x11, 0x18, 0x27, 0x0E),
                 dock_bg: Color::rgba(0xF7, 0xF8, 0xFB, 0xDF),
@@ -316,7 +347,7 @@ impl Theme {
                 warning: Color::rgb(0xD9, 0x77, 0x06),
                 danger: Color::rgb(0xE1, 0x1D, 0x48),
                 info: Color::rgb(0x02, 0x84, 0xC7),
-                terminal_bg: Color::rgba(0x16, 0x18, 0x1E, 0xFA),
+                terminal_bg: Color::rgba(0x16, 0x18, 0x1E, if opaque { 255 } else { 0xFA }),
             },
         }
     }

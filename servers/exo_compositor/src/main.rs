@@ -102,7 +102,7 @@ fn main() {
         let (gw, gh) = (grant.width, grant.height);
         if let Some(pixels) = grant.pixels_mut() {
             desk.render_rect_to_shm(pixels, exo_ui::Rect::new(0, 0, gw as i32, gh as i32));
-            let _ = desk.take_dirty_rect();
+            let _ = desk.take_dirty_rects();
             let dmg = syscall::DamageRect { x: 0, y: 0, width: gw, height: gh };
             submit_damage_to_fb_server(pid, ep, grant, dmg);
             last_present_ns = bench::now_ns();
@@ -229,41 +229,57 @@ fn main() {
             let can_present = !presented_initial
                 || now_ns.saturating_sub(last_present_ns) >= TARGET_FRAME_NS;
             if can_present {
-                if let Some(dirty_r) = desk.take_dirty_rect() {
+                let dirty_rects = desk.take_dirty_rects();
+                if !dirty_rects.is_empty() {
+                    let (gw, gh) = (grant.width, grant.height);
+                    let t0 = bench::now_ns();
+                    // 1. Render all dirty rectangles into backbuf -> SHM before submitting to fb_server
                     if let Some(pixels) = grant.pixels_mut() {
-                        let t0 = bench::now_ns();
-                        desk.render_rect_to_shm(pixels, dirty_r);
-                        let render_us = bench::now_ns().saturating_sub(t0) / 1000;
-                        desk.last_render_us = render_us;
+                        for dirty_r in &dirty_rects {
+                            desk.render_rect_to_shm(pixels, *dirty_r);
+                        }
+                    }
+                    // 2. Pipeline intermediate rects (reply_ep = 0) and wait for ONE single post-flush ACK
+                    //    on the final rect so fb_server processes the whole frame in one atomic batch!
+                    let last_idx = dirty_rects.len() - 1;
+                    for (i, dirty_r) in dirty_rects.iter().enumerate() {
                         let dmg = syscall::DamageRect {
                             x: dirty_r.x.max(0) as u32,
                             y: dirty_r.y.max(0) as u32,
-                            width: (dirty_r.w.max(0) as u32).min(grant.width),
-                            height: (dirty_r.h.max(0) as u32).min(grant.height),
+                            width: (dirty_r.w.max(0) as u32).min(gw),
+                            height: (dirty_r.h.max(0) as u32).min(gh),
                         };
-                        submit_damage_to_fb_server(pid, ep, grant, dmg);
-                        desk.on_frame_presented();
-                        last_present_ns = bench::now_ns();
-                        fps_frames = fps_frames.saturating_add(1);
-                        let win_dt = last_present_ns.saturating_sub(fps_window_start_ns);
-                        if win_dt >= 1_000_000_000 {
-                            let est = if render_us > 0 {
-                                (1_000_000 / render_us).min(60) as u32
-                            } else {
-                                60
-                            };
-                            desk.measured_fps = ((fps_frames as u64 * 1_000_000_000) / win_dt.max(1))
-                                .max(est as u64)
-                                .min(60) as u32;
-                            fps_frames = 0;
-                            fps_window_start_ns = last_present_ns;
-                        } else if render_us > 0 {
-                            desk.measured_fps = (1_000_000 / render_us).min(60) as u32;
-                        }
-                        if !presented_initial {
-                            presented_initial = true;
-                            syscall::boot_log(b"exo_compositor: Desktop initial frame presented\n");
-                        }
+                        let ack_ep = if i == last_idx { ep } else { 0 };
+                        submit_damage_to_fb_server(pid, ack_ep, grant, dmg);
+                    }
+                    let frame_us = bench::now_ns().saturating_sub(t0) / 1000;
+                    // Smooth 4-frame EMA so single cold-start repaints don't freeze the HUD at a stale spike
+                    desk.last_render_us = if desk.last_render_us == 0 {
+                        frame_us
+                    } else {
+                        (desk.last_render_us * 3 + frame_us) / 4
+                    };
+                    desk.on_frame_presented();
+                    last_present_ns = bench::now_ns();
+                    fps_frames = fps_frames.saturating_add(1);
+                    let win_dt = last_present_ns.saturating_sub(fps_window_start_ns);
+                    let est = if desk.last_render_us > 0 {
+                        (1_000_000 / desk.last_render_us).clamp(1, 60) as u32
+                    } else {
+                        60
+                    };
+                    if win_dt >= 1_000_000_000 {
+                        desk.measured_fps = ((fps_frames as u64 * 1_000_000_000) / win_dt.max(1))
+                            .max(est as u64)
+                            .clamp(1, 60) as u32;
+                        fps_frames = 0;
+                        fps_window_start_ns = last_present_ns;
+                    } else {
+                        desk.measured_fps = est;
+                    }
+                    if !presented_initial {
+                        presented_initial = true;
+                        syscall::boot_log(b"exo_compositor: Desktop initial frame presented\n");
                     }
                 }
             }
